@@ -409,8 +409,10 @@ version = "0.1.0"
 dependencies = [
  "ff-charts",
  "ff-cifp",
+ "ff-core",
  "ff-nasr",
  "ff-storage",
+ "rusqlite",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",

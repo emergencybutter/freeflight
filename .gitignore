@@ -6,6 +6,8 @@
 /data/
 *.sqlite
 *.pmtiles
+# exception: checked-in sample data for the web demo (apps/web/README.md)
+!apps/web/public/demo-cycle.sqlite
 
 # editor/OS
 .DS_Store
@@ -15,6 +17,7 @@
 # web app
 apps/web/node_modules/
 apps/web/dist/
+apps/web/*.tsbuildinfo
 
 # android app
 apps/android/.gradle/

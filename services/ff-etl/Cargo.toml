@@ -8,9 +8,11 @@ description = "Batch job that builds versioned data-cycle bundles from FAA/NOAA 
 
 [dependencies]
 ff-cifp.workspace = true
+ff-core.workspace = true
 ff-nasr.workspace = true
 ff-charts.workspace = true
 ff-storage.workspace = true
+rusqlite.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

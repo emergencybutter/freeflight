@@ -1,5 +1,38 @@
 # freeflight web client
 
-Not yet scaffolded. Per `DESIGN.md` §5/§10: React + TypeScript, MapLibre
-GL JS, consuming the `ff-wasm` crate (`crates/ff-wasm`) built with
-`wasm-pack`, with an `sqlite-wasm`/OPFS-backed local cache.
+Vite + React + TypeScript. Currently a minimal read-only viewer: airport
+list → runways/procedures → transitions/legs, backed by `sql.js` reading
+a static SQLite bundle (`public/demo-cycle.sqlite`).
+
+This is a stand-in for the real architecture described in DESIGN.md
+§5/§10 (MapLibre GL JS for charts, `ff-wasm` for shared planning/parsing
+logic, OPFS-backed local storage synced from `ff-api` cycle bundles) —
+none of that is wired up yet. The current UI only proves the data
+pipeline end to end: real FAA CIFP records, parsed by `ff-cifp`, stored
+via the `ff-storage` schema, rendered in a browser.
+
+## Running
+
+```sh
+npm install
+npm run dev
+```
+
+## Regenerating the demo bundle
+
+`public/demo-cycle.sqlite` is checked in (small, ~400KB) so `npm run dev`
+works without any Rust tooling. To rebuild it from a real CIFP file:
+
+```sh
+cargo run -p ff-etl --example build_demo_bundle -- \
+  <path-to-a-FAACIFP18-file> apps/web/public/demo-cycle.sqlite \
+  KSFO KOAK KSJC KPAO KHWD
+```
+
+## Known gotcha
+
+`sql.js` must **not** be excluded from Vite's `optimizeDeps` — its
+`dist/*.js` builds are CJS/UMD with no real ESM `default` export, and
+Vite's esbuild pre-bundling is what synthesizes that interop. Excluding
+it (the usual advice for wasm-heavy packages) breaks the dev server with
+a `does not provide an export named 'default'` error.
