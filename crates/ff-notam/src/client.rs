@@ -1,6 +1,10 @@
+use serde::Deserialize;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub const DEFAULT_BASE_URL: &str = "https://external-api.faa.gov/notamapi/v1/notams";
+pub const DEFAULT_AUTH_URL: &str = "https://api-nms.aim.faa.gov/v1/auth/token";
+pub const DEFAULT_API_BASE_URL: &str = "https://api-nms.aim.faa.gov/nmsapi";
 
 #[derive(Debug, Error)]
 pub enum NotamError {
@@ -8,36 +12,126 @@ pub enum NotamError {
     Request(#[from] reqwest::Error),
     #[error("no ICAO location provided")]
     NoLocation,
+    #[error("NMS token request failed ({status}): {body}")]
+    TokenRequestFailed {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("NMS API request failed ({status}): {body}")]
+    ApiRequestFailed {
+        status: reqwest::StatusCode,
+        body: String,
+    },
 }
 
-/// Client for the FAA NOTAM Search API (DESIGN.md §3, §9.2, §12 — flagged
-/// there as the flakiest upstream dependency). Unlike weather, this API
-/// requires a free `client_id`/`client_secret` pair registered at
-/// https://api.faa.gov before any request will succeed.
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    expires_in: u64,
+}
+
+struct CachedToken {
+    access_token: String,
+    expires_at: Instant,
+}
+
+/// Client for the FAA NOTAM Management Service (NMS) API
+/// (<https://nms.aim.faa.gov/>, DESIGN.md §3, §9.2, §12).
+///
+/// This replaces the old FAA NOTAM Search API
+/// (`external-api.faa.gov/notamapi/v1/notams`), which DESIGN.md §12
+/// flagged as the flakiest upstream dependency — it has since been
+/// retired outright (confirmed live: that endpoint now 404s with "No
+/// context-path matches the request URI" on FAA's gateway). The
+/// replacement also changed how you get credentials: no more
+/// self-service portal signup, `client_id`/`client_secret` must be
+/// requested by emailing NOTAMS@faa.gov. Base URLs and the OAuth2
+/// `client_credentials` flow below are reverse-engineered from a
+/// third-party client (`faa-nms-api` on npm, itself derived from FAA's
+/// OpenAPI spec) and confirmed reachable (the token endpoint and
+/// `/nmsapi/notams` both respond live, the latter with a real "Access
+/// Token is Invalid or Expired" 401) — but not yet exercised with a real
+/// `client_id`/`client_secret`, so treat this as unvalidated until it is.
 pub struct NotamClient {
     http: reqwest::Client,
-    base_url: String,
+    auth_url: String,
+    api_base_url: String,
     client_id: String,
     client_secret: String,
+    token: Arc<Mutex<Option<CachedToken>>>,
 }
 
 impl NotamClient {
     pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
-            base_url: DEFAULT_BASE_URL.to_string(),
+            auth_url: DEFAULT_AUTH_URL.to_string(),
+            api_base_url: DEFAULT_API_BASE_URL.to_string(),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
+            token: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Fetch NOTAMs for a single ICAO location.
+    /// Point at alternate auth/API base URLs — used to target FAA's
+    /// `staging`/`fit` environments instead of production.
+    pub fn with_urls(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        auth_url: impl Into<String>,
+        api_base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            auth_url: auth_url.into(),
+            api_base_url: api_base_url.into(),
+            client_id: client_id.into(),
+            client_secret: client_secret.into(),
+            token: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Lazily fetches and caches a bearer token, refreshing ~60s before
+    /// expiry. No lock is held across an `.await` — the cache is only
+    /// consulted/updated in non-async critical sections.
+    async fn get_token(&self) -> Result<String, NotamError> {
+        if let Some(cached) = self.token.lock().unwrap().as_ref() {
+            if cached.expires_at > Instant::now() {
+                return Ok(cached.access_token.clone());
+            }
+        }
+
+        let resp = self
+            .http
+            .post(&self.auth_url)
+            .basic_auth(&self.client_id, Some(&self.client_secret))
+            .form(&[("grant_type", "client_credentials")])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(NotamError::TokenRequestFailed { status, body });
+        }
+        let token: TokenResponse = resp.json().await?;
+        let expires_at = Instant::now() + Duration::from_secs(token.expires_in.saturating_sub(60));
+        let access_token = token.access_token;
+        *self.token.lock().unwrap() = Some(CachedToken {
+            access_token: access_token.clone(),
+            expires_at,
+        });
+        Ok(access_token)
+    }
+
+    /// Fetch NOTAMs for a single ICAO/FAA location as GeoJSON.
     ///
-    /// The response schema (`items[].properties.coreNOTAMData...`) is not
-    /// modeled as typed structs yet — deliberately, since getting it wrong
-    /// silently could hide a runway closure. This returns the raw parsed
-    /// JSON so a caller can inspect the current live shape and typed
-    /// structs can be added once that's verified against a real response.
+    /// The individual NOTAM record shape (`data.geojson[]`) is not
+    /// modeled as typed structs yet — deliberately, since getting it
+    /// wrong silently could hide a runway closure, and this crate has no
+    /// real credentials to validate a live response against yet (see the
+    /// struct docs above). This returns the raw parsed JSON so a caller
+    /// can inspect the current live shape and typed structs can be added
+    /// once that's verified.
     pub async fn fetch_notams_raw(
         &self,
         icao_location: &str,
@@ -45,15 +139,22 @@ impl NotamClient {
         if icao_location.is_empty() {
             return Err(NotamError::NoLocation);
         }
+        let token = self.get_token().await?;
+        let url = format!("{}/v1/notams", self.api_base_url);
         let resp = self
             .http
-            .get(&self.base_url)
-            .header("client_id", &self.client_id)
-            .header("client_secret", &self.client_secret)
-            .query(&[("icaoLocation", icao_location)])
+            .get(&url)
+            .bearer_auth(token)
+            .header("nmsResponseFormat", "GEOJSON")
+            .header("Accept", "application/json")
+            .query(&[("location", icao_location)])
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(NotamError::ApiRequestFailed { status, body });
+        }
         Ok(resp.json::<serde_json::Value>().await?)
     }
 }

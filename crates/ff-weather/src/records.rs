@@ -42,7 +42,9 @@ pub struct TafForecastPeriod {
     pub time_to: i64,
     #[serde(rename = "fcstChange")]
     pub fcst_change: Option<String>,
-    pub wdir: Option<i32>,
+    /// Wind direction in degrees, or `"VRB"` for variable wind — same
+    /// shape as `Metar::wdir` (confirmed against live KATL/KDEN/KMIA TAFs).
+    pub wdir: Option<serde_json::Value>,
     pub wspd: Option<i32>,
     pub wgst: Option<i32>,
     pub visib: Option<serde_json::Value>,
@@ -57,7 +59,7 @@ pub struct Taf {
     #[serde(rename = "icaoId")]
     pub icao_id: String,
     #[serde(rename = "issueTime")]
-    pub issue_time: i64,
+    pub issue_time: String,
     #[serde(rename = "validTimeFrom")]
     pub valid_time_from: i64,
     #[serde(rename = "validTimeTo")]

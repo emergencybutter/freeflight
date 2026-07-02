@@ -31,11 +31,15 @@ Built and validated against real FAA/NOAA data end to end:
   SQLite cycle bundle via `sql.js` — airport list, runway/procedure
   detail, a map with real chart imagery, airport markers, runway
   centerlines, and procedure-leg paths.
+- `ff-weather` (aviationweather.gov client): `Metar`/`Taf` deserialization
+  validated against real captured METAR/TAF responses (see "ff-weather"
+  below) — two type bugs found and fixed.
 
 Scaffolded but not validated against real/live data:
-- `ff-weather` (aviationweather.gov client) and `ff-notam` (FAA NOTAM
-  client) — both have unit tests against mocked responses only, never
-  run against the live APIs.
+- `ff-notam` (FAA NOTAM client): the API it originally targeted turned
+  out to be retired; rewritten against its replacement and confirmed
+  *reachable*, but the actual NOTAM record shape is still unvalidated —
+  no credentials available in this environment (see "ff-notam" below).
 - `ff-planning` (nav-log/route math) and `ff-postflight` (track
   analysis) — unit-tested with synthetic inputs, no real flight data.
 - `services/ff-api` (axum backend) and `services/ff-etl` (batch cycle
@@ -141,3 +145,58 @@ FAA charts are public domain; no attribution/licensing blocker.
   additional cropped GeoTIFFs run through the same pipeline.
 - The crop bounding box is hand-picked around the 5 demo ICAOs; no
   tooling yet derives it automatically from the airport list.
+
+## ff-weather — validated against live data, two bugs fixed
+
+Deserialized real `aviationweather.gov` METAR/TAF responses (captured
+live, checked in as test fixtures under `crates/ff-weather/tests/`)
+against the existing `Metar`/`Taf` structs. METAR matched as-is. TAF
+did not:
+
+- `Taf::issue_time` was typed `i64` (matching the other TAF timestamp
+  fields, which really are epoch integers) but the live API returns
+  `issueTime` as an ISO 8601 string. Fixed: now `String`.
+- `TafForecastPeriod::wdir` was typed `Option<i32>`, but wind direction
+  can be the string `"VRB"` in TAF forecast periods too (confirmed on
+  live KATL/KDEN/KMIA TAFs with `PROB`/`TEMPO` groups), same as
+  `Metar::wdir` already handled. Fixed: now `Option<serde_json::Value>`.
+
+`crates/ff-weather/tests/real_weather.rs` pins both fixes with checked-in
+real-response fixtures (run by default, no network) plus an opt-in
+`--ignored` test that hits the live API through the actual
+`WeatherClient` methods.
+
+## ff-notam — old API retired, client rewritten (unvalidated)
+
+Went looking for real NOTAM data to validate against and found the API
+`ff-notam` targeted (`external-api.faa.gov/notamapi/v1/notams`) no
+longer exists — confirmed live, it now 404s with "No context-path
+matches the request URI" on FAA's gateway. This matches (and confirms)
+DESIGN.md §12's old prediction that this endpoint was the flakiest
+dependency in the project.
+
+FAA replaced it with the NOTAM Management Service (NMS) at
+`api-nms.aim.faa.gov`. Rewrote `ff-notam` to target it:
+
+- New base URLs (`DEFAULT_AUTH_URL`, `DEFAULT_API_BASE_URL`), OAuth2
+  `client_credentials` flow (`POST /v1/auth/token` with HTTP Basic
+  auth, cached Bearer token) instead of the old static
+  `client_id`/`client_secret` headers.
+- Credentials are no longer self-service — request a
+  `client_id`/`client_secret` pair by emailing NOTAMS@faa.gov.
+- Response format is GeoJSON/AIXM now, not the old `coreNOTAMData`
+  shape. Still returned as raw `serde_json::Value` (unchanged
+  design choice) rather than typed structs, since the actual NOTAM
+  record shape is unvalidated.
+
+Confirmed live (both the token endpoint and `/nmsapi/notams` respond
+with real structured errors, not connection failures or generic
+gateway 404s — see `crates/ff-notam/tests/real_notam.rs`, opt-in), but
+**not validated against a real NOTAM response** — this environment has
+no `client_id`/`client_secret` and self-service signup no longer
+exists. Base URLs and request shapes were reverse-engineered from a
+third-party client (`faa-nms-api` on npm), not FAA's own docs.
+
+Next step once credentials exist (request via NOTAMS@faa.gov): call
+`fetch_notams_raw` for a real airport, inspect `data.geojson[]`, and
+model it as typed structs the same way this pass fixed `ff-weather`.

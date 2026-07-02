@@ -1,0 +1,161 @@
+[
+  {
+    "icaoId": "KPAO",
+    "receiptTime": "2026-07-02T16:09:18.762Z",
+    "obsTime": 1783008120,
+    "reportTime": "2026-07-02T16:02:00.000Z",
+    "temp": 17,
+    "dewp": 11,
+    "wdir": "VRB",
+    "wspd": 4,
+    "visib": "10+",
+    "altim": 1014.3,
+    "qcField": 0,
+    "metarType": "METAR",
+    "rawOb": "METAR KPAO 021602Z VRB04KT 10SM FEW020 17/11 A2995",
+    "lat": 37.458,
+    "lon": -122.112,
+    "elev": 2,
+    "name": "Palo Alto Arpt, CA, US",
+    "cover": "FEW",
+    "clouds": [
+      {
+        "cover": "FEW",
+        "base": 2000
+      }
+    ],
+    "fltCat": "VFR"
+  },
+  {
+    "icaoId": "KSFO",
+    "receiptTime": "2026-07-02T16:00:09.686Z",
+    "obsTime": 1783007760,
+    "reportTime": "2026-07-02T16:00:00.000Z",
+    "temp": 16.1,
+    "dewp": 10.6,
+    "wdir": 160,
+    "wspd": 11,
+    "visib": "10+",
+    "altim": 1014,
+    "slp": 1013.8,
+    "qcField": 4,
+    "metarType": "METAR",
+    "rawOb": "METAR KSFO 021556Z 16011KT 10SM FEW006 SCT200 16/11 A2994 RMK AO2 SLP138 T01610106",
+    "lat": 37.6196,
+    "lon": -122.3656,
+    "elev": 2,
+    "name": "San Francisco Intl, CA, US",
+    "cover": "SCT",
+    "clouds": [
+      {
+        "cover": "FEW",
+        "base": 600
+      },
+      {
+        "cover": "SCT",
+        "base": 20000
+      }
+    ],
+    "fltCat": "VFR"
+  },
+  {
+    "icaoId": "KHWD",
+    "receiptTime": "2026-07-02T15:58:03.368Z",
+    "obsTime": 1783007640,
+    "reportTime": "2026-07-02T16:00:00.000Z",
+    "temp": 16.7,
+    "dewp": 10,
+    "wdir": "VRB",
+    "wspd": 3,
+    "visib": "10+",
+    "altim": 1014,
+    "slp": 1014.8,
+    "qcField": 4,
+    "metarType": "METAR",
+    "rawOb": "METAR KHWD 021554Z VRB03KT 10SM SCT021 17/10 A2994 RMK AO2 SLP148 T01670100",
+    "lat": 37.6589,
+    "lon": -122.1212,
+    "elev": 9,
+    "name": "Hayward Exec, CA, US",
+    "cover": "SCT",
+    "clouds": [
+      {
+        "cover": "SCT",
+        "base": 2100
+      }
+    ],
+    "fltCat": "VFR"
+  },
+  {
+    "icaoId": "KOAK",
+    "receiptTime": "2026-07-02T15:56:27.480Z",
+    "obsTime": 1783007580,
+    "reportTime": "2026-07-02T16:00:00.000Z",
+    "temp": 15.6,
+    "dewp": 11.1,
+    "wdir": 170,
+    "wspd": 7,
+    "visib": "10+",
+    "altim": 1014.3,
+    "slp": 1014.1,
+    "qcField": 4,
+    "metarType": "METAR",
+    "rawOb": "METAR KOAK 021553Z 17007KT 10SM FEW013 BKN017 BKN200 16/11 A2995 RMK AO2 SLP141 T01560111",
+    "lat": 37.7178,
+    "lon": -122.233,
+    "elev": 3,
+    "name": "Oakland Intl, CA, US",
+    "cover": "BKN",
+    "clouds": [
+      {
+        "cover": "FEW",
+        "base": 1300
+      },
+      {
+        "cover": "BKN",
+        "base": 1700
+      },
+      {
+        "cover": "BKN",
+        "base": 20000
+      }
+    ],
+    "fltCat": "MVFR"
+  },
+  {
+    "icaoId": "KSJC",
+    "receiptTime": "2026-07-02T15:56:28.131Z",
+    "obsTime": 1783007580,
+    "reportTime": "2026-07-02T16:00:00.000Z",
+    "temp": 16.7,
+    "dewp": 10,
+    "wdir": 150,
+    "wspd": 11,
+    "visib": 9,
+    "altim": 1014.3,
+    "slp": 1014,
+    "qcField": 4,
+    "metarType": "METAR",
+    "rawOb": "METAR KSJC 021553Z 15011KT 9SM FEW019 SCT080 SCT110 17/10 A2995 RMK AO2 SLP140 T01670100",
+    "lat": 37.3594,
+    "lon": -121.9244,
+    "elev": 13,
+    "name": "San Jose Intl Arpt, CA, US",
+    "cover": "SCT",
+    "clouds": [
+      {
+        "cover": "FEW",
+        "base": 1900
+      },
+      {
+        "cover": "SCT",
+        "base": 8000
+      },
+      {
+        "cover": "SCT",
+        "base": 11000
+      }
+    ],
+    "fltCat": "VFR"
+  }
+]

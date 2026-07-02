@@ -1,0 +1,301 @@
+[
+  {
+    "icaoId": "KATL",
+    "dbPopTime": "2026-07-02T15:43:38.085Z",
+    "bulletinTime": "2026-07-02T15:43:00.000Z",
+    "issueTime": "2026-07-02T15:43:00.000Z",
+    "validTimeFrom": 1783008000,
+    "validTimeTo": 1783101600,
+    "rawTAF": "TAF KATL 021543Z 0216/0318 33004KT P6SM FEW035 SCT250 FM021700 11006KT P6SM SCT050 PROB30 0221/0301 VRB10G20KT 4SM TSRA BKN035CB FM030300 VRB03KT P6SM SCT250 FM031500 12004KT P6SM SCT040",
+    "mostRecent": 1,
+    "remarks": " AMD",
+    "lat": 33.62972,
+    "lon": -84.44223,
+    "elev": 309,
+    "prior": 0,
+    "name": "Atlanta/Hartsfield-Jackson Intl",
+    "fcsts": [
+      {
+        "timeFrom": 1783008000,
+        "timeTo": 1783011600,
+        "timeBec": null,
+        "fcstChange": null,
+        "probability": null,
+        "wdir": 330,
+        "wspd": 4,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": null,
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "FEW",
+            "base": 3500,
+            "type": null
+          },
+          {
+            "cover": "SCT",
+            "base": 25000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783011600,
+        "timeTo": 1783047600,
+        "timeBec": null,
+        "fcstChange": "FM",
+        "probability": null,
+        "wdir": 110,
+        "wspd": 6,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": null,
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "SCT",
+            "base": 5000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783026000,
+        "timeTo": 1783040400,
+        "timeBec": null,
+        "fcstChange": "PROB",
+        "probability": 30,
+        "wdir": "VRB",
+        "wspd": 10,
+        "wgst": 20,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": 4,
+        "altim": null,
+        "vertVis": null,
+        "wxString": "TSRA",
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "BKN",
+            "base": 3500,
+            "type": "CB"
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783047600,
+        "timeTo": 1783090800,
+        "timeBec": null,
+        "fcstChange": "FM",
+        "probability": null,
+        "wdir": "VRB",
+        "wspd": 3,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": null,
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "SCT",
+            "base": 25000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783090800,
+        "timeTo": 1783101600,
+        "timeBec": null,
+        "fcstChange": "FM",
+        "probability": null,
+        "wdir": 120,
+        "wspd": 4,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": null,
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "SCT",
+            "base": 4000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      }
+    ]
+  },
+  {
+    "icaoId": "KMIA",
+    "dbPopTime": "2026-07-02T14:50:54.291Z",
+    "bulletinTime": "2026-07-02T14:50:00.000Z",
+    "issueTime": "2026-07-02T14:50:00.000Z",
+    "validTimeFrom": 1783004400,
+    "validTimeTo": 1783101600,
+    "rawTAF": "TAF KMIA 021450Z 0215/0318 VRB04KT P6SM FEW025 BKN050 FM021800 16008KT P6SM VCTS SCT030CB BKN250 TEMPO 0219/0222 VRB15G25KT 3SM TSRA BKN025CB FM030100 VRB05KT P6SM SCT030 BKN250",
+    "mostRecent": 1,
+    "remarks": " AMD",
+    "lat": 25.78806,
+    "lon": -80.31692,
+    "elev": 1,
+    "prior": 0,
+    "name": "Miami Intl",
+    "fcsts": [
+      {
+        "timeFrom": 1783004400,
+        "timeTo": 1783015200,
+        "timeBec": null,
+        "fcstChange": null,
+        "probability": null,
+        "wdir": "VRB",
+        "wspd": 4,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": null,
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "FEW",
+            "base": 2500,
+            "type": null
+          },
+          {
+            "cover": "BKN",
+            "base": 5000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783015200,
+        "timeTo": 1783040400,
+        "timeBec": null,
+        "fcstChange": "FM",
+        "probability": null,
+        "wdir": 160,
+        "wspd": 8,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": "VCTS",
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "SCT",
+            "base": 3000,
+            "type": "CB"
+          },
+          {
+            "cover": "BKN",
+            "base": 25000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783018800,
+        "timeTo": 1783029600,
+        "timeBec": null,
+        "fcstChange": "TEMPO",
+        "probability": null,
+        "wdir": "VRB",
+        "wspd": 15,
+        "wgst": 25,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": 3,
+        "altim": null,
+        "vertVis": null,
+        "wxString": "TSRA",
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "BKN",
+            "base": 2500,
+            "type": "CB"
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      },
+      {
+        "timeFrom": 1783040400,
+        "timeTo": 1783101600,
+        "timeBec": null,
+        "fcstChange": "FM",
+        "probability": null,
+        "wdir": "VRB",
+        "wspd": 5,
+        "wgst": null,
+        "wshearHgt": null,
+        "wshearDir": null,
+        "wshearSpd": null,
+        "visib": "6+",
+        "altim": null,
+        "vertVis": null,
+        "wxString": null,
+        "notDecoded": null,
+        "clouds": [
+          {
+            "cover": "SCT",
+            "base": 3000,
+            "type": null
+          },
+          {
+            "cover": "BKN",
+            "base": 25000,
+            "type": null
+          }
+        ],
+        "icgTurb": [],
+        "temp": []
+      }
+    ]
+  }
+]

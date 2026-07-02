@@ -75,7 +75,7 @@ for some products.
 | Obstacles | FAA Digital Obstacle File (DOF) | Fixed-width | 56-day cycle |
 | METAR / TAF / PIREP | aviationweather.gov Data API | JSON/XML | real-time |
 | AIRMET / SIGMET / G-AIRMET, winds/temps aloft | aviationweather.gov Data API | JSON/XML/GeoJSON | real-time |
-| NOTAMs | FAA NOTAM Search API (external.faa.gov) | JSON | real-time |
+| NOTAMs | FAA NOTAM Management Service (NMS) API (`api-nms.aim.faa.gov`) | GeoJSON/AIXM | real-time |
 | Terrain elevation | USGS 3DEP / SRTM1 | GeoTIFF (public domain) | static |
 | GPS track (flight recording) | On-device GPS (browser Geolocation / Android FusedLocationProvider) | — | live |
 
@@ -380,9 +380,22 @@ need to render procedures with the same fidelity as certified tools.
    nontrivial; Phase 1 should scope down to the common leg types (IF, TF,
    CF, DF, CA/CD/VA/VI) and explicitly flag procedures using unsupported
    leg types rather than silently mis-rendering them.
-4. **NOTAM API stability**: the FAA NOTAM Search API has historically
-   changed/rate-limited without much notice; `ff-api`'s proxy/cache layer
-   should be built assuming this endpoint is the flakiest dependency.
+4. **NOTAM API stability**: this prediction proved literally true — the
+   FAA NOTAM Search API this section originally named
+   (`external-api.faa.gov/notamapi/v1/notams`) was retired outright
+   sometime before 2026-07 (confirmed live: it now 404s with "No
+   context-path matches the request URI"). Its replacement, the NOTAM
+   Management Service (NMS) at `api-nms.aim.faa.gov`, also changed how
+   credentials are issued — self-service portal signup is gone, a
+   `client_id`/`client_secret` pair must now be requested by emailing
+   NOTAMS@faa.gov — and switched from static header credentials to an
+   OAuth2 `client_credentials` Bearer-token flow returning GeoJSON/AIXM
+   instead of the old `coreNOTAMData` JSON shape. `ff-notam` targets the
+   new API as of this note, confirmed reachable (live 401 on both the
+   token endpoint and `/nmsapi/notams` with bogus credentials), but the
+   actual NOTAM record shape is still unvalidated pending real
+   credentials — `ff-api`'s proxy/cache layer should keep assuming this
+   is the flakiest dependency.
 5. **Chart hosting cost/rights**: re-hosting converted FAA raster charts
    as PMTiles is public-domain data, but bandwidth cost for chart tiles
    at scale should be estimated before wide release (this is why the ETL
