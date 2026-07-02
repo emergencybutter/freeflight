@@ -1,20 +1,20 @@
 //! Row shapes for the FAA NASR 28-day subscription CSV tables.
 //!
-//! The modern NASR subscription ships one CSV per table (`APT_BASE.csv`,
-//! `APT_RWY.csv`, `APT_RWY_END.csv`, ...). Column names below for
-//! `APT_BASE`/`APT_RWY`/`APT_RWY_END` were cross-checked against real
-//! queries from an open-source project that works with live FAA NASR
-//! extracts (jlmcgraw/processFaaData, `Sample SQL queries.sql`) rather
-//! than guessed — including a structural fact easy to get wrong: the
-//! "detail" tables (`APT_RWY`, `APT_RWY_END`, and by the same convention
-//! frequency/comm tables) key on `SITE_NO`, *not* `ARPT_ID` — only
-//! `APT_BASE` carries both, so joining runway/frequency rows back to an
-//! airport identifier requires a `SITE_NO` -> `ARPT_ID` lookup built from
-//! `APT_BASE` first (see `crate::convert`).
+//! Column names below are verified against a real NASR CSV subscription
+//! package (28-Day Subscription effective 11 Jun 2026, `APT_BASE.csv`,
+//! `APT_RWY.csv`, `APT_RWY_END.csv`, `FRQ.csv`), not guessed — including
+//! two structural facts that are easy to get wrong from the FAA's older
+//! documentation:
 //!
-//! `APT_FREQ`'s exact column set could not be verified the same way and
-//! is still a best-effort guess — **check it against the current NASR
-//! subscription README before relying on it.**
+//! - `APT_RWY`/`APT_RWY_END` carry `ARPT_ID` directly (an earlier version
+//!   of this module assumed they only had `SITE_NO` and needed a join
+//!   through `APT_BASE`; that was wrong — both identifiers are present on
+//!   every table here).
+//! - There is no `APT_FREQ.csv`. Airport communication frequencies live
+//!   in a top-level `FRQ.csv` shared by many facility types (towers,
+//!   TRACONs, navaids, FSS, AWOS/ASOS, ...), keyed by `SERVICED_FACILITY`
+//!   and `SERVICED_SITE_TYPE` rather than being airport-specific rows;
+//!   see [`crate::convert::frequencies_for_airport`].
 use serde::Deserialize;
 
 /// One row of `APT_BASE.csv`: core airport facility data.
@@ -36,14 +36,18 @@ pub struct AptBaseRow {
     pub elevation_ft: f64,
     #[serde(rename = "SITE_TYPE_CODE")]
     pub site_type_code: String,
+    /// Comma-separated, e.g. `"100LL,A,A++"` (`A`/`A++` are Jet-A
+    /// variants); empty string when no fuel is available.
+    #[serde(rename = "FUEL_TYPES")]
+    pub fuel_types: String,
 }
 
-/// One row of `APT_RWY.csv`: a physical runway (both ends, e.g. `"01/19"`)
-/// at an airport, keyed by `SITE_NO` (see module docs).
+/// One row of `APT_RWY.csv`: a physical runway (both ends, e.g. `"13/31"`)
+/// at an airport.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AptRunwayRow {
-    #[serde(rename = "SITE_NO")]
-    pub site_no: String,
+    #[serde(rename = "ARPT_ID")]
+    pub arpt_id: String,
     #[serde(rename = "RWY_ID")]
     pub rwy_id: String,
     #[serde(rename = "RWY_LEN")]
@@ -55,14 +59,18 @@ pub struct AptRunwayRow {
 }
 
 /// One row of `APT_RWY_END.csv`: one physical end of a runway (e.g. the
-/// `"01"` end of runway `"01/19"`), with its own coordinates and true
-/// alignment. Joins to [`AptRunwayRow`] on `(SITE_NO, RWY_ID)`, and its
-/// `rwy_end_id` (e.g. `"01"`) is the half of `RWY_ID` (e.g. `"01/19"`)
-/// this record describes.
+/// `"13"` end of runway `"13/31"`), with its own coordinates and true
+/// alignment. Joins to [`AptRunwayRow`] on `(ARPT_ID, RWY_ID)`.
+///
+/// `lat_decimal`/`long_decimal` are `Option` because they're often
+/// genuinely blank in real data — verified: 16,206 of 39,856 runway-end
+/// rows (~41%) in the reference file have no coordinates at all, almost
+/// entirely small/unsurveyed GA strips. This is common, not a rare edge
+/// case, so `crate::convert::runway_from_rows` must tolerate it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AptRunwayEndRow {
-    #[serde(rename = "SITE_NO")]
-    pub site_no: String,
+    #[serde(rename = "ARPT_ID")]
+    pub arpt_id: String,
     #[serde(rename = "RWY_ID")]
     pub rwy_id: String,
     #[serde(rename = "RWY_END_ID")]
@@ -70,24 +78,43 @@ pub struct AptRunwayEndRow {
     #[serde(rename = "TRUE_ALIGNMENT")]
     pub true_alignment: Option<f64>,
     #[serde(rename = "LAT_DECIMAL")]
-    pub lat_decimal: f64,
+    pub lat_decimal: Option<f64>,
     #[serde(rename = "LONG_DECIMAL")]
-    pub long_decimal: f64,
+    pub long_decimal: Option<f64>,
 }
 
-/// One row of `APT_FREQ.csv`: an airport communications frequency.
+/// One row of `FRQ.csv`: a single frequency belonging to some facility
+/// (airport tower, TRACON, navaid, FSS, AWOS/ASOS, ...) that "services"
+/// one or more other facilities. For airport comm frequencies, filter on
+/// `serviced_site_type == "AIRPORT"` — see
+/// [`crate::convert::frequencies_for_airport`].
 ///
-/// Unlike the other rows in this module, this column set is **not**
-/// verified against a real NASR extract (see module docs) — treat it as
-/// a starting point, not ground truth.
+/// `freq_use` is a free-text code, not a small enum: real values include
+/// `"CTAF"`, `"UNICOM"`, `"LCL/P"` (tower, primary), `"GND/P"`,
+/// `"CD/P"` (clearance delivery), `"ATIS"`, `"APCH/P"`, `"DEP/P"`, and
+/// combined forms like `"APCH/P DEP/P"` — see
+/// [`crate::convert::freq_use_kind`] for how these map onto
+/// [`ff_core::FrequencyKind`].
 #[derive(Debug, Clone, Deserialize)]
-pub struct AptFrequencyRow {
-    #[serde(rename = "SITE_NO")]
-    pub site_no: String,
-    #[serde(rename = "COMM_TYPE_CODE")]
-    pub comm_type_code: String,
-    #[serde(rename = "COMM_FREQ")]
-    pub comm_freq_mhz: f64,
+pub struct FrqRow {
+    #[serde(rename = "FACILITY")]
+    pub facility: String,
+    #[serde(rename = "FACILITY_TYPE")]
+    pub facility_type: String,
+    #[serde(rename = "SERVICED_FACILITY")]
+    pub serviced_facility: String,
+    #[serde(rename = "SERVICED_SITE_TYPE")]
+    pub serviced_site_type: String,
+    /// Not always a plain number: navaid-serviced rows can carry a DME
+    /// channel pair (`"116.65/113Y"`) or a receive-only suffix
+    /// (`"122.1R"`); airport-serviced rows are effectively always plain
+    /// (verified: 34 exceptions out of 31,495 in the reference file, all
+    /// `"...R"` receive-only). Kept as a string and parsed leniently in
+    /// `crate::convert`.
+    #[serde(rename = "FREQ")]
+    pub freq: String,
+    #[serde(rename = "FREQ_USE")]
+    pub freq_use: String,
     #[serde(rename = "REMARK")]
     pub remark: Option<String>,
 }

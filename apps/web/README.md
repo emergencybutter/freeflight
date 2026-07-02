@@ -8,7 +8,9 @@ This is a stand-in for the real architecture described in DESIGN.md
 §5/§10 (MapLibre GL JS for charts, `ff-wasm` for shared planning/parsing
 logic, OPFS-backed local storage synced from `ff-api` cycle bundles) —
 none of that is wired up yet. The current UI only proves the data
-pipeline end to end: real FAA CIFP records, parsed by `ff-cifp`, stored
+pipeline end to end: real FAA CIFP records (parsed by `ff-cifp`) merged
+with real FAA NASR records (parsed by `ff-nasr`, for runway surface type
+and airport communication frequencies — CIFP alone has neither), stored
 via the `ff-storage` schema, rendered in a browser.
 
 ## Running
@@ -21,13 +23,18 @@ npm run dev
 ## Regenerating the demo bundle
 
 `public/demo-cycle.sqlite` is checked in (small, ~400KB) so `npm run dev`
-works without any Rust tooling. To rebuild it from a real CIFP file:
+works without any Rust tooling. To rebuild it from real source data:
 
 ```sh
 cargo run -p ff-etl --example build_demo_bundle -- \
   <path-to-a-FAACIFP18-file> apps/web/public/demo-cycle.sqlite \
+  --nasr-dir <path-to-an-unzipped-NASR-28-day-CSV-subscription> \
   KSFO KOAK KSJC KPAO KHWD
 ```
+
+`--nasr-dir` is optional — omit it (and the flag) to build from CIFP
+alone, which still gives real airports/runways/procedures, just without
+surface type or frequencies.
 
 ## Known gotcha
 

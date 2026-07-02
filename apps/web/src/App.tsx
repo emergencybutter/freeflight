@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Database } from "sql.js";
 import { loadDemoDatabase, queryAll } from "./db";
-import type { Airport, Procedure, ProcedureLeg, ProcedureTransition, Runway } from "./types";
+import type { Airport, Frequency, Procedure, ProcedureLeg, ProcedureTransition, Runway } from "./types";
 import "./App.css";
 
 export default function App() {
@@ -108,6 +108,10 @@ function AirportDetail({
     () => queryAll<Runway>(db, "SELECT * FROM runway WHERE airport_icao = ? ORDER BY ident", [icao]),
     [db, icao],
   );
+  const frequencies = useMemo(
+    () => queryAll<Frequency>(db, "SELECT * FROM frequency WHERE airport_icao = ?", [icao]),
+    [db, icao],
+  );
   const procedures = useMemo(
     () => queryAll<Procedure>(db, "SELECT * FROM procedure WHERE airport_icao = ? ORDER BY kind, ident", [icao]),
     [db, icao],
@@ -116,6 +120,10 @@ function AirportDetail({
   if (!airport) return null;
 
   const byKind = (kind: string) => procedures.filter((p) => p.kind === kind);
+  const freqPriority = ["CTAF", "UNICOM", "TWR", "GND", "CLNC DEL", "ATIS", "AWOS", "APP", "DEP", "OTHER"];
+  const sortedFrequencies = [...frequencies].sort(
+    (a, b) => freqPriority.indexOf(a.kind) - freqPriority.indexOf(b.kind),
+  );
 
   return (
     <div className="panel airport-detail">
@@ -133,6 +141,7 @@ function AirportDetail({
             <th>Ident</th>
             <th>Length</th>
             <th>Width</th>
+            <th>Surface</th>
             <th>Ends</th>
           </tr>
         </thead>
@@ -142,6 +151,7 @@ function AirportDetail({
               <td>{r.ident}</td>
               <td>{r.length_ft.toLocaleString()} ft</td>
               <td>{r.width_ft} ft</td>
+              <td>{r.surface}</td>
               <td>
                 {r.le_ident} ({r.le_heading_deg.toFixed(0)}°) / {r.he_ident} ({r.he_heading_deg.toFixed(0)}°)
               </td>
@@ -149,6 +159,29 @@ function AirportDetail({
           ))}
         </tbody>
       </table>
+
+      <h3>Frequencies</h3>
+      {sortedFrequencies.length === 0 && <p className="hint">none in this bundle</p>}
+      {sortedFrequencies.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>Use</th>
+              <th>Freq</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedFrequencies.map((f, i) => (
+              <tr key={i}>
+                <td>{f.kind}</td>
+                <td>{f.freq_mhz.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}</td>
+                <td>{f.remarks ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
 
       {(["SID", "STAR", "APPROACH"] as const).map((kind) => (
         <div key={kind}>

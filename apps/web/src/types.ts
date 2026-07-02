@@ -25,6 +25,13 @@ export interface Runway {
   he_heading_deg: number;
 }
 
+export interface Frequency {
+  airport_icao: string;
+  kind: string;
+  freq_mhz: number;
+  remarks: string | null;
+}
+
 export interface Procedure {
   id: string;
   airport_icao: string;

@@ -4,31 +4,132 @@
 //!
 //! Usage:
 //! ```sh
-//! cargo run -p ff-etl --example build_demo_bundle -- <cifp-file> <output.sqlite> ICAO1 [ICAO2 ...]
+//! cargo run -p ff-etl --example build_demo_bundle -- <cifp-file> <output.sqlite> [--nasr-dir <dir>] ICAO1 [ICAO2 ...]
 //! ```
+//!
+//! `--nasr-dir` points at a directory containing an unzipped NASR 28-day
+//! CSV subscription (`APT_BASE.csv`, `APT_RWY.csv`, `APT_RWY_END.csv`,
+//! `FRQ.csv`). When given, real runway surface type and airport
+//! communication frequencies are merged in on top of the CIFP-derived
+//! data — CIFP alone has neither.
 use ff_cifp::{
     build_procedures, classify_line, extract_airport, extract_procedure_leg_row,
     extract_runway_end, pair_runway_ends, RecordCategory,
 };
 use ff_core::{
-    AirportType, AltitudeConstraint, PathAndTerm, ProcedureKind, RunwaySurface, SpeedConstraint,
-    TransitionKind, TurnDirection,
+    AirportType, AltitudeConstraint, Frequency, FrequencyKind, PathAndTerm, ProcedureKind, Runway,
+    RunwaySurface, SpeedConstraint, TransitionKind, TurnDirection,
+};
+use ff_nasr::{
+    frequencies_for_airport, parse_apt_base, parse_apt_runway, parse_apt_runway_end, parse_frq,
 };
 use rusqlite::params;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::{env, fs};
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 4 {
-        eprintln!("usage: build_demo_bundle <cifp-file> <output.sqlite> ICAO1 [ICAO2 ...]");
+struct Args {
+    cifp_path: String,
+    output_path: String,
+    nasr_dir: Option<String>,
+    icaos: HashSet<String>,
+}
+
+fn parse_args() -> Args {
+    let raw: Vec<String> = env::args().collect();
+    if raw.len() < 4 {
+        eprintln!("usage: build_demo_bundle <cifp-file> <output.sqlite> [--nasr-dir <dir>] ICAO1 [ICAO2 ...]");
         std::process::exit(1);
     }
-    let cifp_path = &args[1];
-    let output_path = &args[2];
-    let icaos: HashSet<String> = args[3..].iter().map(|s| s.to_uppercase()).collect();
+    let cifp_path = raw[1].clone();
+    let output_path = raw[2].clone();
+    let mut nasr_dir = None;
+    let mut icaos = HashSet::new();
+    let mut rest = raw[3..].iter().peekable();
+    while let Some(arg) = rest.next() {
+        if arg == "--nasr-dir" {
+            nasr_dir = rest.next().cloned();
+        } else {
+            icaos.insert(arg.to_uppercase());
+        }
+    }
+    Args {
+        cifp_path,
+        output_path,
+        nasr_dir,
+        icaos,
+    }
+}
 
-    let contents = fs::read_to_string(cifp_path).expect("failed to read CIFP file");
+/// Parses the NASR extract at `dir` and returns real runway surfaces
+/// (keyed by `(airport_icao, runway_ident)`) and communication
+/// frequencies for just the requested `icaos`, merging on top of what
+/// CIFP alone can provide (DESIGN.md §9.1 — CIFP has no surface type or
+/// comm frequencies at all).
+fn load_nasr_enrichment(
+    dir: &str,
+    icaos: &HashSet<String>,
+) -> (HashMap<(String, String), RunwaySurface>, Vec<Frequency>) {
+    let airports =
+        parse_apt_base(&fs::read(format!("{dir}/APT_BASE.csv")).expect("read APT_BASE.csv"))
+            .expect("parse APT_BASE.csv");
+    let runways =
+        parse_apt_runway(&fs::read(format!("{dir}/APT_RWY.csv")).expect("read APT_RWY.csv"))
+            .expect("parse APT_RWY.csv");
+    let runway_ends = parse_apt_runway_end(
+        &fs::read(format!("{dir}/APT_RWY_END.csv")).expect("read APT_RWY_END.csv"),
+    )
+    .expect("parse APT_RWY_END.csv");
+    let freqs = parse_frq(&fs::read(format!("{dir}/FRQ.csv")).expect("read FRQ.csv"))
+        .expect("parse FRQ.csv");
+
+    // ARPT_ID (FAA local id, e.g. "SFO") -> our airport_icao (e.g. "KSFO"):
+    // APT_RWY/APT_RWY_END/FRQ are keyed by ARPT_ID, not ICAO.
+    let wanted: HashMap<String, String> = airports
+        .iter()
+        .filter_map(|a| {
+            let icao = a.icao_id.clone().unwrap_or_else(|| a.arpt_id.clone());
+            icaos.contains(&icao).then(|| (a.arpt_id.clone(), icao))
+        })
+        .collect();
+
+    let mut surfaces = HashMap::new();
+    for rwy in &runways {
+        let Some(icao) = wanted.get(&rwy.arpt_id) else {
+            continue;
+        };
+        let ends: Vec<_> = runway_ends
+            .iter()
+            .filter(|e| e.arpt_id == rwy.arpt_id)
+            .cloned()
+            .collect();
+        let runway = ff_nasr::runway_from_rows(rwy, &ends, icao);
+        surfaces.insert((icao.clone(), runway.ident), runway.surface);
+    }
+
+    let mut frequencies = Vec::new();
+    for (arpt_id, icao) in &wanted {
+        frequencies.extend(frequencies_for_airport(&freqs, arpt_id, icao));
+    }
+
+    (surfaces, frequencies)
+}
+
+fn apply_nasr_surfaces(
+    runways: &mut [Runway],
+    surfaces: &HashMap<(String, String), RunwaySurface>,
+) {
+    for runway in runways.iter_mut() {
+        if let Some(surface) = surfaces.get(&(runway.airport_icao.clone(), runway.ident.clone())) {
+            runway.surface = *surface;
+        }
+    }
+}
+
+fn main() {
+    let args = parse_args();
+    let icaos = &args.icaos;
+
+    let contents = fs::read_to_string(&args.cifp_path).expect("failed to read CIFP file");
 
     let mut airports = Vec::new();
     let mut runway_ends = Vec::new();
@@ -64,13 +165,21 @@ fn main() {
         }
     }
 
-    let runways = pair_runway_ends(&runway_ends);
+    let mut runways = pair_runway_ends(&runway_ends);
     let parsed = build_procedures(&leg_rows);
 
-    if fs::metadata(output_path).is_ok() {
-        fs::remove_file(output_path).expect("failed to remove stale output file");
+    let frequencies = if let Some(nasr_dir) = &args.nasr_dir {
+        let (surfaces, frequencies) = load_nasr_enrichment(nasr_dir, icaos);
+        apply_nasr_surfaces(&mut runways, &surfaces);
+        frequencies
+    } else {
+        Vec::new()
+    };
+
+    if fs::metadata(&args.output_path).is_ok() {
+        fs::remove_file(&args.output_path).expect("failed to remove stale output file");
     }
-    let conn = ff_storage::open(output_path).expect("failed to open/migrate sqlite");
+    let conn = ff_storage::open(&args.output_path).expect("failed to open/migrate sqlite");
 
     for a in &airports {
         conn.execute(
@@ -104,6 +213,19 @@ fn main() {
             ],
         )
         .expect("insert runway");
+    }
+
+    for f in &frequencies {
+        conn.execute(
+            "INSERT INTO frequency (airport_icao, kind, freq_mhz, remarks) VALUES (?1,?2,?3,?4)",
+            params![
+                f.airport_icao,
+                frequency_kind_str(f.kind),
+                f.freq_mhz,
+                f.remarks
+            ],
+        )
+        .expect("insert frequency");
     }
 
     for p in &parsed.procedures {
@@ -140,12 +262,14 @@ fn main() {
     }
 
     println!(
-        "wrote {} airports, {} runways, {} procedures, {} transitions, {} legs to {output_path}",
+        "wrote {} airports, {} runways, {} frequencies, {} procedures, {} transitions, {} legs to {}",
         airports.len(),
         runways.len(),
+        frequencies.len(),
         parsed.procedures.len(),
         parsed.transitions.len(),
         parsed.legs.len(),
+        args.output_path,
     );
 }
 
@@ -166,6 +290,21 @@ fn surface_str(s: RunwaySurface) -> &'static str {
         RunwaySurface::Gravel => "Gravel",
         RunwaySurface::Water => "Water",
         RunwaySurface::Other => "Other",
+    }
+}
+
+fn frequency_kind_str(k: FrequencyKind) -> &'static str {
+    match k {
+        FrequencyKind::Ctaf => "CTAF",
+        FrequencyKind::Unicom => "UNICOM",
+        FrequencyKind::Tower => "TWR",
+        FrequencyKind::Ground => "GND",
+        FrequencyKind::Approach => "APP",
+        FrequencyKind::Departure => "DEP",
+        FrequencyKind::Atis => "ATIS",
+        FrequencyKind::Awos => "AWOS",
+        FrequencyKind::Clearance => "CLNC DEL",
+        FrequencyKind::Other => "OTHER",
     }
 }
 
