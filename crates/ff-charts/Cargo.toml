@@ -9,3 +9,6 @@ description = "Chart catalog types and GeoTIFF-to-tile pipeline glue for freefli
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+rusqlite.workspace = true
+pmtiles2 = "0.3"
+tempfile = "3"

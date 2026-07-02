@@ -1,20 +1,41 @@
-//! Glue for turning FAA GeoTIFF chart releases into offline-servable tiles.
+//! Turns FAA GeoTIFF chart releases into offline-servable PMTiles archives.
 //!
 //! `ff-charts` deliberately does not reimplement raster reprojection/tiling
-//! in Rust — that's a solved problem in mature, widely used tools (GDAL for
-//! reprojection, `go-pmtiles`/`tippecanoe`-family tools for tiling). This
-//! module is the seam `ff-etl` calls through; the concrete implementation
-//! is expected to shell out to those tools and is not written yet.
+//! in Rust — that's a solved problem in GDAL. This module shells out to
+//! GDAL's CLI tools (`gdalwarp`, `gdal_translate`, `gdaladdo`) to reproject
+//! the source GeoTIFF to Web Mercator and slice it into an MBTiles tile
+//! set, then hands that off to [`crate::mbtiles::mbtiles_to_pmtiles`] —
+//! pure Rust, no extra tool — to repack it as the final PMTiles archive.
 use crate::catalog::{BoundingBox, ChartKind};
+use crate::mbtiles::{mbtiles_to_pmtiles, MbtilesError};
 use std::path::Path;
+use std::process::Command;
 use thiserror::Error;
+
+/// Overview (reduced-resolution) zoom-out factors passed to `gdaladdo`.
+/// These control which lower zoom levels get pre-rendered tiles; GDAL's
+/// MBTiles driver only emits tiles for zoom levels that have either the
+/// full-resolution image or an overview.
+const OVERVIEW_FACTORS: &[&str] = &["2", "4", "8", "16", "32"];
 
 #[derive(Debug, Error)]
 pub enum ChartIngestError {
-    #[error("chart ingest pipeline is not implemented yet")]
-    NotImplemented,
-    #[error("external tool invocation failed: {0}")]
-    ToolFailed(String),
+    #[error("required external tool '{tool}' was not found on PATH: {source}")]
+    ToolNotFound {
+        tool: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("external tool '{tool}' failed (exit code {code:?}): {stderr}")]
+    ToolFailed {
+        tool: &'static str,
+        code: Option<i32>,
+        stderr: String,
+    },
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Mbtiles(#[from] MbtilesError),
 }
 
 /// A GeoTIFF chart release ready to be converted into a tiled, offline
@@ -26,12 +47,66 @@ pub struct GeoTiffSource {
     pub cycle_id: String,
 }
 
+fn run_tool(tool: &'static str, args: &[&std::ffi::OsStr]) -> Result<(), ChartIngestError> {
+    let output = Command::new(tool)
+        .args(args)
+        .output()
+        .map_err(|source| ChartIngestError::ToolNotFound { tool, source })?;
+    if !output.status.success() {
+        return Err(ChartIngestError::ToolFailed {
+            tool,
+            code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Reproject + tile a [`GeoTiffSource`] into a PMTiles archive at
 /// `output_path`, returning the resulting bounding box for the catalog
-/// entry. Not implemented — see module docs.
+/// entry.
+///
+/// Requires `gdalwarp`, `gdal_translate`, and `gdaladdo` (GDAL's CLI
+/// tools, not the Python bindings) to be present on `PATH`.
 pub fn geotiff_to_pmtiles(
-    _source: &GeoTiffSource,
-    _output_path: &Path,
+    source: &GeoTiffSource,
+    output_path: &Path,
 ) -> Result<BoundingBox, ChartIngestError> {
-    Err(ChartIngestError::NotImplemented)
+    let workdir = tempfile::tempdir()?;
+    let warped_path = workdir.path().join("warped.tif");
+    let mbtiles_path = workdir.path().join("tiles.mbtiles");
+
+    run_tool(
+        "gdalwarp",
+        &[
+            "-t_srs".as_ref(),
+            "EPSG:3857".as_ref(),
+            "-dstalpha".as_ref(),
+            "-r".as_ref(),
+            "bilinear".as_ref(),
+            "-overwrite".as_ref(),
+            source.path.as_os_str(),
+            warped_path.as_os_str(),
+        ],
+    )?;
+
+    run_tool(
+        "gdal_translate",
+        &[
+            "-of".as_ref(),
+            "MBTILES".as_ref(),
+            "-co".as_ref(),
+            "TILE_FORMAT=PNG".as_ref(),
+            warped_path.as_os_str(),
+            mbtiles_path.as_os_str(),
+        ],
+    )?;
+
+    let mut gdaladdo_args: Vec<&std::ffi::OsStr> =
+        vec!["-r".as_ref(), "average".as_ref(), mbtiles_path.as_os_str()];
+    gdaladdo_args.extend(OVERVIEW_FACTORS.iter().map(std::ffi::OsStr::new));
+    run_tool("gdaladdo", &gdaladdo_args)?;
+
+    let bbox = mbtiles_to_pmtiles(&mbtiles_path, output_path)?;
+    Ok(bbox)
 }
