@@ -14,6 +14,7 @@ pub fn router(state: AppState) -> Router {
         .route("/weather/metar", get(weather::get_metars))
         .route("/weather/taf", get(weather::get_tafs))
         .route("/cycles/latest", get(cycles::latest))
+        .route("/cycles/:cycle_id/bundle.sqlite", get(cycles::bundle))
         .route("/notams", get(notams::get_notams))
         .with_state(state)
         // Permissive: this proxies only public FAA/NOAA data and takes no

@@ -1,65 +1,70 @@
+use crate::bundle::{build_bundle, BundleSource};
+use crate::fetch::{fetch_cifp, fetch_nasr};
+use crate::publish::{latest_bundle_path, publish_bundle};
+use crate::validate::validate_bundle;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EtlError {
-    #[error("step '{0}' is not implemented yet")]
-    NotImplemented(&'static str),
+    #[error(transparent)]
+    Fetch(#[from] crate::fetch::FetchError),
+    #[error(transparent)]
+    Bundle(#[from] crate::bundle::BundleError),
+    #[error(transparent)]
+    Validate(#[from] crate::validate::ValidateError),
+    #[error(transparent)]
+    Publish(#[from] crate::publish::PublishError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
-/// Runs the DESIGN.md §7 data pipeline end to end: fetch each FAA/NOAA
-/// source for the current cycle, parse it with `ff-cifp`/`ff-nasr`/
-/// `ff-charts`, validate against the previous cycle, then emit a single
-/// versioned `cycle-*.sqlite` + `charts-*.pmtiles` bundle for `ff-api` to
-/// serve.
-///
-/// Every step below is a placeholder: this scaffold establishes the
-/// pipeline's shape and stops at the first unimplemented step rather than
-/// pretending to succeed, so `cargo run -p ff-etl` honestly reports how
-/// far the pipeline actually gets.
+/// Bay Area demo scope (matches `apps/web`'s checked-in demo bundle) —
+/// DESIGN.md §13 says "one FAA region, e.g. a single ARTCC" for Phase 0;
+/// this reuses the same 5 airports already validated end to end rather
+/// than a full ARTCC boundary, to get the first real pipeline run
+/// working. Expanding to a real ARTCC selection is a follow-up (see
+/// TODO.md).
+const REGION_ICAOS: &[&str] = &["KSFO", "KOAK", "KSJC", "KPAO", "KHWD"];
+
+/// Runs the DESIGN.md §7 data pipeline end to end: fetch the current
+/// CIFP/NASR cycle, parse them into an `ff-storage`-schema SQLite
+/// bundle, validate it against the previously published cycle, then
+/// publish it locally under `FF_ETL_DATA_DIR` (default `data/`) for
+/// `ff-api` to serve. Chart imagery isn't fetched by this pipeline yet
+/// — see TODO.md.
 pub fn run() -> Result<(), EtlError> {
-    fetch_cifp()?;
-    fetch_nasr()?;
-    fetch_charts()?;
-    build_cycle_bundle()?;
-    validate_bundle()?;
-    publish_bundle()?;
+    let data_dir = PathBuf::from(std::env::var("FF_ETL_DATA_DIR").unwrap_or_else(|_| "data".to_string()));
+    let workdir = tempfile::tempdir()?;
+
+    tracing::info!("fetching current CIFP cycle from aeronav.faa.gov");
+    let cifp = fetch_cifp(workdir.path())?;
+    tracing::info!(cycle = %cifp.cycle_date, "fetched CIFP");
+
+    tracing::info!(cycle = %cifp.cycle_date, "fetching matching NASR 28-day subscription from nfdc.faa.gov");
+    let nasr_dir = fetch_nasr(workdir.path(), &cifp.cycle_date)?;
+    tracing::info!("fetched NASR");
+
+    let icaos: HashSet<String> = REGION_ICAOS.iter().map(|s| s.to_string()).collect();
+    let bundle_path = workdir.path().join("cycle.sqlite");
+    let stats = build_bundle(
+        &BundleSource {
+            cifp_path: cifp.cifp_path,
+            nasr_dir: Some(nasr_dir),
+            chart: None,
+            icaos,
+        },
+        &bundle_path,
+    )?;
+    tracing::info!(?stats, "built cycle bundle");
+
+    let previous_bundle_path = latest_bundle_path(&data_dir)?;
+    validate_bundle(&bundle_path, &stats, previous_bundle_path.as_deref())?;
+    tracing::info!("validated cycle bundle");
+
+    let published_path = publish_bundle(&bundle_path, &cifp.cycle_date, &data_dir)?;
+    tracing::info!(path = %published_path.display(), "published cycle bundle");
+
     Ok(())
-}
-
-fn fetch_cifp() -> Result<(), EtlError> {
-    tracing::info!("fetch_cifp: download the current-cycle CIFP file from the FAA CIFP site");
-    Err(EtlError::NotImplemented("fetch_cifp"))
-}
-
-fn fetch_nasr() -> Result<(), EtlError> {
-    tracing::info!("fetch_nasr: download the current 28-day NASR subscription CSV set");
-    Err(EtlError::NotImplemented("fetch_nasr"))
-}
-
-fn fetch_charts() -> Result<(), EtlError> {
-    tracing::info!("fetch_charts: download current-cycle VFR/IFR GeoTIFF chart releases");
-    Err(EtlError::NotImplemented("fetch_charts"))
-}
-
-fn build_cycle_bundle() -> Result<(), EtlError> {
-    tracing::info!(
-        "build_cycle_bundle: parse fetched sources via ff-cifp/ff-nasr, write into an \
-         ff-storage-schema SQLite file, and tile fetched charts via ff-charts::ingest into PMTiles"
-    );
-    Err(EtlError::NotImplemented("build_cycle_bundle"))
-}
-
-fn validate_bundle() -> Result<(), EtlError> {
-    tracing::info!(
-        "validate_bundle: sanity-check row counts and geometry against the previous cycle \
-         before publishing"
-    );
-    Err(EtlError::NotImplemented("validate_bundle"))
-}
-
-fn publish_bundle() -> Result<(), EtlError> {
-    tracing::info!(
-        "publish_bundle: upload the bundle to object storage and flip the 'latest' pointer"
-    );
-    Err(EtlError::NotImplemented("publish_bundle"))
 }

@@ -36,6 +36,7 @@ ff-planning = { path = "crates/ff-planning" }
 ff-postflight = { path = "crates/ff-postflight" }
 ff-storage = { path = "crates/ff-storage" }
 ff-sync = { path = "crates/ff-sync" }
+ff-etl = { path = "services/ff-etl" }
 
 # shared external deps, kept at one version across the workspace
 serde = { version = "1", features = ["derive"] }

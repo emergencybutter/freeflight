@@ -404,10 +404,19 @@ need to render procedures with the same fidelity as certified tools.
 
 ## 13. Roadmap
 
-- **Phase 0 — Foundation**: workspace scaffolding, `ff-core` domain
+- **Phase 0 — Foundation**: done. Workspace scaffolding, `ff-core` domain
   types, `ff-storage` schema/migrations, `ff-cifp`/`ff-nasr` parsers with
-  fixture tests, `ff-etl` producing a first cycle bundle for one FAA
-  region (e.g. a single ARTCC) to validate the pipeline end-to-end.
+  fixture tests (and validated against real cycle files — see TODO.md),
+  and `ff-etl` producing a first cycle bundle end to end: fetches the
+  current CIFP/NASR cycle live from FAA, builds an `ff-storage`-schema
+  bundle, validates it against the previously published cycle, and
+  publishes it for `ff-api` to serve (`/cycles/latest`,
+  `/cycles/:id/bundle.sqlite`). Scoped to the same 5-airport Bay Area
+  region as the web demo rather than a full ARTCC boundary, and doesn't
+  fetch/tile chart imagery yet (that pipeline exists and is validated,
+  see "Chart imagery" in TODO.md, just not wired into this automated
+  loop) — real object storage for `publish_bundle` is also still a local
+  directory, not a bucket. See TODO.md for the specifics.
 - **Phase 1 — MVP (read-only)**: web + Android chart/procedure/airport
   viewer, weather/NOTAM briefing, offline cycle sync. No planning or
   track recording yet — this is the "can I even look things up offline"

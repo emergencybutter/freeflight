@@ -10,9 +10,10 @@ description = "Weather/NOTAM proxy and cycle-bundle hosting server (DESIGN.md §
 ff-weather.workspace = true
 ff-notam.workspace = true
 ff-sync.workspace = true
+ff-etl.workspace = true
 axum.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
-tokio = { workspace = true, features = ["net", "signal"] }
+tokio = { workspace = true, features = ["net", "signal", "fs"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

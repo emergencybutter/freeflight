@@ -33,7 +33,15 @@ Built and validated against real FAA/NOAA data end to end:
   centerlines, and procedure-leg paths.
 - `ff-weather` (aviationweather.gov client): `Metar`/`Taf` deserialization
   validated against real captured METAR/TAF responses (see "ff-weather"
-  below) — two type bugs found and fixed.
+  below) — three type/edge-case bugs found and fixed.
+- `services/ff-etl` (real batch pipeline, distinct from the
+  `build_demo_bundle` example): fetches the live CIFP cycle and matching
+  NASR subscription, builds an `ff-storage`-schema bundle, validates it,
+  and publishes it — run for real, not just built (see "Phase 0" below).
+- `services/ff-api`: weather proxy routes run for real against live
+  traffic (see "Live weather in apps/web"); `/cycles/latest` and
+  `/cycles/:id/bundle.sqlite` serve a real `ff-etl`-published bundle,
+  confirmed by downloading and opening it.
 
 Scaffolded but not validated against real/live data:
 - `ff-notam` (FAA NOTAM client): the API it originally targeted turned
@@ -42,10 +50,9 @@ Scaffolded but not validated against real/live data:
   no credentials available in this environment (see "ff-notam" below).
 - `ff-planning` (nav-log/route math) and `ff-postflight` (track
   analysis) — unit-tested with synthetic inputs, no real flight data.
-- `services/ff-api` (axum backend) and `services/ff-etl` (batch cycle
-  builder, distinct from the `build_demo_bundle` example) — skeletons
-  only, not run against real traffic or a real scheduled pipeline.
-- `ff-sync` (client-side cycle bundle sync) — skeleton only.
+- `ff-sync` (client-side cycle bundle sync) — skeleton only; `apps/web`
+  still reads a static bundled SQLite file rather than syncing from
+  `ff-api`'s new `/cycles/*` routes.
 - `apps/android` — just a placeholder `README.md`, no Kotlin project.
 - No route-planning UI in `apps/web` yet (DESIGN.md's nav-log/flight-
   plan builder) — the client is still read-only.
@@ -110,6 +117,73 @@ pattern used throughout this session's browser verifications.
 - **PMTiles in MapLibre**: needs the `pmtiles` npm package's `Protocol`
   registered via `maplibregl.addProtocol("pmtiles", ...)` before any
   `pmtiles://` source URL resolves.
+
+## Phase 0 (Foundation) — done
+
+`services/ff-etl`'s real pipeline (`cargo run -p ff-etl`, distinct from
+the `build_demo_bundle` example) was a pure stub — every step
+(`fetch_cifp`, `fetch_nasr`, `fetch_charts`, `build_cycle_bundle`,
+`validate_bundle`, `publish_bundle`) just returned `NotImplemented`.
+That was the last missing piece of DESIGN.md §13's Phase 0. Implemented
+for real (chart fetching excluded — see below):
+
+- `src/fetch.rs`: downloads the current CIFP cycle from
+  `aeronav.faa.gov` (scrapes the directory listing for the latest
+  `CIFP_YYMMDD.zip` — no API for "current cycle", the listing is the
+  source of truth) and the matching NASR 28-day subscription from
+  `nfdc.faa.gov`. The two are on the same AIRAC schedule (confirmed:
+  `CIFP_260709.zip` pairs with NASR's
+  `28DaySubscription_Effective_2026-07-09.zip`), so the CIFP cycle date
+  determines the NASR URL directly rather than discovering it
+  separately. Both zips are unpacked with the `zip` crate (a new
+  dependency) — no shelling out to `unzip`.
+- `src/bundle.rs`: the CIFP/NASR-parsing-and-SQLite-writing logic,
+  extracted from `build_demo_bundle.rs` into a function shared by both
+  the real pipeline and that example (identical behavior confirmed:
+  re-ran the example against real CIFP/NASR/chart input files afterward
+  and got byte-for-byte the same counts as before the refactor — 5
+  airports, 13 runways, 263 frequencies, 107 procedures, 439
+  transitions, 1598 legs, 28 navaids, 101 waypoints).
+- `src/validate.rs`: rejects a bundle with implausible airport
+  coordinates, or an airport count that dropped more than half versus
+  the previously published cycle (skipped on the first run — nothing to
+  compare against yet). Unit-tested including the actual rejection
+  paths, not just the happy path.
+- `src/publish.rs`: writes `<data_dir>/cycles/<cycle_id>/cycle.sqlite`
+  plus a `<data_dir>/latest.json` pointer — a local stand-in for
+  DESIGN.md §7's "upload to object storage and flip the 'latest'
+  pointer" (no bucket configured in this environment; same interface
+  either way, so swapping in real object storage later is scoped to
+  this one module). `data_dir` defaults to `data/` (already anticipated
+  in `.gitignore`) and is configurable via `FF_ETL_DATA_DIR`.
+- `services/ff-api`'s `/cycles/latest` and new
+  `/cycles/:cycle_id/bundle.sqlite` routes now serve whatever `ff-etl`
+  publishes (`FF_ETL_DATA_DIR`, shared env var) instead of a hardcoded
+  `501` — closing the loop the old placeholder message literally
+  invited ("run ff-etl first"). This wasn't explicitly asked for but
+  is a small, low-risk completion of the same "produce a bundle for
+  ff-api to serve" sentence in DESIGN.md §7 and `pipeline.rs`'s own
+  original doc comment.
+
+Ran the real pipeline twice against live FAA data end to end: fetch →
+build → validate → publish, then downloaded the published bundle via
+`ff-api` and opened it with `sqlite3` to confirm it's genuinely valid
+and correct (same 5 airports/etc. as above). Second run exercised the
+"validate against previous cycle" comparison path for real, not just in
+a unit test.
+
+Scoped deliberately smaller than the literal DESIGN.md wording in two
+ways (agreed with the user before implementing):
+- **Region**: reuses the same 5-airport Bay Area demo scope
+  (`KSFO`/`KOAK`/`KSJC`/`KPAO`/`KHWD`) rather than a real ARTCC
+  boundary. DESIGN.md says "e.g. a single ARTCC" — expanding to an
+  actual ARTCC selection (NASR has the association data for this) is a
+  follow-up, not done here.
+- **Charts**: `fetch_charts` is still not implemented — the
+  GeoTIFF→PMTiles pipeline itself is done and validated (see "Chart
+  imagery" below), just not wired into this automated fetch loop yet.
+  Automating "download the current cycle's sectional, crop it to the
+  region, tile it" is a clean, separate follow-up.
 
 ## Chart imagery — done
 
