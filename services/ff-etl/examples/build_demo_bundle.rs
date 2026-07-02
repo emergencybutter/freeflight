@@ -4,7 +4,8 @@
 //!
 //! Usage:
 //! ```sh
-//! cargo run -p ff-etl --example build_demo_bundle -- <cifp-file> <output.sqlite> [--nasr-dir <dir>] ICAO1 [ICAO2 ...]
+//! cargo run -p ff-etl --example build_demo_bundle -- <cifp-file> <output.sqlite> \
+//!   [--nasr-dir <dir>] [--chart-geotiff <path> --chart-pmtiles-out <path>] ICAO1 [ICAO2 ...]
 //! ```
 //!
 //! `--nasr-dir` points at a directory containing an unzipped NASR 28-day
@@ -12,6 +13,15 @@
 //! `FRQ.csv`). When given, real runway surface type and airport
 //! communication frequencies are merged in on top of the CIFP-derived
 //! data — CIFP alone has neither.
+//!
+//! `--chart-geotiff`/`--chart-pmtiles-out` run a source chart GeoTIFF
+//! through `ff_charts::geotiff_to_pmtiles` and add a matching
+//! `chart_catalog` row pointing at the resulting PMTiles file (served
+//! from wherever `--chart-pmtiles-out` puts it — typically
+//! `apps/web/public/...` so Vite serves it as a static asset at the
+//! same path relative to the site root). Both flags are required
+//! together; omit both to build a bundle with no chart imagery.
+use ff_charts::{geotiff_to_pmtiles, ChartCatalogEntry, ChartKind, GeoTiffSource};
 use ff_cifp::{
     build_procedures, classify_line, extract_airport, extract_ndb_navaid,
     extract_procedure_leg_row, extract_runway_end, extract_vhf_navaid, extract_waypoint,
@@ -26,29 +36,41 @@ use ff_nasr::{
 };
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::{env, fs};
 
 struct Args {
     cifp_path: String,
     output_path: String,
     nasr_dir: Option<String>,
+    chart_geotiff: Option<String>,
+    chart_pmtiles_out: Option<String>,
     icaos: HashSet<String>,
 }
 
 fn parse_args() -> Args {
     let raw: Vec<String> = env::args().collect();
     if raw.len() < 4 {
-        eprintln!("usage: build_demo_bundle <cifp-file> <output.sqlite> [--nasr-dir <dir>] ICAO1 [ICAO2 ...]");
+        eprintln!(
+            "usage: build_demo_bundle <cifp-file> <output.sqlite> [--nasr-dir <dir>] \
+             [--chart-geotiff <path> --chart-pmtiles-out <path>] ICAO1 [ICAO2 ...]"
+        );
         std::process::exit(1);
     }
     let cifp_path = raw[1].clone();
     let output_path = raw[2].clone();
     let mut nasr_dir = None;
+    let mut chart_geotiff = None;
+    let mut chart_pmtiles_out = None;
     let mut icaos = HashSet::new();
     let mut rest = raw[3..].iter().peekable();
     while let Some(arg) = rest.next() {
         if arg == "--nasr-dir" {
             nasr_dir = rest.next().cloned();
+        } else if arg == "--chart-geotiff" {
+            chart_geotiff = rest.next().cloned();
+        } else if arg == "--chart-pmtiles-out" {
+            chart_pmtiles_out = rest.next().cloned();
         } else {
             icaos.insert(arg.to_uppercase());
         }
@@ -57,6 +79,8 @@ fn parse_args() -> Args {
         cifp_path,
         output_path,
         nasr_dir,
+        chart_geotiff,
+        chart_pmtiles_out,
         icaos,
     }
 }
@@ -228,6 +252,43 @@ fn main() {
         Vec::new()
     };
 
+    let chart = match (&args.chart_geotiff, &args.chart_pmtiles_out) {
+        (Some(geotiff_path), Some(pmtiles_out)) => {
+            let source = GeoTiffSource {
+                path: PathBuf::from(geotiff_path),
+                kind: ChartKind::Sectional,
+                cycle_id: "demo".to_string(),
+            };
+            let pmtiles_out = PathBuf::from(pmtiles_out);
+            let bbox = geotiff_to_pmtiles(&source, &pmtiles_out)
+                .expect("failed to convert chart GeoTIFF to PMTiles");
+            // The catalog's tile_url is what the web client fetches, so it
+            // needs to be a site-relative path (Vite serves everything
+            // under apps/web/public/ at the site root), not the local
+            // filesystem path this tool wrote to.
+            let tile_url = format!(
+                "/{}",
+                pmtiles_out
+                    .file_name()
+                    .expect("--chart-pmtiles-out must be a file path")
+                    .to_string_lossy()
+            );
+            Some(ChartCatalogEntry {
+                id: "demo-sectional".to_string(),
+                name: "Demo Sectional Excerpt".to_string(),
+                kind: ChartKind::Sectional,
+                cycle_id: "demo".to_string(),
+                bbox,
+                tile_url,
+            })
+        }
+        (None, None) => None,
+        _ => {
+            eprintln!("--chart-geotiff and --chart-pmtiles-out must be given together");
+            std::process::exit(1);
+        }
+    };
+
     if fs::metadata(&args.output_path).is_ok() {
         fs::remove_file(&args.output_path).expect("failed to remove stale output file");
     }
@@ -337,9 +398,28 @@ fn main() {
         .expect("insert waypoint");
     }
 
+    if let Some(c) = &chart {
+        conn.execute(
+            "INSERT INTO chart_catalog (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                c.id,
+                c.name,
+                chart_kind_str(c.kind),
+                c.cycle_id,
+                c.bbox.min_lat,
+                c.bbox.min_lon,
+                c.bbox.max_lat,
+                c.bbox.max_lon,
+                c.tile_url,
+            ],
+        )
+        .expect("insert chart_catalog entry");
+    }
+
     println!(
         "wrote {} airports, {} runways, {} frequencies, {} procedures, {} transitions, {} legs, \
-         {} navaids, {} waypoints to {}",
+         {} navaids, {} waypoints, {} chart to {}",
         airports.len(),
         runways.len(),
         frequencies.len(),
@@ -348,6 +428,7 @@ fn main() {
         parsed.legs.len(),
         navaids.len(),
         waypoints.len(),
+        chart.is_some() as u8,
         args.output_path,
     );
 }
@@ -421,6 +502,18 @@ fn speed_str(s: SpeedConstraint) -> String {
     match s {
         SpeedConstraint::AtOrBelow(kt) => format!("At/below {kt} kt"),
         SpeedConstraint::At(kt) => format!("At {kt} kt"),
+    }
+}
+
+fn chart_kind_str(k: ChartKind) -> &'static str {
+    match k {
+        ChartKind::Sectional => "Sectional",
+        ChartKind::TerminalAreaChart => "TerminalAreaChart",
+        ChartKind::WorldAeronauticalChart => "WorldAeronauticalChart",
+        ChartKind::IfrEnrouteLow => "IfrEnrouteLow",
+        ChartKind::IfrEnrouteHigh => "IfrEnrouteHigh",
+        ChartKind::HelicopterRoute => "HelicopterRoute",
+        ChartKind::TerminalProcedurePlate => "TerminalProcedurePlate",
     }
 }
 

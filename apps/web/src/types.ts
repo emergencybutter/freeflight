@@ -69,3 +69,15 @@ export interface Fix {
   lat: number;
   lon: number;
 }
+
+export interface ChartCatalogEntry {
+  id: string;
+  name: string;
+  kind: string;
+  cycle_id: string;
+  min_lat: number;
+  min_lon: number;
+  max_lat: number;
+  max_lon: number;
+  tile_url: string;
+}

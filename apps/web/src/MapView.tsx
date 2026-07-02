@@ -1,19 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { Protocol as PmtilesProtocol } from "pmtiles";
 import type { Database } from "sql.js";
 import { queryAll } from "./db";
-import type { Airport, Fix, ProcedureLeg, ProcedureTransition, Runway } from "./types";
+import type { Airport, ChartCatalogEntry, Fix, ProcedureLeg, ProcedureTransition, Runway } from "./types";
 
 const AIRPORTS_SOURCE = "airports";
 const RUNWAYS_SOURCE = "runways";
 const PROCEDURE_SOURCE = "procedure-path";
 
-// No basemap tiles: DESIGN.md's map is built on our own charts.pmtiles
-// (raster sectionals/TACs), not a third-party basemap — that pipeline
-// exists (ff-charts) but has no real chart bundled yet (see TODO.md). A
-// plain background keeps the map usable in the meantime and matches the
-// app's dark theme.
+// Registered once per page load (module scope, not per-component-mount):
+// MapLibre's addProtocol is global, and re-registering on every mount
+// (e.g. React StrictMode's double-invoke) is harmless but pointless.
+maplibregl.addProtocol("pmtiles", new PmtilesProtocol().tile);
+
+// No third-party basemap tiles: DESIGN.md's map is built on our own
+// charts.pmtiles (raster sectionals/TACs) as the base layer instead —
+// see the chart_catalog handling below, which renders one when the
+// loaded cycle bundle has one. A plain background keeps the map usable
+// when it doesn't (see TODO.md) and matches the app's dark theme.
 const BLANK_STYLE: StyleSpecification = {
   version: 8,
   sources: {},
@@ -90,6 +96,7 @@ export function MapView({
   const [loaded, setLoaded] = useState(false);
 
   const airports = useMemo(() => queryAll<Airport>(db, "SELECT * FROM airport"), [db]);
+  const charts = useMemo(() => queryAll<ChartCatalogEntry>(db, "SELECT * FROM chart_catalog"), [db]);
   // Every waypoint/navaid ident -> coordinates, so a procedure leg's
   // fix_ident can be resolved without a per-leg query. Both tables share
   // the ident/lat/lon shape (see types.ts's `Fix`); idents aren't
@@ -159,6 +166,19 @@ export function MapView({
         source: PROCEDURE_SOURCE,
         paint: { "line-color": "#7fd0ff", "line-width": 2, "line-dasharray": [2, 1.5] },
       });
+
+      // Chart imagery renders as the base layer, under the airport/runway/
+      // procedure overlays above -- inserted before "airports-circle"
+      // (already added) rather than appended, so it doesn't cover them.
+      for (const chart of charts) {
+        const sourceId = `chart-${chart.id}`;
+        map.addSource(sourceId, {
+          type: "raster",
+          url: `pmtiles://${chart.tile_url}`,
+          tileSize: 256,
+        });
+        map.addLayer({ id: sourceId, type: "raster", source: sourceId }, "airports-circle");
+      }
 
       map.on("click", "airports-circle", (e) => {
         const icao = e.features?.[0]?.properties?.icao as string | undefined;

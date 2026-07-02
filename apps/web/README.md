@@ -14,12 +14,17 @@ by `ff-nasr`, for runway surface type and airport communication
 frequencies — CIFP alone has neither), stored via the `ff-storage`
 schema, rendered in a browser.
 
-The map has no chart imagery yet — `ff-charts`' GeoTIFF→PMTiles pipeline
-exists and works, but no real FAA chart has been run through it (see
-`/TODO.md`), so the map is a plain background with airport points and
-real runway centerlines (from CIFP's threshold coordinates) drawn as a
-GeoJSON overlay. Clicking an airport point on the map selects it, same
-as clicking it in the list.
+The map renders chart imagery as a PMTiles raster layer (via the
+`pmtiles` package's MapLibre protocol handler) whenever the loaded
+cycle bundle's `chart_catalog` table has an entry — plain background
+otherwise. The currently-checked-in demo bundle has none: `ff-charts`'
+GeoTIFF→PMTiles pipeline exists, is wired into `build_demo_bundle`, and
+is tested against a synthetic GeoTIFF, but no real FAA chart has been
+run through it yet (see `/TODO.md` — aeronav.faa.gov is blocked from
+this environment's egress). Airport points and real runway centerlines
+(from CIFP's threshold coordinates) draw as a GeoJSON overlay above the
+chart layer either way. Clicking an airport point on the map selects
+it, same as clicking it in the list.
 
 ## Running
 
@@ -37,12 +42,22 @@ works without any Rust tooling. To rebuild it from real source data:
 cargo run -p ff-etl --example build_demo_bundle -- \
   <path-to-a-FAACIFP18-file> apps/web/public/demo-cycle.sqlite \
   --nasr-dir <path-to-an-unzipped-NASR-28-day-CSV-subscription> \
+  --chart-geotiff <path-to-a-FAA-VFR-chart-GeoTIFF> \
+  --chart-pmtiles-out apps/web/public/demo-chart.pmtiles \
   KSFO KOAK KSJC KPAO KHWD
 ```
 
 `--nasr-dir` is optional — omit it (and the flag) to build from CIFP
 alone, which still gives real airports/runways/procedures, just without
 surface type or frequencies.
+
+`--chart-geotiff`/`--chart-pmtiles-out` are optional and must be given
+together — they run the source GeoTIFF through `ff-charts`'
+`geotiff_to_pmtiles` (needs `gdalwarp`/`gdal_translate`/`gdaladdo` on
+`PATH`) and add a `chart_catalog` row pointing at the resulting file.
+`--chart-pmtiles-out` should point somewhere under `apps/web/public/`
+so Vite serves it statically at the same path relative to the site
+root.
 
 ## Known gotcha
 
