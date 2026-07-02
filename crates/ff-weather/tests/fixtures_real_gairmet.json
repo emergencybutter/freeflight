@@ -1,0 +1,146 @@
+[
+  {
+    "tag": "2E",
+    "forecastHour": 0,
+    "validTime": "2026-07-02T21:00:00.000Z",
+    "hazard": "MT_OBSC",
+    "geometryType": "AREA",
+    "latlonpairs": 9,
+    "frequency": null,
+    "severity": null,
+    "due_to": "FU HZ",
+    "status": "NRML",
+    "top": null,
+    "base": null,
+    "fzltop": null,
+    "fzlbase": null,
+    "level": null,
+    "receiptTime": 1783025421,
+    "issueTime": 1783025100,
+    "expireTime": 1783047600,
+    "product": "SIERRA",
+    "geom": "AREA",
+    "coords": [
+      {
+        "lat": "35.51",
+        "lon": "-106.31"
+      },
+      {
+        "lat": "35.09",
+        "lon": "-106.02"
+      },
+      {
+        "lat": "34.57",
+        "lon": "-106.41"
+      },
+      {
+        "lat": "34.17",
+        "lon": "-107.03"
+      },
+      {
+        "lat": "33.19",
+        "lon": "-108.45"
+      },
+      {
+        "lat": "33.11",
+        "lon": "-109.24"
+      },
+      {
+        "lat": "34.04",
+        "lon": "-108.41"
+      },
+      {
+        "lat": "34.98",
+        "lon": "-107.43"
+      },
+      {
+        "lat": "35.51",
+        "lon": "-106.31"
+      }
+    ]
+  },
+  {
+    "tag": "1C",
+    "forecastHour": 0,
+    "validTime": "2026-07-02T21:00:00.000Z",
+    "hazard": "FZLVL",
+    "geometryType": "LINE",
+    "latlonpairs": 15,
+    "frequency": null,
+    "severity": null,
+    "due_to": null,
+    "status": "NRML",
+    "top": null,
+    "base": null,
+    "fzltop": null,
+    "fzlbase": null,
+    "level": "080",
+    "receiptTime": 1783024827,
+    "issueTime": 1783025100,
+    "expireTime": 1783047600,
+    "product": "ZULU",
+    "geom": "LINE",
+    "coords": [
+      {
+        "lat": "58.36",
+        "lon": "-92.68"
+      },
+      {
+        "lat": "57.46",
+        "lon": "-92.86"
+      },
+      {
+        "lat": "56.84",
+        "lon": "-91.66"
+      },
+      {
+        "lat": "56.59",
+        "lon": "-90.01"
+      },
+      {
+        "lat": "56.17",
+        "lon": "-88.75"
+      },
+      {
+        "lat": "55.59",
+        "lon": "-87.34"
+      },
+      {
+        "lat": "55.15",
+        "lon": "-85.84"
+      },
+      {
+        "lat": "54.82",
+        "lon": "-84.16"
+      },
+      {
+        "lat": "54.46",
+        "lon": "-82.59"
+      },
+      {
+        "lat": "54.07",
+        "lon": "-81.03"
+      },
+      {
+        "lat": "54.52",
+        "lon": "-79.77"
+      },
+      {
+        "lat": "55.15",
+        "lon": "-79.19"
+      },
+      {
+        "lat": "56.08",
+        "lon": "-79.83"
+      },
+      {
+        "lat": "57.30",
+        "lon": "-79.64"
+      },
+      {
+        "lat": "57.94",
+        "lon": "-80.15"
+      }
+    ]
+  }
+]

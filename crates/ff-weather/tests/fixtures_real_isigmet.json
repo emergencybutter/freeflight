@@ -1,0 +1,142 @@
+[
+  {
+    "icaoId": "FAOR",
+    "firId": "FAJA",
+    "firName": "FAJA JOHANNESBURG",
+    "receiptTime": "2026-07-02T10:06:41.822Z",
+    "validTimeFrom": 1783015200,
+    "validTimeTo": 1783029600,
+    "seriesId": "C01",
+    "hazard": "TURB",
+    "qualifier": "SEV",
+    "base": 14000,
+    "top": 18000,
+    "geom": "AREA",
+    "coords": [
+      {
+        "lon": 29.933,
+        "lat": -30.3
+      },
+      {
+        "lon": 31.15,
+        "lat": -30.483
+      },
+      {
+        "lon": 29.967,
+        "lat": -31.867
+      },
+      {
+        "lon": 28.833,
+        "lat": -31.233
+      }
+    ],
+    "dir": null,
+    "spd": null,
+    "chng": null,
+    "rawSigmet": "WSZA21 FAOR 021745\nFAJA SIGMET C01 VALID 021800/022200 FAOR-\nFAJA JOHANNESBURG FIR SEV TURB FCST WI\nS3018 E02956 - S3029 E03109 - S3152 E02958 - S3114 E02850 FL140/180="
+  },
+  {
+    "icaoId": "SVMI",
+    "firId": "SVZM",
+    "firName": "SVZM MAIQUETIA",
+    "receiptTime": "2026-07-02T19:15:56.864Z",
+    "validTimeFrom": 1783019820,
+    "validTimeTo": 1783030620,
+    "seriesId": "02",
+    "hazard": "TS",
+    "qualifier": "EMBD",
+    "base": null,
+    "top": 24000,
+    "geom": "AREAS",
+    "coords": [
+      [
+        {
+          "lon": -67.55,
+          "lat": 6.25
+        },
+        {
+          "lon": -71.433,
+          "lat": 7.517
+        },
+        {
+          "lon": -72.15,
+          "lat": 11.25
+        }
+      ],
+      [
+        {
+          "lon": null,
+          "lat": 10.567
+        }
+      ]
+    ],
+    "dir": "NW",
+    "spd": "UNK",
+    "chng": "INTSF",
+    "rawSigmet": "WSVN31 SVMI 021917\nSVZM SIGMET 02 VALID 021917/022217 SVMI-\nSVZM MAIQUETIA FIR EMBD TS OBS AT 021917Z WI N10434 W06218 N0615 W06733 N0731 W07126 N1115 W07209  WI N1034 W06218  TOP FL240 MOV NW INTSF="
+  },
+  {
+    "icaoId": "FCBB",
+    "firId": "FCCC",
+    "firName": "FCCC BRAZZAVILLE",
+    "receiptTime": "2026-07-02T20:24:45.808Z",
+    "validTimeFrom": 1783025400,
+    "validTimeTo": 1783039800,
+    "seriesId": "H2",
+    "hazard": "TS",
+    "qualifier": "EMBD",
+    "base": null,
+    "top": null,
+    "geom": "AREAS",
+    "coords": [
+      [
+        {
+          "lon": 19.47,
+          "lat": 6.9
+        },
+        {
+          "lon": 24.43,
+          "lat": 7.03
+        },
+        {
+          "lon": 24.43,
+          "lat": 9.03
+        },
+        {
+          "lon": 19.47,
+          "lat": 8.9
+        },
+        {
+          "lon": 19.47,
+          "lat": 6.9
+        }
+      ],
+      [
+        {
+          "lon": 15.23,
+          "lat": 8
+        },
+        {
+          "lon": 11.38,
+          "lat": 4.07
+        },
+        {
+          "lon": 9.38,
+          "lat": 4.07
+        },
+        {
+          "lon": 13.23,
+          "lat": 8
+        },
+        {
+          "lon": 15.23,
+          "lat": 8
+        }
+      ]
+    ],
+    "dir": null,
+    "spd": null,
+    "chng": null,
+    "rawSigmet": "WSCG31 FCBB 022023\nFCCC SIGMET H2 VALID 022050/030050 FCBB-\nFCCC BRAZZAVILLE FIR/UIR EMBD TS OBS AT 2000Z\nN OF LINE N0654 E01928 - N0702 E02426\nW OF LINE N0800 E01514 - N0404 E01123\nWI N0410 E01331 - N0412 E01613 - N0127 E01737 - N0015 E01408 - N0410\nE01331\nTOP FL430 MOV W 05KT NC="
+  }
+]

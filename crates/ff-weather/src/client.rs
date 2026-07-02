@@ -1,3 +1,4 @@
+use crate::hazards::{GAirmet, IntlSigmet, Sigmet};
 use crate::records::{Metar, Taf};
 use thiserror::Error;
 
@@ -92,6 +93,43 @@ impl WeatherClient {
             return Ok(Vec::new());
         }
         Ok(resp.json::<Vec<Taf>>().await?)
+    }
+
+    /// Current Graphical AIRMETs — no station/region filter, same as
+    /// aviationweather.gov's own default (all current CONUS records).
+    pub async fn fetch_gairmets(&self) -> Result<Vec<GAirmet>, WeatherError> {
+        self.fetch_hazard("gairmet").await
+    }
+
+    /// Current US domestic/convective SIGMETs.
+    pub async fn fetch_sigmets(&self) -> Result<Vec<Sigmet>, WeatherError> {
+        self.fetch_hazard("sigmet").await
+    }
+
+    /// Current international/oceanic SIGMETs (DESIGN.md scopes this
+    /// project US-only — included for completeness, but likely not
+    /// needed by anything else here).
+    pub async fn fetch_intl_sigmets(&self) -> Result<Vec<IntlSigmet>, WeatherError> {
+        self.fetch_hazard("isigmet").await
+    }
+
+    async fn fetch_hazard<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<Vec<T>, WeatherError> {
+        let url = format!("{}/{endpoint}", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("format", "json")])
+            .send()
+            .await?
+            .error_for_status()?;
+        // Same 204-No-Content-for-no-current-records behavior as
+        // fetch_metars/fetch_tafs — not yet confirmed live for these
+        // three endpoints specifically (CONUS/oceanic hazards are rarely
+        // all-clear), but handling it defensively costs nothing.
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Vec::new());
+        }
+        Ok(resp.json::<Vec<T>>().await?)
     }
 }
 

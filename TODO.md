@@ -33,7 +33,10 @@ Built and validated against real FAA/NOAA data end to end:
   centerlines, and procedure-leg paths.
 - `ff-weather` (aviationweather.gov client): `Metar`/`Taf` deserialization
   validated against real captured METAR/TAF responses (see "ff-weather"
-  below) — three type/edge-case bugs found and fixed.
+  below) — three type/edge-case bugs found and fixed. `GAirmet`/`Sigmet`/
+  `IntlSigmet` added and validated the same way (see "AIRMET/SIGMET"
+  below) — modeled correctly on the first pass since field types were
+  checked against live samples before writing the structs this time.
 - `services/ff-etl` (real batch pipeline, distinct from the
   `build_demo_bundle` example): fetches the live CIFP cycle and matching
   NASR subscription, builds an `ff-storage`-schema bundle, validates it,
@@ -274,6 +277,62 @@ Verified in a real browser (Playwright): both KHWD (no TAF, live 204
 handled correctly, shows "no current TAF") and KSFO (both present)
 render real, current METAR/TAF text and decoded summaries with no
 console errors.
+
+## AIRMET/SIGMET — client + ff-api proxy done, no map UI yet
+
+aviationweather.gov actually exposes four related-but-different
+endpoints, not one: `/airmet` (old plain-text bulletin, no polygon —
+not implemented, `GAirmet` below supersedes it for anything that needs
+to draw a shape), `/gairmet` (Graphical AIRMET, real polygons),
+`/sigmet` (US domestic/convective SIGMET, real polygons), and `/isigmet`
+(international/oceanic SIGMET — technically out of DESIGN.md's US-only
+scope, implemented anyway since the shape was nearly free once `Sigmet`
+was modeled).
+
+This time, field types were checked against real captured samples
+*before* writing the Rust structs (a script that fetched live responses
+and printed the Python type of every field across ~20-140 records per
+endpoint), rather than guessing and finding bugs after like the first
+`ff-weather` pass. That surfaced real shape divergence between the
+three:
+
+- `GAirmet::coords` lat/lon are numeric-*looking* but transported as
+  JSON strings (`"35.51"`, not `35.51`) — unlike every other coordinate
+  pair in this crate. Both `"AREA"` and `"LINE"` `geometryType`s use the
+  same flat coords shape.
+- `Sigmet` (`/sigmet`) has no `geom` field and no nested/multi-polygon
+  case — `coords` is always a flat list.
+- `IntlSigmet` (`/isigmet`) is genuinely polymorphic: `geom: "AREA"` →
+  flat point list, `geom: "AREAS"` → a list of point lists
+  (multi-polygon; confirmed live, 2 of 143 sampled records). A live
+  point was also seen with `lat` present but `lon: null`. Given that,
+  `coords` is kept as raw `serde_json::Value` rather than a fixed struct
+  that would fail on whichever shape it didn't expect — same reasoning
+  as `ff-notam`'s raw-JSON NOTAM body, applied here because the shape
+  really does vary, not because it's unvalidated.
+- `IntlSigmet::dir`/`spd` are strings (`"0"`, or the literal placeholder
+  `"-"`), never JSON numbers, despite looking numeric.
+
+All three deserialize correctly against real captured fixtures
+(`crates/ff-weather/tests/real_hazards.rs`, including a `LINE`-geometry
+G-AIRMET record and both `AREA`/`AREAS` international SIGMET records)
+and via a live opt-in test through the actual `WeatherClient` methods.
+`ff-api` proxies all three (`/weather/gairmet`, `/weather/sigmet`,
+`/weather/isigmet`) — confirmed live, real data flowing through.
+
+Deliberately stopped here (agreed with the user beforehand):
+- **Winds/temps aloft**: no JSON API exists — aviationweather.gov only
+  serves it as a fixed-width text bulletin (`FBUS31`/`FD` product,
+  station-keyed columns per altitude, compact wind/temp encoding e.g.
+  `"1616+21"`). That's a real parser to write, not JSON deserialization,
+  so it's deferred as its own follow-up rather than folded in here.
+- **No map rendering yet**: `apps/web` doesn't draw AIRMET/SIGMET
+  polygons on the MapLibre map. DESIGN.md §9.2 wants exactly that; this
+  pass stopped at validated backend clients + proxy routes, same
+  stopping point chosen for chart imagery before it got its own pass.
+- **Plain-text `/airmet`**: not implemented at all — no coordinates to
+  plot, and `GAirmet` covers the map-drawing use case this project
+  actually needs.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 

@@ -42,3 +42,28 @@ pub async fn get_tafs(
         Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
     }
 }
+
+/// Proxies aviationweather.gov's Graphical AIRMET — no station filter,
+/// same as upstream (all current CONUS records).
+pub async fn get_gairmets(State(state): State<AppState>) -> Response {
+    match state.weather.fetch_gairmets().await {
+        Ok(records) => Json(records).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}
+
+/// Proxies aviationweather.gov's US domestic/convective SIGMET.
+pub async fn get_sigmets(State(state): State<AppState>) -> Response {
+    match state.weather.fetch_sigmets().await {
+        Ok(records) => Json(records).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}
+
+/// Proxies aviationweather.gov's international/oceanic SIGMET.
+pub async fn get_intl_sigmets(State(state): State<AppState>) -> Response {
+    match state.weather.fetch_intl_sigmets().await {
+        Ok(records) => Json(records).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}
