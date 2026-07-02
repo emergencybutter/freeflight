@@ -17,14 +17,14 @@ schema, rendered in a browser.
 The map renders chart imagery as a PMTiles raster layer (via the
 `pmtiles` package's MapLibre protocol handler) whenever the loaded
 cycle bundle's `chart_catalog` table has an entry — plain background
-otherwise. The currently-checked-in demo bundle has none: `ff-charts`'
-GeoTIFF→PMTiles pipeline exists, is wired into `build_demo_bundle`, and
-is tested against a synthetic GeoTIFF, but no real FAA chart has been
-run through it yet (see `/TODO.md` — aeronav.faa.gov is blocked from
-this environment's egress). Airport points and real runway centerlines
-(from CIFP's threshold coordinates) draw as a GeoJSON overlay above the
-chart layer either way. Clicking an airport point on the map selects
-it, same as clicking it in the list.
+otherwise. The checked-in demo bundle has one: a real FAA San Francisco
+sectional (cycle 2026-07-09), cropped to the demo airports' area and
+run through `ff-charts`' GeoTIFF→PMTiles pipeline via
+`build_demo_bundle --chart-geotiff --chart-pmtiles-out`
+(`public/demo-chart.pmtiles`, ~12MB). Airport points and real runway
+centerlines (from CIFP's threshold coordinates) draw as a GeoJSON
+overlay above the chart layer. Clicking an airport point on the map
+selects it, same as clicking it in the list.
 
 ## Running
 

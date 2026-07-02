@@ -1,9 +1,8 @@
 # TODO
 
-## Get real chart imagery flowing
+## Chart imagery — done
 
-All the plumbing is now built and tested end to end, just not with a
-real FAA chart:
+Real chart imagery now flows end to end:
 
 - `ff-charts`' `geotiff_to_pmtiles` pipeline (gdalwarp → gdal_translate
   → gdaladdo → pure-Rust MBTiles→PMTiles repack).
@@ -14,23 +13,24 @@ real FAA chart:
   raster layer (via the `pmtiles` package's MapLibre protocol handler),
   underneath the airport/runway/procedure overlays.
 
-All three were verified together with a synthetic GeoTIFF (visually
-confirmed rendering as a raster tile layer in a real browser, correctly
-z-ordered and zoom-clamped), the same "prove the mechanism, not the
-pixels" approach used to validate `ff-charts` itself. What's missing is
-a real chart:
+The checked-in demo bundle now includes a real chart: the FAA San
+Francisco sectional (cycle 2026-07-09, downloaded from
+`aeronav.faa.gov` — that domain turned out not to be blocked from this
+environment after all), cropped with `gdalwarp` to the demo airports'
+bounding box (~37.2–37.85N, ~122.55–121.75W) before running through the
+pipeline, keeping `apps/web/public/demo-chart.pmtiles` to ~12MB instead
+of bundling the full multi-hundred-MB regional chart. Verified visually
+in a real browser: correct sectional colors (palette expanded to RGB
+before the pipeline's bilinear resample, avoiding the color-table
+corruption bilinear would otherwise cause), real runway centerlines and
+airport markers correctly z-ordered above the chart tiles.
 
-- FAA's chart-imagery domain (aeronav.faa.gov) is blocked from this
-  environment's egress, and no small-enough mirror of a real VFR
-  sectional/TAC GeoTIFF turned up in a search (unlike the CIFP/NASR
-  files, which the user was able to upload directly — ask for one the
-  same way if available).
-- Once available: `cargo run -p ff-etl --example build_demo_bundle --
-  <cifp> apps/web/public/demo-cycle.sqlite --chart-geotiff <path>
-  --chart-pmtiles-out apps/web/public/demo-chart.pmtiles ...` (see
-  `apps/web/README.md`).
-- Check chart licensing/attribution requirements for redistribution
-  (FAA charts are public domain, but confirm before bundling one into
-  the repo — likely want a small cropped extract rather than a full
-  chart to keep repo size down).
+FAA charts are public domain; no attribution/licensing blocker.
 
+## Possible follow-ups
+
+- Only one sectional is bundled (San Francisco, covering the 5 demo
+  airports). Expanding demo coverage to other regions would need
+  additional cropped GeoTIFFs run through the same pipeline.
+- The crop bounding box is hand-picked around the 5 demo ICAOs; no
+  tooling yet derives it automatically from the airport list.
