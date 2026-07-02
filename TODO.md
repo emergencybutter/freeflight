@@ -146,7 +146,7 @@ FAA charts are public domain; no attribution/licensing blocker.
 - The crop bounding box is hand-picked around the 5 demo ICAOs; no
   tooling yet derives it automatically from the airport list.
 
-## ff-weather — validated against live data, two bugs fixed
+## ff-weather — validated against live data, three bugs fixed
 
 Deserialized real `aviationweather.gov` METAR/TAF responses (captured
 live, checked in as test fixtures under `crates/ff-weather/tests/`)
@@ -161,10 +161,45 @@ did not:
   live KATL/KDEN/KMIA TAFs with `PROB`/`TEMPO` groups), same as
   `Metar::wdir` already handled. Fixed: now `Option<serde_json::Value>`.
 
-`crates/ff-weather/tests/real_weather.rs` pins both fixes with checked-in
-real-response fixtures (run by default, no network) plus an opt-in
-`--ignored` test that hits the live API through the actual
+A third bug surfaced later, wiring the client up to a real browser
+(see "Live weather in apps/web" below): `fetch_metars`/`fetch_tafs`
+called `.json()` unconditionally, but the API returns 204 No Content
+(empty body) rather than `[]` when none of the requested stations have
+a current report — e.g. any TAF request for a non-towered airport like
+KHWD. `.json()` on an empty body fails with a confusing "error decoding
+response body". Fixed: both methods now check for 204 and return an
+empty `Vec` before attempting to parse.
+
+`crates/ff-weather/tests/real_weather.rs` pins all three fixes with
+checked-in real-response fixtures (run by default, no network) plus
+opt-in `--ignored` tests that hit the live API through the actual
 `WeatherClient` methods.
+
+## Live weather in apps/web
+
+`services/ff-api` already had `/weather/metar`/`/weather/taf` routes
+proxying `ff-weather` — built earlier but never run or connected to the
+frontend. Wired it up:
+
+- Added a permissive CORS layer (`tower-http`) so the Vite dev server
+  (`:5173`) can call `ff-api` (`:8080`) cross-origin — fine for now
+  since it proxies only public FAA/NOAA data and takes no credentials
+  from the browser; revisit once `ff-sync` carries account state.
+- `apps/web`'s airport detail panel now shows live METAR/TAF for the
+  selected airport (raw text + a decoded one-line summary for METAR),
+  fetched from `ff-api` via `src/weather.ts`. Falls back to a "couldn't
+  reach ff-api" hint if the service isn't running — the rest of the app
+  (charts, airports, procedures) is read from the static SQLite bundle
+  and unaffected either way.
+- Also wired `/notams` to the rewritten `ff-notam` client, gated on
+  `FF_NOTAM_CLIENT_ID`/`FF_NOTAM_CLIENT_SECRET` env vars — stays
+  `501 Not Implemented` until those are set (see the `ff-notam` section
+  above; credentials are still pending).
+
+Verified in a real browser (Playwright): both KHWD (no TAF, live 204
+handled correctly, shows "no current TAF") and KSFO (both present)
+render real, current METAR/TAF text and decoded summaries with no
+console errors.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Database } from "sql.js";
 import { loadDemoDatabase, queryAll } from "./db";
 import { MapView } from "./MapView";
-import type { Airport, Frequency, Procedure, ProcedureLeg, ProcedureTransition, Runway } from "./types";
+import type { Airport, Frequency, Metar, Procedure, ProcedureLeg, ProcedureTransition, Runway, Taf } from "./types";
+import { API_BASE_URL, fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
 export default function App() {
@@ -145,6 +146,8 @@ function AirportDetail({
         {airport.lat.toFixed(4)}, {airport.lon.toFixed(4)} · elevation {airport.elevation_ft} ft
       </p>
 
+      <WeatherSection icao={icao} />
+
       <h3>Runways</h3>
       <table>
         <thead>
@@ -213,6 +216,82 @@ function AirportDetail({
         </div>
       ))}
     </div>
+  );
+}
+
+function formatWind(wdir: number | string | null, wspd: number | null, wgst: number | null): string | null {
+  if (wdir === null || wspd === null) return null;
+  const dir = wdir === "VRB" ? "VRB" : `${wdir}°`;
+  const gust = wgst !== null ? `G${wgst}` : "";
+  return `${dir} at ${wspd}${gust}kt`;
+}
+
+/** Live METAR/TAF for the selected airport, proxied through ff-api
+ * (services/ff-api) so the client doesn't hit aviationweather.gov
+ * directly. ff-api is a separate process from `npm run dev` — see
+ * apps/web/README.md. */
+function WeatherSection({ icao }: { icao: string }) {
+  const [metar, setMetar] = useState<Metar | null>(null);
+  const [taf, setTaf] = useState<Taf | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    Promise.all([fetchMetar(icao), fetchTaf(icao)])
+      .then(([m, t]) => {
+        if (cancelled) return;
+        setMetar(m);
+        setTaf(t);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [icao]);
+
+  return (
+    <>
+      <h3>Weather</h3>
+      {loading && <p className="hint">loading…</p>}
+      {error && (
+        <p className="hint">
+          Couldn't reach ff-api at {API_BASE_URL} — is it running? (<code>cargo run -p ff-api</code>, see
+          apps/web/README.md)
+        </p>
+      )}
+      {!loading && !error && (
+        <>
+          {metar ? (
+            <p className="weather-report">
+              <span className="raw-report">{metar.rawOb}</span>
+              <br />
+              <span className="hint">
+                {[
+                  metar.temp !== null ? `${metar.temp}°C` : null,
+                  metar.dewp !== null ? `dewpoint ${metar.dewp}°C` : null,
+                  formatWind(metar.wdir, metar.wspd, metar.wgst),
+                  metar.altim !== null ? `altimeter ${metar.altim}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </p>
+          ) : (
+            <p className="hint">no current METAR</p>
+          )}
+          {taf ? <p className="weather-report raw-report">{taf.rawTAF}</p> : <p className="hint">no current TAF</p>}
+        </>
+      )}
+    </>
   );
 }
 

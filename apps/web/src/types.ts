@@ -81,3 +81,52 @@ export interface ChartCatalogEntry {
   max_lon: number;
   tile_url: string;
 }
+
+// Mirror ff-weather's Metar/Taf wire shape (crates/ff-weather/src/records.rs)
+// one-to-one — these come straight from ff-api's proxy, which re-serializes
+// the same struct fields with the same #[serde(rename = ...)] names.
+
+export interface CloudLayer {
+  cover: string;
+  base: number | null;
+}
+
+export interface Metar {
+  icaoId: string;
+  obsTime: number;
+  rawOb: string;
+  temp: number | null;
+  dewp: number | null;
+  wdir: number | string | null;
+  wspd: number | null;
+  wgst: number | null;
+  visib: number | string | null;
+  altim: number | null;
+  wxString: string | null;
+  clouds: CloudLayer[];
+  lat: number | null;
+  lon: number | null;
+  elev: number | null;
+  name: string | null;
+}
+
+export interface TafForecastPeriod {
+  timeFrom: number;
+  timeTo: number;
+  fcstChange: string | null;
+  wdir: number | string | null;
+  wspd: number | null;
+  wgst: number | null;
+  visib: number | string | null;
+  wxString: string | null;
+  clouds: CloudLayer[];
+}
+
+export interface Taf {
+  icaoId: string;
+  issueTime: string;
+  validTimeFrom: number;
+  validTimeTo: number;
+  rawTAF: string;
+  fcsts: TafForecastPeriod[];
+}

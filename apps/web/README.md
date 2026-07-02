@@ -33,6 +33,21 @@ npm install
 npm run dev
 ```
 
+Live METAR/TAF for the selected airport (in the airport detail panel)
+needs `services/ff-api` running separately — it's a Rust process, not
+part of `npm run dev`:
+
+```sh
+cargo run -p ff-api
+```
+
+Defaults to `http://localhost:8080`; the web client points there by
+default too (override with `VITE_FF_API_BASE_URL`). Without it running,
+the weather section just shows a "couldn't reach ff-api" hint — the
+rest of the app (charts, airports, procedures) is unaffected, since
+that's all read from the static SQLite bundle. `ff-api` in turn proxies
+the real `aviationweather.gov` Data API — no API key needed.
+
 ## Regenerating the demo bundle
 
 `public/demo-cycle.sqlite` is checked in (small, ~400KB) so `npm run dev`

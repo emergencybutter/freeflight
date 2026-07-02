@@ -1,15 +1,28 @@
+use ff_notam::NotamClient;
 use ff_weather::WeatherClient;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
     pub weather: Arc<WeatherClient>,
+    /// `None` unless `FF_NOTAM_CLIENT_ID`/`FF_NOTAM_CLIENT_SECRET` are set
+    /// — see `routes::notams` (DESIGN.md §9.2, §12; `ff-notam`'s crate
+    /// docs cover why credentials aren't self-service anymore).
+    pub notam: Option<Arc<NotamClient>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let notam = match (
+            std::env::var("FF_NOTAM_CLIENT_ID"),
+            std::env::var("FF_NOTAM_CLIENT_SECRET"),
+        ) {
+            (Ok(id), Ok(secret)) => Some(Arc::new(NotamClient::new(id, secret))),
+            _ => None,
+        };
         Self {
             weather: Arc::new(WeatherClient::new()),
+            notam,
         }
     }
 }

@@ -59,6 +59,14 @@ impl WeatherClient {
             .send()
             .await?
             .error_for_status()?;
+        // The API returns 204 No Content (empty body) rather than `[]`
+        // when none of the requested stations have a current report —
+        // confirmed live for a TAF request against a non-towered airport.
+        // An empty body isn't valid JSON, so `.json()` would otherwise
+        // fail with a confusing "error decoding response body".
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Vec::new());
+        }
         Ok(resp.json::<Vec<Metar>>().await?)
     }
 
@@ -77,6 +85,12 @@ impl WeatherClient {
             .send()
             .await?
             .error_for_status()?;
+        // See the matching comment in fetch_metars — small/non-towered
+        // airports commonly have no TAF, and the API signals that with
+        // 204 No Content instead of an empty JSON array.
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Vec::new());
+        }
         Ok(resp.json::<Vec<Taf>>().await?)
     }
 }

@@ -8,9 +8,14 @@
 //! string, not an epoch integer like the other TAF timestamp fields, and
 //! `TafForecastPeriod::wdir` can be the string `"VRB"` (confirmed on live
 //! KATL/KDEN/KMIA TAFs with PROB/TEMPO groups), same as `Metar::wdir`.
+//! Separately (not a fixture — needs a live 204, see below), the API
+//! returns 204 No Content rather than `[]` when no station in the
+//! request has a current report, which broke `fetch_tafs` for
+//! non-towered airports like KHWD until `client.rs` special-cased it.
 //!
-//! `fetches_live_metar_and_taf` additionally hits the real API to catch
-//! future upstream schema changes. Not run by default:
+//! `fetches_live_metar_and_taf` and `fetches_live_taf_for_station_with_no_taf`
+//! additionally hit the real API to catch future upstream changes. Not
+//! run by default:
 //!
 //! ```sh
 //! cargo test -p ff-weather --test real_weather -- --ignored --nocapture
@@ -77,4 +82,14 @@ async fn fetches_live_metar_and_taf() {
         .await
         .expect("live TAF fetch");
     assert!(!tafs.is_empty());
+}
+
+#[tokio::test]
+#[ignore]
+async fn fetches_live_taf_for_station_with_no_taf() {
+    // KHWD (Hayward Executive) is non-towered and has no TAF, which the
+    // API signals with 204 No Content rather than an empty JSON array.
+    let client = WeatherClient::new();
+    let tafs = client.fetch_tafs(&["KHWD"]).await.expect("live TAF fetch");
+    assert!(tafs.is_empty());
 }

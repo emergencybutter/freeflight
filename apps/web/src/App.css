@@ -120,3 +120,13 @@ th {
 .transition {
   margin-bottom: 1.25rem;
 }
+
+.weather-report {
+  margin: 0 0 0.6rem;
+}
+
+.raw-report {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  color: #dbe4f0;
+}
