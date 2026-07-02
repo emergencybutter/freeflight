@@ -1,5 +1,112 @@
 # TODO
 
+## Project state (handoff notes)
+
+Written for a fresh session/agent picking this up cold. Full rationale
+for every decision below is in `git log` — each commit message explains
+what was verified, what broke, and why a given approach was chosen, in
+more depth than this summary. `DESIGN.md` is the original architecture
+doc; treat it as directional, not gospel — a few of its details (e.g.
+which record type is "Airway" vs "Waypoint" in ARINC 424) turned out
+wrong once checked against real data, and the code is the corrected
+source of truth.
+
+### What's real vs. scaffolded
+
+Built and validated against real FAA/NOAA data end to end:
+- `ff-cifp` (ARINC 424 CIFP parser): airports, runways, SID/STAR/
+  approach procedures, VHF/NDB navaids, waypoints. Validated against a
+  real, current FAACIFP18 cycle file (0% error rate across every record
+  category — see `crates/ff-cifp/tests/real_cifp.rs`, run with
+  `FF_CIFP_TEST_FILE=<path> cargo test -p ff-cifp --test real_cifp --
+  --ignored --nocapture`).
+- `ff-nasr` (FAA NASR CSV parser): airports, runways, runway ends,
+  communication frequencies. Validated against a real 28-day NASR CSV
+  subscription.
+- `ff-charts` (GeoTIFF → PMTiles tiling): `geotiff_to_pmtiles` shells
+  out to real GDAL CLI tools (gdalwarp/gdal_translate/gdaladdo), then a
+  pure-Rust step repacks MBTiles into PMTiles. Validated against a real
+  FAA sectional GeoTIFF (see "Chart imagery" below).
+- `apps/web`: a real (if minimal) MapLibre-based viewer reading a
+  SQLite cycle bundle via `sql.js` — airport list, runway/procedure
+  detail, a map with real chart imagery, airport markers, runway
+  centerlines, and procedure-leg paths.
+
+Scaffolded but not validated against real/live data:
+- `ff-weather` (aviationweather.gov client) and `ff-notam` (FAA NOTAM
+  client) — both have unit tests against mocked responses only, never
+  run against the live APIs.
+- `ff-planning` (nav-log/route math) and `ff-postflight` (track
+  analysis) — unit-tested with synthetic inputs, no real flight data.
+- `services/ff-api` (axum backend) and `services/ff-etl` (batch cycle
+  builder, distinct from the `build_demo_bundle` example) — skeletons
+  only, not run against real traffic or a real scheduled pipeline.
+- `ff-sync` (client-side cycle bundle sync) — skeleton only.
+- `apps/android` — just a placeholder `README.md`, no Kotlin project.
+- No route-planning UI in `apps/web` yet (DESIGN.md's nav-log/flight-
+  plan builder) — the client is still read-only.
+
+### Environment/network quirks (read before assuming a domain is blocked)
+
+This sandbox's egress goes through a policy-enforcing proxy. Confirmed
+open: `registry.npmjs.org`, `crates.io` (needs a `User-Agent` header),
+`raw.githubusercontent.com`. Confirmed blocked at various points this
+session: `aeronav.faa.gov`, `www.faa.gov`, `github.com` (web UI),
+`api.github.com` (direct, non-MCP), most general web domains (even a
+user's personal site was blocked once). **However**, a later session
+successfully downloaded a real FAA sectional directly from
+`aeronav.faa.gov` — so this policy may vary by session/environment
+configuration rather than being a fixed blocklist. Don't assume a
+domain is blocked without testing in the current session; don't assume
+one is open based on an earlier session either. When a needed domain
+is blocked, the fallback that's worked repeatedly: ask the user to
+upload the file directly (this is how the real CIFP and NASR data
+arrived) rather than trying to route around the policy.
+
+### Validation checklist for any change
+
+```sh
+cargo fmt --all
+cargo check --workspace
+cargo clippy --workspace --all-targets
+cargo test --workspace
+cd apps/web && npm run build
+```
+
+For UI changes, there's no `playwright` npm dependency in the repo —
+use the globally-installed one (`/opt/node22/lib/node_modules/playwright`,
+Chromium at `/opt/pw-browsers/chromium`) via a throwaway script, the
+pattern used throughout this session's browser verifications.
+
+### Notable gotchas already paid for (don't rediscover these)
+
+- **ARINC 424 record classification**: CIFP Section `E` subsection `A`
+  is Waypoint and subsection `R` is Airway — the reverse of what the
+  letters suggest, and what an earlier unverified pass assumed. Fixed
+  in `crates/ff-cifp/src/record.rs`.
+- **ARINC 424 navaid/waypoint region field**: two similarly-named
+  columns exist ("ICAO Code" and "ICAO Code (2)"); the real region is
+  in the second one. The first is blank except on airport-associated
+  records.
+- **VOR vs. NDB frequency encoding**: same 5-digit field width, but VOR
+  is hundredths-of-a-MHz and NDB is tenths-of-a-kHz — using the wrong
+  scale silently produces a plausible-looking wrong number.
+- **Standalone DME/TACAN navaids** (no VOR component) leave the primary
+  lat/lon fields blank and put real coordinates in the DME lat/lon
+  fields instead; the NAVAID Class field (`VD`/`VT`/`V `/` D`/` I`/` T`/
+  ` M`) reliably distinguishes VOR/VOR-DME/VORTAC/DME/ILS-DME/TACAN —
+  see `navaid_class_type` in `crates/ff-cifp/src/extract.rs`.
+- **MBTiles vs. PMTiles row numbering**: MBTiles uses TMS convention
+  (row 0 = south), PMTiles/XYZ uses row 0 = north. Getting this backwards
+  silently renders every chart tile upside down — see
+  `crates/ff-charts/src/mbtiles.rs`.
+- **`sql.js` and Vite**: must NOT be excluded from `optimizeDeps` (the
+  usual advice for wasm-heavy packages) — its CJS/UMD build needs
+  esbuild's pre-bundling to get a usable `default` export.
+- **PMTiles in MapLibre**: needs the `pmtiles` npm package's `Protocol`
+  registered via `maplibregl.addProtocol("pmtiles", ...)` before any
+  `pmtiles://` source URL resolves.
+
 ## Chart imagery — done
 
 Real chart imagery now flows end to end:
