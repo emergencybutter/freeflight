@@ -209,18 +209,49 @@ pub fn pair_runway_ends(ends: &[CifpRunwayEnd]) -> Vec<Runway> {
     runways
 }
 
+/// Spec §5.35 NAVAID Class: a 2-character field, verified against a real
+/// CIFP file rather than guessed (the open-source reference parser used
+/// to cross-check the other fields leaves this one's decoder
+/// unimplemented). Character 1 is `'V'` if a VOR component is present,
+/// blank otherwise; character 2 names the distance-ranging component:
+/// `'D'`=DME, `'T'`=TACAN, `'M'`=Military TACAN, `'I'`=ILS/DME, blank=none.
+/// Confirmed against real facilities and an exact tally match across all
+/// 2,085 VHF navaid records in a real cycle file: `"VD"` (San Francisco's
+/// VOR/DME, 416 records), `"VT"` (VORTACs, 382), `"V "` (VOR-only, 27),
+/// `" D"` (DME-only, 183), `" I"` (ILS/DME, 922), `" T"` (TACAN, e.g.
+/// Adak's "ADK", 144), `" M"` (military TACAN, 11). `ff_core::NavaidType`
+/// has no dedicated ILS/DME variant, so `" I"` collapses into
+/// [`NavaidType::Dme`] — it's a DME-only facility from an
+/// enroute-navigation standpoint either way.
+fn navaid_class_type(class: &str) -> NavaidType {
+    let mut chars = class.chars();
+    let has_vor = chars.next() == Some('V');
+    let facility = chars.next().unwrap_or(' ');
+    match (has_vor, facility) {
+        (true, 'D') => NavaidType::VorDme,
+        (true, 'T') => NavaidType::Vortac,
+        (true, _) => NavaidType::Vor,
+        (false, 'T') | (false, 'M') => NavaidType::Tacan,
+        (false, _) => NavaidType::Dme,
+    }
+}
+
 /// 4.1.2.1 VHF NAVAID Primary Records (Section `D`, any subsection except
 /// `B` — VOR, VOR/DME, VORTAC, or standalone DME/TACAN). Column ranges
-/// verified against the open-source `arinc424` parser's `vhf_navaid.py`.
+/// verified against both the open-source `arinc424` parser's
+/// `vhf_navaid.py` and a real FAA CIFP cycle file (e.g. the San
+/// Francisco VOR/DME's real 115.800 MHz frequency decodes correctly
+/// from its raw `"11580"` field).
 ///
-/// CIFP's NAVAID Class field (spec §5.35) would distinguish VOR-only
-/// from VOR/DME from VORTAC, but its exact column layout isn't reliably
-/// documented in the sources available here (the reference parser
-/// itself leaves that field's decoder unimplemented), so it's left
-/// unparsed. `navaid_type` is instead inferred from whether a DME Ident
-/// sub-field is populated — a real, verified signal rather than a
-/// guessed column offset — which collapses VOR/DME and VORTAC together
-/// under [`NavaidType::VorDme`].
+/// `region` comes from "ICAO Code (2)" at columns 20-21, not "ICAO
+/// Code" at columns 11-12 (which is blank — it pairs with the Airport
+/// ICAO Identifier field, empty for non-airport-associated navaids).
+///
+/// A standalone DME/TACAN facility with no VOR component (see
+/// [`navaid_class_type`]) leaves the primary VOR Latitude/Longitude
+/// fields blank and only populates the DME Latitude/Longitude fields —
+/// confirmed on Adak's real "ADK" TACAN, whose VOR lat/lon fields are
+/// blank. Coordinates fall back to the DME fields in that case.
 pub fn extract_vhf_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
     if record.category != RecordCategory::VhfNavaid {
         return Err(CifpError::WrongCategory);
@@ -230,25 +261,23 @@ pub fn extract_vhf_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
 
     let ident =
         decode::non_empty(field(line, 13, 17)).ok_or(CifpError::MissingField("VOR Identifier"))?;
-    let region = decode::non_empty(field(line, 10, 12))
+    let region = decode::non_empty(field(line, 19, 21))
         .ok_or(CifpError::MissingField("ICAO Region Code"))?;
     let freq_khz = decode::vor_frequency_khz(field(line, 22, 27));
-    let lat =
-        decode::latitude(field(line, 32, 41)).ok_or(CifpError::InvalidField("VOR Latitude"))?;
-    let lon =
-        decode::longitude(field(line, 41, 51)).ok_or(CifpError::InvalidField("VOR Longitude"))?;
-    let has_dme = decode::non_empty(field(line, 51, 55)).is_some();
+    let navaid_type = navaid_class_type(field(line, 27, 29));
+    let lat = decode::latitude(field(line, 32, 41))
+        .or_else(|| decode::latitude(field(line, 55, 64)))
+        .ok_or(CifpError::InvalidField("VOR/DME Latitude"))?;
+    let lon = decode::longitude(field(line, 41, 51))
+        .or_else(|| decode::longitude(field(line, 64, 74)))
+        .ok_or(CifpError::InvalidField("VOR/DME Longitude"))?;
     // Only populated when a co-located DME exists; a VOR-only facility
     // has no elevation field at all in this record.
     let elevation_ft = decode::signed_int(field(line, 79, 84));
 
     Ok(Navaid {
         ident,
-        navaid_type: if has_dme {
-            NavaidType::VorDme
-        } else {
-            NavaidType::Vor
-        },
+        navaid_type,
         lat,
         lon,
         elevation_ft,
@@ -261,7 +290,11 @@ pub fn extract_vhf_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
 /// airport-associated NDBs, or Section `D` subsection `B` for enroute
 /// NDBs — both share this column layout, per
 /// [`RecordCategory::NdbNavaid`]). Column ranges verified against the
-/// `arinc424` parser's `ndb_navaid.py`.
+/// `arinc424` parser's `ndb_navaid.py` and a real CIFP cycle file (e.g.
+/// Adak's Mount Moffett NDB's real 530 kHz frequency decodes correctly
+/// from its raw `"05300"` field). As with [`extract_vhf_navaid`],
+/// `region` is "ICAO Code (2)" at columns 20-21, not the blank
+/// airport-paired "ICAO Code" at columns 11-12.
 pub fn extract_ndb_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
     if record.category != RecordCategory::NdbNavaid {
         return Err(CifpError::WrongCategory);
@@ -271,7 +304,7 @@ pub fn extract_ndb_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
 
     let ident =
         decode::non_empty(field(line, 13, 17)).ok_or(CifpError::MissingField("NDB Identifier"))?;
-    let region = decode::non_empty(field(line, 10, 12))
+    let region = decode::non_empty(field(line, 19, 21))
         .ok_or(CifpError::MissingField("ICAO Region Code"))?;
     let freq_khz = decode::ndb_frequency_khz(field(line, 22, 27));
     let lat =
@@ -291,11 +324,17 @@ pub fn extract_ndb_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
     })
 }
 
-/// 4.1.4.1 Waypoint Primary Records (Section `E`, enroute fixes —
-/// [`RecordCategory::Waypoint`] already excludes the `EA`/`EU`
-/// subsections, which are airways/enroute-communication records with a
-/// different layout). Column ranges verified against the `arinc424`
-/// parser's `waypoint.py` (its `enroute=True` field layout).
+/// 4.1.4.1 Waypoint Primary Records (Section `E` subsection `A` —
+/// [`RecordCategory::Waypoint`]; subsection `R` is
+/// [`RecordCategory::Airway`] instead, the reverse of what the letters
+/// suggest, verified against a real CIFP file — see the comment on
+/// `category_for` in `crate::record`). Column ranges verified against
+/// the `arinc424` parser's `waypoint.py` (its `enroute=True` field
+/// layout) and that same real file (e.g. Anchorage-area waypoint
+/// "AAITT" decodes to its real coordinates). `region` is "ICAO Code
+/// (2)" at columns 20-21, matching the navaid extractors above, not the
+/// "Region Code" at columns 7-10 (a FIR-like label such as `"ENRT"`,
+/// not a consistent 2-character code).
 pub fn extract_waypoint(record: &RawRecord) -> Result<Waypoint, CifpError> {
     if record.category != RecordCategory::Waypoint {
         return Err(CifpError::WrongCategory);
@@ -305,7 +344,7 @@ pub fn extract_waypoint(record: &RawRecord) -> Result<Waypoint, CifpError> {
 
     let ident = decode::non_empty(field(line, 13, 18))
         .ok_or(CifpError::MissingField("Waypoint Identifier"))?;
-    let region = decode::non_empty(field(line, 10, 12))
+    let region = decode::non_empty(field(line, 19, 21))
         .ok_or(CifpError::MissingField("ICAO Region Code"))?;
     let lat = decode::latitude(field(line, 32, 41))
         .ok_or(CifpError::InvalidField("Waypoint Latitude"))?;
@@ -728,33 +767,40 @@ mod tests {
         ident: &str,
         region: &str,
         freq: &str,
+        class: &str,
         lat: &str,
         lon: &str,
-        dme_ident: &str,
+        dme_lat: &str,
+        dme_lon: &str,
         elevation: &str,
     ) -> String {
         line_with(&[
             (0, "S"),
             (4, "D"),
-            (10, region),
+            (19, region),
             (13, ident),
             (22, freq),
+            (27, class),
             (32, lat),
             (41, lon),
-            (51, dme_ident),
+            (55, dme_lat),
+            (64, dme_lon),
             (79, elevation),
         ])
     }
 
     #[test]
     fn extracts_a_vor_dme_record() {
+        // Mirrors a real SFO VOR/DME record.
         let line = vhf_navaid_line(
             "OSI",
             "K2",
             "11350",
+            "VD",
             "N37370000",
             "W122230000",
-            "OSI",
+            "N37370000",
+            "W122230000",
             "00100",
         );
         let record = classify_line(&line).unwrap();
@@ -771,11 +817,62 @@ mod tests {
 
     #[test]
     fn extracts_a_vor_only_record_with_no_dme() {
-        let line = vhf_navaid_line("SGD", "K2", "11550", "N38300000", "W121490000", "", "");
+        let line = vhf_navaid_line(
+            "SGD",
+            "K2",
+            "11550",
+            "V ",
+            "N38300000",
+            "W121490000",
+            "",
+            "",
+            "",
+        );
         let record = classify_line(&line).unwrap();
         let navaid = extract_vhf_navaid(&record).unwrap();
         assert_eq!(navaid.navaid_type, NavaidType::Vor);
         assert_eq!(navaid.elevation_ft, None);
+    }
+
+    #[test]
+    fn extracts_a_vortac_record() {
+        let line = vhf_navaid_line(
+            "TEST",
+            "K2",
+            "11350",
+            "VT",
+            "N37370000",
+            "W122230000",
+            "N37370000",
+            "W122230000",
+            "",
+        );
+        let record = classify_line(&line).unwrap();
+        let navaid = extract_vhf_navaid(&record).unwrap();
+        assert_eq!(navaid.navaid_type, NavaidType::Vortac);
+    }
+
+    #[test]
+    fn extracts_a_standalone_tacan_falling_back_to_dme_coordinates() {
+        // Mirrors Adak's real "ADK" TACAN: no VOR component, so the
+        // primary VOR Latitude/Longitude fields are blank and the DME
+        // Latitude/Longitude fields carry the real coordinates instead.
+        let line = vhf_navaid_line(
+            "ADK",
+            "PA",
+            "11400",
+            " T",
+            "",
+            "",
+            "N51521587",
+            "W176402739",
+            "",
+        );
+        let record = classify_line(&line).unwrap();
+        let navaid = extract_vhf_navaid(&record).unwrap();
+        assert_eq!(navaid.navaid_type, NavaidType::Tacan);
+        let expected_lat = 51.0 + 52.0 / 60.0 + 15.87 / 3600.0;
+        assert!((navaid.lat - expected_lat).abs() < 1e-4);
     }
 
     fn ndb_navaid_line(ident: &str, region: &str, freq: &str, lat: &str, lon: &str) -> String {
@@ -783,7 +880,7 @@ mod tests {
             (0, "S"),
             (4, "D"),
             (5, "B"),
-            (10, region),
+            (19, region),
             (13, ident),
             (22, freq),
             (32, lat),
@@ -808,7 +905,8 @@ mod tests {
         line_with(&[
             (0, "S"),
             (4, "E"),
-            (10, region),
+            (5, "A"),
+            (19, region),
             (13, ident),
             (32, lat),
             (41, lon),

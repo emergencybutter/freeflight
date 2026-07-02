@@ -6,10 +6,11 @@
 //! FF_CIFP_TEST_FILE=/path/to/FAACIFP18 cargo test -p ff-cifp --test real_cifp -- --ignored --nocapture
 //! ```
 use ff_cifp::{
-    build_procedures, classify_line, extract_airport, extract_procedure_leg_row,
-    extract_runway_end, pair_runway_ends, RecordCategory,
+    build_procedures, classify_line, extract_airport, extract_ndb_navaid,
+    extract_procedure_leg_row, extract_runway_end, extract_vhf_navaid, extract_waypoint,
+    pair_runway_ends, RecordCategory,
 };
-use ff_core::ProcedureKind;
+use ff_core::{NavaidType, ProcedureKind};
 use std::collections::HashMap;
 
 #[test]
@@ -278,4 +279,83 @@ fn diagnoses_unsupported_leg_type_codes() {
             println!("  sample: {line}");
         }
     }
+}
+
+#[test]
+#[ignore]
+fn parses_real_navaids_and_waypoints() {
+    let path =
+        std::env::var("FF_CIFP_TEST_FILE").expect("set FF_CIFP_TEST_FILE to a real CIFP file path");
+    let contents = std::fs::read_to_string(&path).expect("failed to read CIFP file");
+
+    let mut navaids = Vec::new();
+    let mut waypoints = Vec::new();
+    let mut navaid_errors = 0usize;
+    let mut waypoint_errors = 0usize;
+
+    for line in contents.lines() {
+        let Some(record) = classify_line(line) else {
+            continue;
+        };
+        match record.category {
+            RecordCategory::VhfNavaid => match extract_vhf_navaid(&record) {
+                Ok(n) => navaids.push(n),
+                Err(_) => navaid_errors += 1,
+            },
+            RecordCategory::NdbNavaid => match extract_ndb_navaid(&record) {
+                Ok(n) => navaids.push(n),
+                Err(_) => navaid_errors += 1,
+            },
+            RecordCategory::Waypoint => match extract_waypoint(&record) {
+                Ok(w) => waypoints.push(w),
+                Err(_) => waypoint_errors += 1,
+            },
+            _ => {}
+        }
+    }
+
+    println!(
+        "navaids extracted: {} (errors: {})",
+        navaids.len(),
+        navaid_errors
+    );
+    println!(
+        "waypoints extracted: {} (errors: {})",
+        waypoints.len(),
+        waypoint_errors
+    );
+
+    let error_rate = |errors: usize, ok: usize| errors as f64 / (ok + errors).max(1) as f64;
+    let navaid_error_rate = error_rate(navaid_errors, navaids.len());
+    let waypoint_error_rate = error_rate(waypoint_errors, waypoints.len());
+    println!("error rates: navaid={navaid_error_rate:.4} waypoint={waypoint_error_rate:.4}");
+    assert!(
+        navaid_error_rate < 0.01,
+        "navaid error rate too high: {navaid_error_rate}"
+    );
+    assert!(
+        waypoint_error_rate < 0.01,
+        "waypoint error rate too high: {waypoint_error_rate}"
+    );
+
+    // San Francisco VOR/DME: real-world frequency 115.800 MHz, and it
+    // genuinely has a co-located DME (unlike a plain VOR).
+    let sfo = navaids
+        .iter()
+        .find(|n| n.ident == "SFO" && n.region == "K2")
+        .expect("SFO VOR/DME should be in a real CIFP file");
+    println!("SFO VOR/DME: {sfo:?}");
+    assert_eq!(sfo.freq_khz, Some(115_800));
+    assert_eq!(sfo.navaid_type, NavaidType::VorDme);
+    assert!((sfo.lat - 37.6).abs() < 0.5);
+    assert!((sfo.lon - -122.37).abs() < 0.5);
+
+    // A real waypoint near KSFO's airspace.
+    let stins = waypoints
+        .iter()
+        .find(|w| w.ident == "STINS")
+        .expect("STINS waypoint should be in a real CIFP file");
+    println!("STINS: {stins:?}");
+    assert!((stins.lat - 37.6).abs() < 1.0);
+    assert!((stins.lon - -122.4).abs() < 1.0);
 }

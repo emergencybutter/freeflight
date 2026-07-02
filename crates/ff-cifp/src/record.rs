@@ -51,9 +51,14 @@ fn category_for(section: char, subsection: char) -> Option<RecordCategory> {
         ('P', 'N') => Some(RecordCategory::NdbNavaid),
         ('D', 'B') => Some(RecordCategory::NdbNavaid),
         ('D', _) => Some(RecordCategory::VhfNavaid),
-        ('E', 'A') => Some(RecordCategory::Airway),
+        // Verified against a real FAA CIFP cycle file: 'EA' records carry
+        // waypoint idents/lat/lon (e.g. "AAITT" with real coordinates),
+        // while 'ER' records carry an airway ident plus a sequence of leg
+        // fixes/altitude limits — the reverse of what an earlier,
+        // unverified pass at this mapping assumed.
+        ('E', 'A') => Some(RecordCategory::Waypoint),
+        ('E', 'R') => Some(RecordCategory::Airway),
         ('E', 'U') => Some(RecordCategory::EnrouteCommunication),
-        ('E', _) => Some(RecordCategory::Waypoint),
         _ => None,
     }
 }
@@ -128,10 +133,19 @@ mod tests {
     }
 
     #[test]
-    fn classifies_enroute_airway_records_via_the_column_6_subsection() {
+    fn classifies_enroute_waypoint_and_airway_records_via_the_column_6_subsection() {
         // Enroute records use the column-6 (index 5) subsection directly.
-        let line = line_with(&[(0, "SUSA"), (4, "EA")]);
-        let record = classify_line(&line).unwrap();
-        assert_eq!(record.category, RecordCategory::Airway);
+        // 'EA' is Waypoint and 'ER' is Airway -- verified against a real
+        // CIFP file, the reverse of the two record types' letters.
+        let waypoint = line_with(&[(0, "SUSA"), (4, "EA")]);
+        assert_eq!(
+            classify_line(&waypoint).unwrap().category,
+            RecordCategory::Waypoint
+        );
+        let airway = line_with(&[(0, "SUSA"), (4, "ER")]);
+        assert_eq!(
+            classify_line(&airway).unwrap().category,
+            RecordCategory::Airway
+        );
     }
 }
