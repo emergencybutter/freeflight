@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Database } from "sql.js";
 import { loadDemoDatabase, queryAll } from "./db";
+import { MapView } from "./MapView";
 import type { Airport, Frequency, Procedure, ProcedureLeg, ProcedureTransition, Runway } from "./types";
 import "./App.css";
 
@@ -22,6 +23,11 @@ export default function App() {
       .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
   }, []);
 
+  const selectAirport = (icao: string) => {
+    setSelectedIcao(icao);
+    setSelectedProcedureId(null);
+  };
+
   if (loadError) {
     return (
       <div className="error">
@@ -38,20 +44,20 @@ export default function App() {
   }
 
   return (
-    <div className="layout">
-      <AirportList db={db} selectedIcao={selectedIcao} onSelect={(icao) => {
-        setSelectedIcao(icao);
-        setSelectedProcedureId(null);
-      }} />
-      {selectedIcao && (
-        <AirportDetail
-          db={db}
-          icao={selectedIcao}
-          selectedProcedureId={selectedProcedureId}
-          onSelectProcedure={setSelectedProcedureId}
-        />
-      )}
-      {selectedProcedureId && <ProcedureDetail db={db} procedureId={selectedProcedureId} />}
+    <div className="app-layout">
+      <MapView db={db} selectedIcao={selectedIcao} onSelectAirport={selectAirport} />
+      <div className="layout">
+        <AirportList db={db} selectedIcao={selectedIcao} onSelect={selectAirport} />
+        {selectedIcao && (
+          <AirportDetail
+            db={db}
+            icao={selectedIcao}
+            selectedProcedureId={selectedProcedureId}
+            onSelectProcedure={setSelectedProcedureId}
+          />
+        )}
+        {selectedProcedureId && <ProcedureDetail db={db} procedureId={selectedProcedureId} />}
+      </div>
     </div>
   );
 }

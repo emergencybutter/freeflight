@@ -20,8 +20,12 @@ export interface Runway {
   width_ft: number;
   surface: string;
   le_ident: string;
+  le_lat: number;
+  le_lon: number;
   le_heading_deg: number;
   he_ident: string;
+  he_lat: number;
+  he_lon: number;
   he_heading_deg: number;
 }
 
@@ -56,4 +60,12 @@ export interface ProcedureLeg {
   altitude_constraint: string | null;
   speed_constraint: string | null;
   turn_direction: string | null;
+}
+
+/** Not a distinct table — a lat/lon lookup merged from `waypoint` and
+ * `navaid`, keyed by ident, so procedure legs can be plotted on the map. */
+export interface Fix {
+  ident: string;
+  lat: number;
+  lon: number;
 }

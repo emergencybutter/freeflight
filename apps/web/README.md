@@ -1,17 +1,25 @@
 # freeflight web client
 
-Vite + React + TypeScript. Currently a minimal read-only viewer: airport
-list → runways/procedures → transitions/legs, backed by `sql.js` reading
-a static SQLite bundle (`public/demo-cycle.sqlite`).
+Vite + React + TypeScript. A read-only viewer: a MapLibre GL JS map
+(airports + runway centerlines) above an airport list → runways/
+procedures → transitions/legs, backed by `sql.js` reading a static
+SQLite bundle (`public/demo-cycle.sqlite`).
 
 This is a stand-in for the real architecture described in DESIGN.md
-§5/§10 (MapLibre GL JS for charts, `ff-wasm` for shared planning/parsing
-logic, OPFS-backed local storage synced from `ff-api` cycle bundles) —
-none of that is wired up yet. The current UI only proves the data
-pipeline end to end: real FAA CIFP records (parsed by `ff-cifp`) merged
-with real FAA NASR records (parsed by `ff-nasr`, for runway surface type
-and airport communication frequencies — CIFP alone has neither), stored
-via the `ff-storage` schema, rendered in a browser.
+§5/§10 (`ff-wasm` for shared planning/parsing logic, OPFS-backed local
+storage synced from `ff-api` cycle bundles) — that part isn't wired up
+yet. The current UI proves the data pipeline end to end: real FAA CIFP
+records (parsed by `ff-cifp`) merged with real FAA NASR records (parsed
+by `ff-nasr`, for runway surface type and airport communication
+frequencies — CIFP alone has neither), stored via the `ff-storage`
+schema, rendered in a browser.
+
+The map has no chart imagery yet — `ff-charts`' GeoTIFF→PMTiles pipeline
+exists and works, but no real FAA chart has been run through it (see
+`/TODO.md`), so the map is a plain background with airport points and
+real runway centerlines (from CIFP's threshold coordinates) drawn as a
+GeoJSON overlay. Clicking an airport point on the map selects it, same
+as clicking it in the list.
 
 ## Running
 

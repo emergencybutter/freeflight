@@ -8,10 +8,22 @@
   color: #ff8080;
 }
 
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.map-view {
+  height: 42vh;
+  flex-shrink: 0;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 260px 1fr 1fr;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
 }
 
 .panel {
