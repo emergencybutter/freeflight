@@ -1,0 +1,12 @@
+[package]
+name = "ff-postflight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "GPS track ingestion and phase-of-flight/landing analysis for post-flight review."
+
+[dependencies]
+serde.workspace = true
+chrono.workspace = true
+ff-planning.workspace = true

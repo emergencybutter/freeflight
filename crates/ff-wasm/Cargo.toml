@@ -1,0 +1,16 @@
+[package]
+name = "ff-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "wasm-bindgen bindings over ff-core/ff-planning for the web client."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ff-planning.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"

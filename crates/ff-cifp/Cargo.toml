@@ -1,0 +1,11 @@
+[package]
+name = "ff-cifp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Parser for the FAA Coded Instrument Flight Procedures (CIFP), coded in ARINC 424 format."
+
+[dependencies]
+ff-core.workspace = true
+thiserror.workspace = true

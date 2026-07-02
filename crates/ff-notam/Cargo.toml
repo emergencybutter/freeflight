@@ -1,0 +1,16 @@
+[package]
+name = "ff-notam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Client for the FAA NOTAM Search API."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

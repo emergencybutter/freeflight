@@ -1,0 +1,16 @@
+[package]
+name = "ff-uniffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "UniFFI (Kotlin) bindings over ff-core/ff-planning for the Android client."
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+ff-planning.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uniffi = "0.28"

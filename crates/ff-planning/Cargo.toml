@@ -1,0 +1,10 @@
+[package]
+name = "ff-planning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Route/nav-log math, simple fuel & time estimates, and basic weight & balance for freeflight."
+
+[dependencies]
+serde.workspace = true

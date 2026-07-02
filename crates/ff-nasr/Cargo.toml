@@ -1,0 +1,13 @@
+[package]
+name = "ff-nasr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Parser for the FAA NASR (National Airspace System Resources) subscription data."
+
+[dependencies]
+ff-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+csv = "1"

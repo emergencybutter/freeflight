@@ -1,0 +1,16 @@
+[package]
+name = "ff-etl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Batch job that builds versioned data-cycle bundles from FAA/NOAA sources (DESIGN.md §7)."
+
+[dependencies]
+ff-cifp.workspace = true
+ff-nasr.workspace = true
+ff-charts.workspace = true
+ff-storage.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

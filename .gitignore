@@ -1,0 +1,22 @@
+/target/
+**/target/
+*.rs.bk
+
+# local data pulled by ff-etl / ff-sync, never committed
+/data/
+*.sqlite
+*.pmtiles
+
+# editor/OS
+.DS_Store
+.idea/
+.vscode/
+
+# web app
+apps/web/node_modules/
+apps/web/dist/
+
+# android app
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/**/build/
