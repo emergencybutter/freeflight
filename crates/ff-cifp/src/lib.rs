@@ -3,10 +3,11 @@
 //!
 //! Two-stage design: [`record`]/[`parser`] classify raw fixed-width lines
 //! into record categories; [`decode`]/[`extract`] turn a classified
-//! record into `ff_core` types. Only the record shapes `freeflight`
-//! actually needs are extracted so far — Airport, Runway (paired from
-//! CIFP's per-end records), and SID/STAR/Approach legs (grouped into
-//! Procedure/ProcedureTransition/ProcedureLeg by [`extract::build_procedures`]).
+//! record into `ff_core` types: Airport, Runway (paired from CIFP's
+//! per-end records), VHF/NDB Navaid, Waypoint, and SID/STAR/Approach legs
+//! (grouped into Procedure/ProcedureTransition/ProcedureLeg by
+//! [`extract::build_procedures`]). Airway and enroute-communication
+//! records are classified by [`record`] but not yet extracted.
 
 pub mod decode;
 pub mod extract;
@@ -14,8 +15,9 @@ pub mod parser;
 pub mod record;
 
 pub use extract::{
-    build_procedures, extract_airport, extract_procedure_leg_row, extract_runway_end,
-    pair_runway_ends, CifpRunwayEnd, ParsedProcedures, ProcedureLegRow,
+    build_procedures, extract_airport, extract_ndb_navaid, extract_procedure_leg_row,
+    extract_runway_end, extract_vhf_navaid, extract_waypoint, pair_runway_ends, CifpRunwayEnd,
+    ParsedProcedures, ProcedureLegRow,
 };
 pub use parser::{classify_bytes, classify_file, CifpError};
 pub use record::{classify_line, RawRecord, RecordCategory};

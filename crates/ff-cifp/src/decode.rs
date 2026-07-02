@@ -58,6 +58,33 @@ pub fn tenths_of_degree(raw: &str) -> Option<f64> {
     Some(value / 10.0)
 }
 
+/// VOR/VORTAC/VOR-DME Frequency (spec §5.34): 5 digits encoding
+/// hundredths of a MHz (format `nnn.nn`), e.g. `"11350"` -> 113.50 MHz.
+/// Returned in kHz (whole-number) to match [`ff_core::Navaid::freq_khz`].
+pub fn vor_frequency_khz(raw: &str) -> Option<u32> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let hundredths_of_mhz: u32 = raw.parse().ok()?;
+    Some(hundredths_of_mhz * 10)
+}
+
+/// NDB Frequency (spec §5.34): same 5-digit field as VOR frequency, but
+/// NDB uses a different implied decimal position — tenths of a kHz
+/// (format `nnnn.n`), e.g. `"02020"` -> 202.0 kHz. Rounded to the
+/// nearest whole kHz to match [`ff_core::Navaid::freq_khz`]; real-world
+/// NDB frequencies are always whole kHz, so this rounding is a no-op in
+/// practice.
+pub fn ndb_frequency_khz(raw: &str) -> Option<u32> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let tenths_of_khz: u32 = raw.parse().ok()?;
+    Some((tenths_of_khz + 5) / 10)
+}
+
 pub fn uint(raw: &str) -> Option<u32> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -172,5 +199,21 @@ mod tests {
     fn falls_back_to_unsupported_for_malformed_codes() {
         assert_eq!(path_and_term("ZZ"), PathAndTerm::Unsupported);
         assert_eq!(path_and_term("  "), PathAndTerm::Unsupported);
+    }
+
+    #[test]
+    fn decodes_vor_frequency_as_hundredths_of_a_mhz() {
+        // 113.50 MHz -> 113500 kHz.
+        assert_eq!(vor_frequency_khz("11350"), Some(113_500));
+        assert_eq!(vor_frequency_khz("     "), None);
+    }
+
+    #[test]
+    fn decodes_ndb_frequency_as_tenths_of_a_khz() {
+        // 202.0 kHz.
+        assert_eq!(ndb_frequency_khz("02020"), Some(202));
+        // 396.5 kHz rounds to the nearest whole kHz.
+        assert_eq!(ndb_frequency_khz("03965"), Some(397));
+        assert_eq!(ndb_frequency_khz(""), None);
     }
 }

@@ -2,19 +2,19 @@
 //!
 //! Column ranges below were cross-checked against the open-source
 //! `arinc424` parser (github.com/jack-laverty/arinc424) rather than
-//! guessed at — see that project's `airport.py`, `runway.py`, and
-//! `sid_star_approach.py` for the field tables. Only the record shapes
-//! `freeflight` actually needs (Airport, Runway, SID/STAR/Approach legs)
-//! are implemented; other categories (VHF/NDB navaid, airway, enroute
-//! communication) are classified by `crate::record` but not yet
-//! extracted into `ff_core` types.
+//! guessed at — see that project's `airport.py`, `runway.py`,
+//! `vhf_navaid.py`, `ndb_navaid.py`, `waypoint.py`, and
+//! `sid_star_approach.py` for the field tables. Airport, Runway,
+//! VHF/NDB Navaid, Waypoint, and SID/STAR/Approach legs are extracted;
+//! Airway and enroute-communication records are classified by
+//! `crate::record` but not yet extracted into `ff_core` types.
 use crate::decode;
 use crate::parser::CifpError;
 use crate::record::{RawRecord, RecordCategory, RECORD_LENGTH};
 use ff_core::{
-    Airport, AirportType, AltitudeConstraint, PathAndTerm, Procedure, ProcedureKind, ProcedureLeg,
-    ProcedureTransition, Runway, RunwayEnd, RunwaySurface, SpeedConstraint, TransitionKind,
-    TurnDirection,
+    Airport, AirportType, AltitudeConstraint, Navaid, NavaidType, PathAndTerm, Procedure,
+    ProcedureKind, ProcedureLeg, ProcedureTransition, Runway, RunwayEnd, RunwaySurface,
+    SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
 use std::collections::BTreeMap;
 
@@ -207,6 +207,117 @@ pub fn pair_runway_ends(ends: &[CifpRunwayEnd]) -> Vec<Runway> {
     }
 
     runways
+}
+
+/// 4.1.2.1 VHF NAVAID Primary Records (Section `D`, any subsection except
+/// `B` — VOR, VOR/DME, VORTAC, or standalone DME/TACAN). Column ranges
+/// verified against the open-source `arinc424` parser's `vhf_navaid.py`.
+///
+/// CIFP's NAVAID Class field (spec §5.35) would distinguish VOR-only
+/// from VOR/DME from VORTAC, but its exact column layout isn't reliably
+/// documented in the sources available here (the reference parser
+/// itself leaves that field's decoder unimplemented), so it's left
+/// unparsed. `navaid_type` is instead inferred from whether a DME Ident
+/// sub-field is populated — a real, verified signal rather than a
+/// guessed column offset — which collapses VOR/DME and VORTAC together
+/// under [`NavaidType::VorDme`].
+pub fn extract_vhf_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
+    if record.category != RecordCategory::VhfNavaid {
+        return Err(CifpError::WrongCategory);
+    }
+    let line = &record.raw;
+    ensure_length(line)?;
+
+    let ident =
+        decode::non_empty(field(line, 13, 17)).ok_or(CifpError::MissingField("VOR Identifier"))?;
+    let region = decode::non_empty(field(line, 10, 12))
+        .ok_or(CifpError::MissingField("ICAO Region Code"))?;
+    let freq_khz = decode::vor_frequency_khz(field(line, 22, 27));
+    let lat =
+        decode::latitude(field(line, 32, 41)).ok_or(CifpError::InvalidField("VOR Latitude"))?;
+    let lon =
+        decode::longitude(field(line, 41, 51)).ok_or(CifpError::InvalidField("VOR Longitude"))?;
+    let has_dme = decode::non_empty(field(line, 51, 55)).is_some();
+    // Only populated when a co-located DME exists; a VOR-only facility
+    // has no elevation field at all in this record.
+    let elevation_ft = decode::signed_int(field(line, 79, 84));
+
+    Ok(Navaid {
+        ident,
+        navaid_type: if has_dme {
+            NavaidType::VorDme
+        } else {
+            NavaidType::Vor
+        },
+        lat,
+        lon,
+        elevation_ft,
+        freq_khz,
+        region,
+    })
+}
+
+/// 4.1.3.1 NDB NAVAID Primary Records (Section `P` subsection `N` for
+/// airport-associated NDBs, or Section `D` subsection `B` for enroute
+/// NDBs — both share this column layout, per
+/// [`RecordCategory::NdbNavaid`]). Column ranges verified against the
+/// `arinc424` parser's `ndb_navaid.py`.
+pub fn extract_ndb_navaid(record: &RawRecord) -> Result<Navaid, CifpError> {
+    if record.category != RecordCategory::NdbNavaid {
+        return Err(CifpError::WrongCategory);
+    }
+    let line = &record.raw;
+    ensure_length(line)?;
+
+    let ident =
+        decode::non_empty(field(line, 13, 17)).ok_or(CifpError::MissingField("NDB Identifier"))?;
+    let region = decode::non_empty(field(line, 10, 12))
+        .ok_or(CifpError::MissingField("ICAO Region Code"))?;
+    let freq_khz = decode::ndb_frequency_khz(field(line, 22, 27));
+    let lat =
+        decode::latitude(field(line, 32, 41)).ok_or(CifpError::InvalidField("NDB Latitude"))?;
+    let lon =
+        decode::longitude(field(line, 41, 51)).ok_or(CifpError::InvalidField("NDB Longitude"))?;
+
+    Ok(Navaid {
+        ident,
+        navaid_type: NavaidType::Ndb,
+        lat,
+        lon,
+        // Not present in the NDB primary record at all.
+        elevation_ft: None,
+        freq_khz,
+        region,
+    })
+}
+
+/// 4.1.4.1 Waypoint Primary Records (Section `E`, enroute fixes —
+/// [`RecordCategory::Waypoint`] already excludes the `EA`/`EU`
+/// subsections, which are airways/enroute-communication records with a
+/// different layout). Column ranges verified against the `arinc424`
+/// parser's `waypoint.py` (its `enroute=True` field layout).
+pub fn extract_waypoint(record: &RawRecord) -> Result<Waypoint, CifpError> {
+    if record.category != RecordCategory::Waypoint {
+        return Err(CifpError::WrongCategory);
+    }
+    let line = &record.raw;
+    ensure_length(line)?;
+
+    let ident = decode::non_empty(field(line, 13, 18))
+        .ok_or(CifpError::MissingField("Waypoint Identifier"))?;
+    let region = decode::non_empty(field(line, 10, 12))
+        .ok_or(CifpError::MissingField("ICAO Region Code"))?;
+    let lat = decode::latitude(field(line, 32, 41))
+        .ok_or(CifpError::InvalidField("Waypoint Latitude"))?;
+    let lon = decode::longitude(field(line, 41, 51))
+        .ok_or(CifpError::InvalidField("Waypoint Longitude"))?;
+
+    Ok(Waypoint {
+        ident,
+        lat,
+        lon,
+        region,
+    })
 }
 
 /// One SID/STAR/Approach leg record (PD/PE/PF primary), extracted but not
@@ -610,6 +721,111 @@ mod tests {
         let runways = pair_runway_ends(&[end]);
         assert_eq!(runways.len(), 1);
         assert_eq!(runways[0].ident, "01/01");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn vhf_navaid_line(
+        ident: &str,
+        region: &str,
+        freq: &str,
+        lat: &str,
+        lon: &str,
+        dme_ident: &str,
+        elevation: &str,
+    ) -> String {
+        line_with(&[
+            (0, "S"),
+            (4, "D"),
+            (10, region),
+            (13, ident),
+            (22, freq),
+            (32, lat),
+            (41, lon),
+            (51, dme_ident),
+            (79, elevation),
+        ])
+    }
+
+    #[test]
+    fn extracts_a_vor_dme_record() {
+        let line = vhf_navaid_line(
+            "OSI",
+            "K2",
+            "11350",
+            "N37370000",
+            "W122230000",
+            "OSI",
+            "00100",
+        );
+        let record = classify_line(&line).unwrap();
+        assert_eq!(record.category, RecordCategory::VhfNavaid);
+
+        let navaid = extract_vhf_navaid(&record).unwrap();
+        assert_eq!(navaid.ident, "OSI");
+        assert_eq!(navaid.region, "K2");
+        assert_eq!(navaid.navaid_type, NavaidType::VorDme);
+        assert_eq!(navaid.freq_khz, Some(113_500));
+        assert_eq!(navaid.elevation_ft, Some(100));
+        assert!((navaid.lat - 37.6166666).abs() < 1e-4);
+    }
+
+    #[test]
+    fn extracts_a_vor_only_record_with_no_dme() {
+        let line = vhf_navaid_line("SGD", "K2", "11550", "N38300000", "W121490000", "", "");
+        let record = classify_line(&line).unwrap();
+        let navaid = extract_vhf_navaid(&record).unwrap();
+        assert_eq!(navaid.navaid_type, NavaidType::Vor);
+        assert_eq!(navaid.elevation_ft, None);
+    }
+
+    fn ndb_navaid_line(ident: &str, region: &str, freq: &str, lat: &str, lon: &str) -> String {
+        line_with(&[
+            (0, "S"),
+            (4, "D"),
+            (5, "B"),
+            (10, region),
+            (13, ident),
+            (22, freq),
+            (32, lat),
+            (41, lon),
+        ])
+    }
+
+    #[test]
+    fn extracts_an_ndb_navaid_record() {
+        let line = ndb_navaid_line("OAK", "K2", "03650", "N37430000", "W122120000");
+        let record = classify_line(&line).unwrap();
+        assert_eq!(record.category, RecordCategory::NdbNavaid);
+
+        let navaid = extract_ndb_navaid(&record).unwrap();
+        assert_eq!(navaid.ident, "OAK");
+        assert_eq!(navaid.navaid_type, NavaidType::Ndb);
+        assert_eq!(navaid.freq_khz, Some(365));
+        assert_eq!(navaid.elevation_ft, None);
+    }
+
+    fn waypoint_line(ident: &str, region: &str, lat: &str, lon: &str) -> String {
+        line_with(&[
+            (0, "S"),
+            (4, "E"),
+            (10, region),
+            (13, ident),
+            (32, lat),
+            (41, lon),
+        ])
+    }
+
+    #[test]
+    fn extracts_an_enroute_waypoint_record() {
+        let line = waypoint_line("FIXAB", "K2", "N38000000", "W122000000");
+        let record = classify_line(&line).unwrap();
+        assert_eq!(record.category, RecordCategory::Waypoint);
+
+        let waypoint = extract_waypoint(&record).unwrap();
+        assert_eq!(waypoint.ident, "FIXAB");
+        assert_eq!(waypoint.region, "K2");
+        assert_eq!(waypoint.lat, 38.0);
+        assert_eq!(waypoint.lon, -122.0);
     }
 
     #[allow(clippy::too_many_arguments)]

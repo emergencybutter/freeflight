@@ -45,7 +45,12 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      <MapView db={db} selectedIcao={selectedIcao} onSelectAirport={selectAirport} />
+      <MapView
+        db={db}
+        selectedIcao={selectedIcao}
+        onSelectAirport={selectAirport}
+        selectedProcedureId={selectedProcedureId}
+      />
       <div className="layout">
         <AirportList db={db} selectedIcao={selectedIcao} onSelect={selectAirport} />
         {selectedIcao && (

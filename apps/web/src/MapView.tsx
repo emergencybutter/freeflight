@@ -3,10 +3,11 @@ import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Database } from "sql.js";
 import { queryAll } from "./db";
-import type { Airport, Runway } from "./types";
+import type { Airport, Fix, ProcedureLeg, ProcedureTransition, Runway } from "./types";
 
 const AIRPORTS_SOURCE = "airports";
 const RUNWAYS_SOURCE = "runways";
+const PROCEDURE_SOURCE = "procedure-path";
 
 // No basemap tiles: DESIGN.md's map is built on our own charts.pmtiles
 // (raster sectionals/TACs), not a third-party basemap — that pipeline
@@ -49,20 +50,62 @@ function runwaysGeoJson(runways: Runway[]): GeoJSON.FeatureCollection {
   };
 }
 
+/** One line per transition — legs from different transitions (enroute vs.
+ * approach vs. missed) aren't a continuous path, so they're never joined. */
+function procedureGeoJson(
+  transitions: ProcedureTransition[],
+  legsByTransition: Map<string, ProcedureLeg[]>,
+  fixes: Map<string, Fix>,
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const t of transitions) {
+    const coords = (legsByTransition.get(t.id) ?? [])
+      .map((leg) => (leg.fix_ident ? fixes.get(leg.fix_ident) : undefined))
+      .filter((fix): fix is Fix => fix !== undefined)
+      .map((fix) => [fix.lon, fix.lat]);
+    if (coords.length >= 2) {
+      features.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: coords },
+        properties: { transitionId: t.id },
+      });
+    }
+  }
+  return { type: "FeatureCollection", features };
+}
+
 export function MapView({
   db,
   selectedIcao,
   onSelectAirport,
+  selectedProcedureId,
 }: {
   db: Database;
   selectedIcao: string | null;
   onSelectAirport: (icao: string) => void;
+  selectedProcedureId: string | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   const airports = useMemo(() => queryAll<Airport>(db, "SELECT * FROM airport"), [db]);
+  // Every waypoint/navaid ident -> coordinates, so a procedure leg's
+  // fix_ident can be resolved without a per-leg query. Both tables share
+  // the ident/lat/lon shape (see types.ts's `Fix`); idents aren't
+  // globally unique across ICAO regions, so this takes whichever match
+  // comes first, same as the CIFP data itself doesn't disambiguate here.
+  const fixes = useMemo(() => {
+    const rows = [
+      ...queryAll<Fix>(db, "SELECT ident, lat, lon FROM waypoint"),
+      ...queryAll<Fix>(db, "SELECT ident, lat, lon FROM navaid"),
+    ];
+    const map = new Map<string, Fix>();
+    for (const row of rows) {
+      if (!map.has(row.ident)) map.set(row.ident, row);
+    }
+    return map;
+  }, [db]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -107,6 +150,14 @@ export function MapView({
         type: "line",
         source: RUNWAYS_SOURCE,
         paint: { "line-color": "#ffb020", "line-width": 3 },
+      });
+
+      map.addSource(PROCEDURE_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "procedure-line",
+        type: "line",
+        source: PROCEDURE_SOURCE,
+        paint: { "line-color": "#7fd0ff", "line-width": 2, "line-dasharray": [2, 1.5] },
       });
 
       map.on("click", "airports-circle", (e) => {
@@ -155,6 +206,29 @@ export function MapView({
       }
     }
   }, [db, airports, selectedIcao, loaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+
+    let data = EMPTY_COLLECTION;
+    if (selectedProcedureId) {
+      const transitions = queryAll<ProcedureTransition>(
+        db,
+        "SELECT * FROM procedure_transition WHERE procedure_id = ?",
+        [selectedProcedureId],
+      );
+      const legsByTransition = new Map<string, ProcedureLeg[]>();
+      for (const t of transitions) {
+        legsByTransition.set(
+          t.id,
+          queryAll<ProcedureLeg>(db, "SELECT * FROM procedure_leg WHERE transition_id = ? ORDER BY seq", [t.id]),
+        );
+      }
+      data = procedureGeoJson(transitions, legsByTransition, fixes);
+    }
+    (map.getSource(PROCEDURE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(data);
+  }, [db, fixes, selectedProcedureId, loaded]);
 
   return <div ref={containerRef} className="map-view" />;
 }

@@ -13,12 +13,13 @@
 //! communication frequencies are merged in on top of the CIFP-derived
 //! data — CIFP alone has neither.
 use ff_cifp::{
-    build_procedures, classify_line, extract_airport, extract_procedure_leg_row,
-    extract_runway_end, pair_runway_ends, RecordCategory,
+    build_procedures, classify_line, extract_airport, extract_ndb_navaid,
+    extract_procedure_leg_row, extract_runway_end, extract_vhf_navaid, extract_waypoint,
+    pair_runway_ends, RecordCategory,
 };
 use ff_core::{
-    AirportType, AltitudeConstraint, Frequency, FrequencyKind, PathAndTerm, ProcedureKind, Runway,
-    RunwaySurface, SpeedConstraint, TransitionKind, TurnDirection,
+    AirportType, AltitudeConstraint, Frequency, FrequencyKind, Navaid, NavaidType, PathAndTerm,
+    ProcedureKind, Runway, RunwaySurface, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
 use ff_nasr::{
     frequencies_for_airport, parse_apt_base, parse_apt_runway, parse_apt_runway_end, parse_frq,
@@ -168,6 +169,57 @@ fn main() {
     let mut runways = pair_runway_ends(&runway_ends);
     let parsed = build_procedures(&leg_rows);
 
+    // Resolve procedure leg fixes to real coordinates: a second pass over
+    // the file (cheap — `contents` is already in memory) picking out just
+    // the VHF/NDB navaids and waypoints actually referenced by these
+    // airports' procedures, rather than every navaid/waypoint in the
+    // country. Runway-threshold pseudo-fixes (e.g. "RW28L") won't match
+    // anything here and are simply skipped by consumers.
+    let wanted_fixes: HashSet<String> = parsed
+        .legs
+        .iter()
+        .filter_map(|l| l.fix_ident.clone())
+        .collect();
+    let mut navaids: Vec<Navaid> = Vec::new();
+    let mut waypoints: Vec<Waypoint> = Vec::new();
+    let mut seen_navaid_idents = HashSet::new();
+    let mut seen_waypoint_idents = HashSet::new();
+    for line in contents.lines() {
+        let Some(record) = classify_line(line) else {
+            continue;
+        };
+        match record.category {
+            RecordCategory::VhfNavaid => {
+                if let Ok(navaid) = extract_vhf_navaid(&record) {
+                    if wanted_fixes.contains(&navaid.ident)
+                        && seen_navaid_idents.insert(navaid.ident.clone())
+                    {
+                        navaids.push(navaid);
+                    }
+                }
+            }
+            RecordCategory::NdbNavaid => {
+                if let Ok(navaid) = extract_ndb_navaid(&record) {
+                    if wanted_fixes.contains(&navaid.ident)
+                        && seen_navaid_idents.insert(navaid.ident.clone())
+                    {
+                        navaids.push(navaid);
+                    }
+                }
+            }
+            RecordCategory::Waypoint => {
+                if let Ok(waypoint) = extract_waypoint(&record) {
+                    if wanted_fixes.contains(&waypoint.ident)
+                        && seen_waypoint_idents.insert(waypoint.ident.clone())
+                    {
+                        waypoints.push(waypoint);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     let frequencies = if let Some(nasr_dir) = &args.nasr_dir {
         let (surfaces, frequencies) = load_nasr_enrichment(nasr_dir, icaos);
         apply_nasr_surfaces(&mut runways, &surfaces);
@@ -261,14 +313,41 @@ fn main() {
         .expect("insert leg");
     }
 
+    for n in &navaids {
+        conn.execute(
+            "INSERT INTO navaid (ident, navaid_type, lat, lon, elevation_ft, freq_khz, region)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                n.ident,
+                navaid_type_str(n.navaid_type),
+                n.lat,
+                n.lon,
+                n.elevation_ft,
+                n.freq_khz,
+                n.region
+            ],
+        )
+        .expect("insert navaid");
+    }
+    for w in &waypoints {
+        conn.execute(
+            "INSERT INTO waypoint (ident, lat, lon, region) VALUES (?1,?2,?3,?4)",
+            params![w.ident, w.lat, w.lon, w.region],
+        )
+        .expect("insert waypoint");
+    }
+
     println!(
-        "wrote {} airports, {} runways, {} frequencies, {} procedures, {} transitions, {} legs to {}",
+        "wrote {} airports, {} runways, {} frequencies, {} procedures, {} transitions, {} legs, \
+         {} navaids, {} waypoints to {}",
         airports.len(),
         runways.len(),
         frequencies.len(),
         parsed.procedures.len(),
         parsed.transitions.len(),
         parsed.legs.len(),
+        navaids.len(),
+        waypoints.len(),
         args.output_path,
     );
 }
@@ -342,6 +421,17 @@ fn speed_str(s: SpeedConstraint) -> String {
     match s {
         SpeedConstraint::AtOrBelow(kt) => format!("At/below {kt} kt"),
         SpeedConstraint::At(kt) => format!("At {kt} kt"),
+    }
+}
+
+fn navaid_type_str(t: NavaidType) -> &'static str {
+    match t {
+        NavaidType::Vor => "Vor",
+        NavaidType::VorDme => "VorDme",
+        NavaidType::Vortac => "Vortac",
+        NavaidType::Ndb => "Ndb",
+        NavaidType::Dme => "Dme",
+        NavaidType::Tacan => "Tacan",
     }
 }
 
