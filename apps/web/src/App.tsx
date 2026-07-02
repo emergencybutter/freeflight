@@ -202,6 +202,7 @@ function ProcedureDetail({ db, procedureId }: { db: Database; procedureId: strin
       <h2>
         {procedure.kind} {procedure.ident}
       </h2>
+      {procedure.runway_ident && <p className="hint">runway {procedure.runway_ident}</p>}
       {transitions.map((t) => (
         <div key={t.id} className="transition">
           <h3>

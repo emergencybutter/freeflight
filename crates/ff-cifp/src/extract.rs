@@ -337,6 +337,60 @@ fn procedure_id_for(airport_icao: &str, kind: ProcedureKind, ident: &str) -> Str
     format!("{airport_icao}:{kind_str}:{ident}")
 }
 
+/// Extracts a runway number + optional L/C/R suffix starting at the first
+/// digit run in `s`, e.g. `"28L"` -> `Some("28L")`, `"10RZ"` -> `Some("10R")`
+/// (the trailing `Z` is an FAA suffix distinguishing multiple similar
+/// approaches, per the naming convention documented on
+/// [`derive_approach_runway_ident`] — not part of the runway ident).
+/// Returns `None` if `s` has no digit run (e.g. circling approaches like
+/// `"VOR-A"`).
+fn extract_runway_number(s: &str) -> Option<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let start = chars.iter().position(|c| c.is_ascii_digit())?;
+    let mut end = start;
+    while end < chars.len() && chars[end].is_ascii_digit() {
+        end += 1;
+    }
+    let mut runway: String = chars[start..end].iter().collect();
+    if end < chars.len() && matches!(chars[end], 'L' | 'C' | 'R') {
+        runway.push(chars[end]);
+    }
+    Some(runway)
+}
+
+/// Approach idents follow a well-known FAA convention: a 1-2 letter
+/// approach-type code, then the runway number + optional L/C/R, then an
+/// optional distinguishing suffix letter when multiple similar approaches
+/// serve the same runway (e.g. `"H10RZ"` = the "Z" RNAV(RNP) approach to
+/// runway 10R). Circling approaches with no specific runway (e.g.
+/// `"VOR-A"`) have no digit run and correctly yield `None`.
+fn derive_approach_runway_ident(procedure_ident: &str) -> Option<String> {
+    extract_runway_number(procedure_ident)
+}
+
+/// SID/STAR transitions specific to one runway have a `transition_ident`
+/// prefixed `"RW"` (e.g. `"RW28L"`); `"ALL"` and enroute-fix transitions
+/// don't match and correctly yield `None`.
+fn runway_transition_number(transition_ident: &str) -> Option<String> {
+    extract_runway_number(transition_ident.strip_prefix("RW")?)
+}
+
+/// A SID/STAR "serves" a runway only when every one of its runway-specific
+/// transitions agrees on the same runway; if it has several (a multi-runway
+/// departure/arrival) or none, there's no single answer, so this yields
+/// `None` rather than picking arbitrarily.
+fn derive_sid_star_runway_ident(transitions: &[&ProcedureTransition]) -> Option<String> {
+    let mut runway_idents = transitions
+        .iter()
+        .filter_map(|t| runway_transition_number(&t.ident));
+    let first = runway_idents.next()?;
+    if runway_idents.all(|r| r == first) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedProcedures {
     pub procedures: Vec<Procedure>,
@@ -351,6 +405,17 @@ pub struct ParsedProcedures {
 /// (or both being "common"/"missed", which have no real
 /// `transition_ident` of their own) become one `ProcedureTransition`,
 /// with legs ordered by CIFP sequence number.
+///
+/// A CIFP leg can have supplementary *continuation* records (RNP, vertical
+/// guidance, FAS block data) that repeat the same (airport, procedure,
+/// transition, sequence number) key as the leg they extend, with a
+/// completely different field layout at the same column positions — none
+/// of that supplementary data is modeled yet, but if it weren't skipped
+/// here it would be misread as a second, malformed leg at the same
+/// sequence number (this is where all "Unsupported" leg types with a
+/// blank raw code come from in real CIFP data; verified by inspecting the
+/// FAA's own continuation records, not assumed). Only the first record
+/// seen for a given key is kept.
 pub fn build_procedures(rows: &[ProcedureLegRow]) -> ParsedProcedures {
     const COMMON_LABEL: &str = "__COMMON__";
     const MISSED_LABEL: &str = "__MISSED__";
@@ -358,8 +423,20 @@ pub fn build_procedures(rows: &[ProcedureLegRow]) -> ParsedProcedures {
     let mut procedures: BTreeMap<String, Procedure> = BTreeMap::new();
     let mut transitions: BTreeMap<String, ProcedureTransition> = BTreeMap::new();
     let mut legs_by_transition: BTreeMap<String, Vec<(u32, ProcedureLeg)>> = BTreeMap::new();
+    let mut seen_leg_keys: std::collections::HashSet<(String, String, String, u32)> =
+        std::collections::HashSet::new();
 
     for row in rows {
+        let leg_key = (
+            row.airport_icao.clone(),
+            row.procedure_ident.clone(),
+            row.transition_ident.clone(),
+            row.seq,
+        );
+        if !seen_leg_keys.insert(leg_key) {
+            continue;
+        }
+
         let procedure_id = procedure_id_for(&row.airport_icao, row.kind, &row.procedure_ident);
         procedures
             .entry(procedure_id.clone())
@@ -413,8 +490,22 @@ pub fn build_procedures(rows: &[ProcedureLegRow]) -> ParsedProcedures {
         legs.extend(rows.into_iter().map(|(_, leg)| leg));
     }
 
+    let mut procedures: Vec<Procedure> = procedures.into_values().collect();
+    for procedure in &mut procedures {
+        procedure.runway_ident = match procedure.kind {
+            ProcedureKind::Approach => derive_approach_runway_ident(&procedure.ident),
+            ProcedureKind::Sid | ProcedureKind::Star => {
+                let its_transitions: Vec<&ProcedureTransition> = transitions
+                    .values()
+                    .filter(|t| t.procedure_id == procedure.id)
+                    .collect();
+                derive_sid_star_runway_ident(&its_transitions)
+            }
+        };
+    }
+
     ParsedProcedures {
-        procedures: procedures.into_values().collect(),
+        procedures,
         transitions: transitions.into_values().collect(),
         legs,
     }
@@ -653,6 +744,73 @@ mod tests {
         assert!(has_kind(TransitionKind::Approach));
         assert!(has_kind(TransitionKind::Common));
         assert!(has_kind(TransitionKind::Missed));
+        assert_eq!(parsed.procedures[0].runway_ident.as_deref(), Some("28L"));
+    }
+
+    #[test]
+    fn derives_approach_runway_ident_from_common_faa_naming_conventions() {
+        assert_eq!(
+            derive_approach_runway_ident("I28L"),
+            Some("28L".to_string())
+        );
+        assert_eq!(derive_approach_runway_ident("R31"), Some("31".to_string()));
+        assert_eq!(
+            derive_approach_runway_ident("H10RZ"),
+            Some("10R".to_string())
+        );
+        assert_eq!(
+            derive_approach_runway_ident("L19L"),
+            Some("19L".to_string())
+        );
+        // Circling approaches have no specific runway.
+        assert_eq!(derive_approach_runway_ident("VOR-A"), None);
+    }
+
+    #[test]
+    fn derives_sid_star_runway_ident_only_when_transitions_agree() {
+        let one_runway = [
+            ProcedureTransition {
+                id: "t1".into(),
+                procedure_id: "p1".into(),
+                ident: "RW28L".into(),
+                kind: TransitionKind::Enroute,
+            },
+            ProcedureTransition {
+                id: "t2".into(),
+                procedure_id: "p1".into(),
+                ident: "OSI".into(),
+                kind: TransitionKind::Enroute,
+            },
+        ];
+        let refs: Vec<&ProcedureTransition> = one_runway.iter().collect();
+        assert_eq!(derive_sid_star_runway_ident(&refs), Some("28L".to_string()));
+
+        let two_runways = [
+            ProcedureTransition {
+                id: "t1".into(),
+                procedure_id: "p1".into(),
+                ident: "RW28L".into(),
+                kind: TransitionKind::Enroute,
+            },
+            ProcedureTransition {
+                id: "t2".into(),
+                procedure_id: "p1".into(),
+                ident: "RW10R".into(),
+                kind: TransitionKind::Enroute,
+            },
+        ];
+        let refs: Vec<&ProcedureTransition> = two_runways.iter().collect();
+        assert_eq!(derive_sid_star_runway_ident(&refs), None);
+    }
+
+    #[test]
+    fn build_procedures_derives_sid_runway_ident_from_a_single_runway_transition() {
+        let rows = vec![
+            leg_row(ProcedureKind::Sid, "TEST1", '2', "", 10, "FIXA"),
+            leg_row(ProcedureKind::Sid, "TEST1", '1', "RW28L", 10, "RW28L"),
+        ];
+        let parsed = build_procedures(&rows);
+        assert_eq!(parsed.procedures[0].runway_ident.as_deref(), Some("28L"));
     }
 
     #[test]

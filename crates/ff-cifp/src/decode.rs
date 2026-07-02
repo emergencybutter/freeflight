@@ -84,22 +84,31 @@ pub fn non_empty(raw: &str) -> Option<String> {
 }
 
 /// Path and Termination (spec §5.21): a 2-letter ARINC 424 leg type code.
-/// Codes not represented in [`PathAndTerm`] (e.g. `FA`, `FC`, `PI`, `AF`)
-/// map to `Unsupported` rather than being invented — see DESIGN.md §12.
+/// Covers all 23 standard codes (verified against the FAA's own leg-type
+/// table, cross-checked with the `arinc424` reference parser); only a
+/// malformed/blank field falls back to `Unsupported`.
 pub fn path_and_term(raw: &str) -> PathAndTerm {
     match raw.trim() {
         "IF" => PathAndTerm::IF,
         "TF" => PathAndTerm::TF,
         "CF" => PathAndTerm::CF,
         "DF" => PathAndTerm::DF,
+        "FA" => PathAndTerm::FA,
+        "FC" => PathAndTerm::FC,
+        "FD" => PathAndTerm::FD,
+        "FM" => PathAndTerm::FM,
         "CA" => PathAndTerm::CA,
         "CD" => PathAndTerm::CD,
-        "VA" => PathAndTerm::VA,
-        "VI" => PathAndTerm::VI,
-        "VD" => PathAndTerm::VD,
-        "VM" => PathAndTerm::VM,
+        "CR" => PathAndTerm::CR,
         "RF" => PathAndTerm::RF,
+        "AF" => PathAndTerm::AF,
+        "VA" => PathAndTerm::VA,
+        "VD" => PathAndTerm::VD,
+        "VI" => PathAndTerm::VI,
+        "VM" => PathAndTerm::VM,
+        "VR" => PathAndTerm::VR,
         "CI" => PathAndTerm::CI,
+        "PI" => PathAndTerm::PI,
         "HA" | "HF" | "HM" => PathAndTerm::HoldingPattern,
         _ => PathAndTerm::Unsupported,
     }
@@ -145,11 +154,23 @@ mod tests {
     }
 
     #[test]
-    fn maps_known_leg_types_and_falls_back_to_unsupported() {
+    fn maps_all_23_standard_leg_types() {
         assert_eq!(path_and_term("TF"), PathAndTerm::TF);
         assert_eq!(path_and_term("RF"), PathAndTerm::RF);
         assert_eq!(path_and_term("HM"), PathAndTerm::HoldingPattern);
-        assert_eq!(path_and_term("PI"), PathAndTerm::Unsupported);
+        assert_eq!(path_and_term("PI"), PathAndTerm::PI);
+        assert_eq!(path_and_term("FA"), PathAndTerm::FA);
+        assert_eq!(path_and_term("FC"), PathAndTerm::FC);
+        assert_eq!(path_and_term("FD"), PathAndTerm::FD);
+        assert_eq!(path_and_term("FM"), PathAndTerm::FM);
+        assert_eq!(path_and_term("CR"), PathAndTerm::CR);
+        assert_eq!(path_and_term("VR"), PathAndTerm::VR);
+        assert_eq!(path_and_term("AF"), PathAndTerm::AF);
+    }
+
+    #[test]
+    fn falls_back_to_unsupported_for_malformed_codes() {
+        assert_eq!(path_and_term("ZZ"), PathAndTerm::Unsupported);
         assert_eq!(path_and_term("  "), PathAndTerm::Unsupported);
     }
 }

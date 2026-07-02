@@ -34,10 +34,13 @@ pub struct ProcedureTransition {
     pub kind: TransitionKind,
 }
 
-/// ARINC 424 path-and-terminator leg types. Phase 1 fully supports the
-/// common enroute/terminal leg types (see DESIGN.md §12, open question 3);
-/// the rest are modeled so a procedure using them can be recognized and
-/// flagged rather than silently mis-rendered, not so it can be flown.
+/// ARINC 424 path-and-terminator leg types (spec §5.21). Covers all 23
+/// standard leg types except the three holding-pattern termination
+/// flavors (`HA`/`HF`/`HM`), which collapse into [`Self::HoldingPattern`]
+/// since freeflight doesn't yet distinguish them; `Unsupported` is a
+/// fallback for any future/malformed code rather than a real leg type
+/// (see DESIGN.md §12, open question 3 — now closed for coverage, not
+/// for full leg-geometry rendering).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathAndTerm {
     /// Initial fix.
@@ -48,22 +51,38 @@ pub enum PathAndTerm {
     CF,
     /// Direct to a fix (from an unspecified position).
     DF,
+    /// Fix to an altitude.
+    FA,
+    /// Track from a fix for a distance.
+    FC,
+    /// Track from a fix to a DME distance.
+    FD,
+    /// From a fix to a manual termination.
+    FM,
     /// Course to an altitude.
     CA,
     /// Course to a DME distance.
     CD,
-    /// Heading to an altitude.
-    VA,
-    /// Heading to an intercept.
-    VI,
-    /// Heading to a DME distance.
-    VD,
-    /// Heading to a manual termination.
-    VM,
+    /// Course to a radial termination.
+    CR,
     /// Radius to a fix (constant-radius turn), used e.g. by RNP procedures.
     RF,
-    /// Course/heading to a radial intercept.
+    /// Arc to a fix (DME arc).
+    AF,
+    /// Heading to an altitude.
+    VA,
+    /// Heading to a DME distance.
+    VD,
+    /// Heading to an intercept.
+    VI,
+    /// Heading to a manual termination.
+    VM,
+    /// Heading to a radial termination.
+    VR,
+    /// Course to an intercept (of the next leg's course).
     CI,
+    /// 045/180 procedure turn.
+    PI,
     /// Holding pattern, various termination flavors collapsed for now.
     HoldingPattern,
     /// Any leg type not yet modeled explicitly.

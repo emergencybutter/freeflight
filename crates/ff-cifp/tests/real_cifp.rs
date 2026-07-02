@@ -187,7 +187,6 @@ fn surveys_leg_type_coverage_and_transition_kinds_across_the_whole_file() {
         std::env::var("FF_CIFP_TEST_FILE").expect("set FF_CIFP_TEST_FILE to a real CIFP file path");
     let contents = std::fs::read_to_string(&path).expect("failed to read CIFP file");
 
-    let mut leg_type_counts: HashMap<String, usize> = HashMap::new();
     let mut all_rows = Vec::new();
 
     for line in contents.lines() {
@@ -196,9 +195,6 @@ fn surveys_leg_type_coverage_and_transition_kinds_across_the_whole_file() {
         };
         if let RecordCategory::Procedure(_) = record.category {
             if let Ok(row) = extract_procedure_leg_row(&record) {
-                *leg_type_counts
-                    .entry(format!("{:?}", row.path_and_term))
-                    .or_default() += 1;
                 all_rows.push(row);
             }
         }
@@ -206,7 +202,18 @@ fn surveys_leg_type_coverage_and_transition_kinds_across_the_whole_file() {
 
     let parsed = build_procedures(&all_rows);
 
-    println!("=== path-and-terminator leg type counts (whole file) ===");
+    // Count leg types on the *built* legs, not the raw rows: build_procedures
+    // drops continuation records (same airport/procedure/transition/seq as
+    // an already-seen leg, different field layout) that would otherwise
+    // masquerade as extra legs with a blank path-and-term code.
+    let mut leg_type_counts: HashMap<String, usize> = HashMap::new();
+    for leg in &parsed.legs {
+        *leg_type_counts
+            .entry(format!("{:?}", leg.path_and_term))
+            .or_default() += 1;
+    }
+
+    println!("=== path-and-terminator leg type counts (whole file, post-dedup) ===");
     let mut counts: Vec<_> = leg_type_counts.into_iter().collect();
     counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
     for (k, n) in &counts {
@@ -232,4 +239,43 @@ fn surveys_leg_type_coverage_and_transition_kinds_across_the_whole_file() {
         "\nUnsupported leg types: {unsupported} / {total} ({:.2}%)",
         100.0 * unsupported as f64 / total as f64
     );
+}
+
+#[test]
+#[ignore]
+fn diagnoses_unsupported_leg_type_codes() {
+    let path =
+        std::env::var("FF_CIFP_TEST_FILE").expect("set FF_CIFP_TEST_FILE to a real CIFP file path");
+    let contents = std::fs::read_to_string(&path).expect("failed to read CIFP file");
+
+    let mut raw_codes: HashMap<String, usize> = HashMap::new();
+    let mut sample_lines: HashMap<String, String> = HashMap::new();
+
+    for line in contents.lines() {
+        let Some(record) = classify_line(line) else {
+            continue;
+        };
+        if let RecordCategory::Procedure(_) = record.category {
+            if let Ok(row) = extract_procedure_leg_row(&record) {
+                if row.path_and_term == ff_core::PathAndTerm::Unsupported {
+                    // Re-extract the raw 2-char code directly for diagnosis.
+                    let raw = &line[47..49];
+                    *raw_codes.entry(raw.to_string()).or_default() += 1;
+                    sample_lines
+                        .entry(raw.to_string())
+                        .or_insert_with(|| line.to_string());
+                }
+            }
+        }
+    }
+
+    let mut counts: Vec<_> = raw_codes.into_iter().collect();
+    counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    println!("=== raw path-and-term codes behind 'Unsupported' ===");
+    for (code, n) in &counts {
+        println!("{code:?} {n}");
+        if let Some(line) = sample_lines.get(code) {
+            println!("  sample: {line}");
+        }
+    }
 }
