@@ -16,6 +16,7 @@ pub fn router(state: AppState) -> Router {
         .route("/weather/gairmet", get(weather::get_gairmets))
         .route("/weather/sigmet", get(weather::get_sigmets))
         .route("/weather/isigmet", get(weather::get_intl_sigmets))
+        .route("/weather/windtemp", get(weather::get_winds_aloft))
         .route("/cycles/latest", get(cycles::latest))
         .route("/cycles/:cycle_id/bundle.sqlite", get(cycles::bundle))
         .route("/notams", get(notams::get_notams))

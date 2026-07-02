@@ -37,6 +37,8 @@ Built and validated against real FAA/NOAA data end to end:
   `IntlSigmet` added and validated the same way (see "AIRMET/SIGMET"
   below) — modeled correctly on the first pass since field types were
   checked against live samples before writing the structs this time.
+  Winds/temps aloft (the one product with no JSON API — a real
+  fixed-width text parser, see "Winds/temps aloft" below) added too.
 - `services/ff-etl` (real batch pipeline, distinct from the
   `build_demo_bundle` example): fetches the live CIFP cycle and matching
   NASR subscription, builds an `ff-storage`-schema bundle, validates it,
@@ -321,11 +323,7 @@ and via a live opt-in test through the actual `WeatherClient` methods.
 `/weather/isigmet`) — confirmed live, real data flowing through.
 
 Deliberately stopped here (agreed with the user beforehand):
-- **Winds/temps aloft**: no JSON API exists — aviationweather.gov only
-  serves it as a fixed-width text bulletin (`FBUS31`/`FD` product,
-  station-keyed columns per altitude, compact wind/temp encoding e.g.
-  `"1616+21"`). That's a real parser to write, not JSON deserialization,
-  so it's deferred as its own follow-up rather than folded in here.
+- **Winds/temps aloft**: done in a follow-up pass — see below.
 - **No map rendering yet**: `apps/web` doesn't draw AIRMET/SIGMET
   polygons on the MapLibre map. DESIGN.md §9.2 wants exactly that; this
   pass stopped at validated backend clients + proxy routes, same
@@ -333,6 +331,63 @@ Deliberately stopped here (agreed with the user beforehand):
 - **Plain-text `/airmet`**: not implemented at all — no coordinates to
   plot, and `GAirmet` covers the map-drawing use case this project
   actually needs.
+
+## Winds/temps aloft — done
+
+aviationweather.gov's `/windtemp` genuinely has no JSON API — it serves
+the classic NWS "FD" bulletin as raw fixed-width text (station-keyed
+columns per altitude). Wrote a real parser for it
+(`crates/ff-weather/src/winds_aloft.rs`), the same way `ff-cifp`/
+`ff-nasr` do for their fixed-width sources, rather than treating it as
+opaque text.
+
+Format was fully reverse-engineered against real captured bulletins
+before writing any decode logic (checked every field's length across
+all 176 stations in a real "low" bulletin, not just a handful of
+samples) — same discipline as the AIRMET/SIGMET pass, and it paid off
+again:
+
+- The column layout (which altitudes, how wide each field is) is parsed
+  from the bulletin's own `FT ...` header line rather than hardcoded.
+  Confirmed this generalizes: the "low" product (3,000–39,000 ft, 9
+  columns) and "high" product (45,000/53,000 ft, 2 columns) parse with
+  the same code, no special-casing.
+- Field encoding turned out to depend on the *length* of the value, not
+  its column position — a wrong initial assumption (that only the
+  lowest column omits temperature) was disproven by checking real data:
+  6,000 and 9,000 ft columns can also be wind-only (4 chars, no temp)
+  for stations near that elevation.
+- `"9900"` is a sentinel for "light and variable" wind (under 5kt), not
+  a literal 0°/0kt — modeled as a separate `Wind::LightAndVariable`
+  variant rather than `Directional { 0, 0 }`, which would have silently
+  claimed a specific (wrong) direction and speed.
+- Temperature is either absent (4-char field), explicitly signed
+  (7-char field), or has an *implied* negative sign the bulletin never
+  prints (6-char field, used above 24,000 ft per the bulletin's own
+  header note) — get this backwards and every high-altitude temperature
+  comes out with the wrong sign, silently.
+- The high-wind-speed encoding (direction code > 50 means +100kt, with
+  the direction shifted) is documented in the NWS FD spec but wasn't
+  present in any bulletin captured this session — covered by a
+  synthetic test instead of a live fixture, clearly marked as such.
+
+An early version of the exhaustive real-bulletin test had a bug of its
+own: hand-counting which column corresponded to which altitude in a
+9-column row and miscounting by one. The test caught a real mismatch
+immediately (asserted `LightAndVariable`, parser produced
+`Directional { 240, 7 }`) — turned out the parser was right and the
+test's hand-written expectations were wrong. Fixed by recounting
+carefully rather than loosening the assertion.
+
+Validated against real captured "low" and "high" bulletins
+(`crates/ff-weather/tests/real_winds_aloft.rs`, no network needed) plus
+a live opt-in test through the actual `WeatherClient::fetch_winds_aloft`
+method. Proxied through `ff-api` (`/weather/windtemp`, with
+`level`/`fcst`/`region` query params defaulting to `low`/`06`/`all`) —
+confirmed live for both `level=low` and `level=high`.
+
+Same stopping point as AIRMET/SIGMET: backend client + proxy route
+only, no map/route overlay in `apps/web` yet.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 

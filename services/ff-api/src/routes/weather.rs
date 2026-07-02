@@ -67,3 +67,43 @@ pub async fn get_intl_sigmets(State(state): State<AppState>) -> Response {
         Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct WindsAloftQuery {
+    #[serde(default = "default_level")]
+    pub level: String,
+    #[serde(default = "default_fcst")]
+    pub fcst: String,
+    #[serde(default = "default_region")]
+    pub region: String,
+}
+
+fn default_level() -> String {
+    "low".to_string()
+}
+
+fn default_fcst() -> String {
+    "06".to_string()
+}
+
+fn default_region() -> String {
+    "all".to_string()
+}
+
+/// Proxies aviationweather.gov's winds/temps aloft forecast — the one
+/// product `ff-weather` gets as fixed-width text rather than JSON (see
+/// `ff_weather::winds_aloft`), reserialized here as JSON like everything
+/// else this server proxies.
+pub async fn get_winds_aloft(
+    State(state): State<AppState>,
+    Query(query): Query<WindsAloftQuery>,
+) -> Response {
+    match state
+        .weather
+        .fetch_winds_aloft(&query.level, &query.fcst, &query.region)
+        .await
+    {
+        Ok(bulletin) => Json(bulletin).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}

@@ -1,5 +1,6 @@
 use crate::hazards::{GAirmet, IntlSigmet, Sigmet};
 use crate::records::{Metar, Taf};
+use crate::winds_aloft::{parse_windtemp_bulletin, WindsAloftBulletin, WindsAloftError};
 use thiserror::Error;
 
 pub const DEFAULT_BASE_URL: &str = "https://aviationweather.gov/api/data";
@@ -10,6 +11,8 @@ pub enum WeatherError {
     Request(#[from] reqwest::Error),
     #[error("no station ids provided")]
     NoStations,
+    #[error("failed to parse winds-aloft bulletin: {0}")]
+    WindsAloft(#[from] WindsAloftError),
 }
 
 /// Client for the free, unauthenticated aviationweather.gov Data API
@@ -130,6 +133,34 @@ impl WeatherClient {
             return Ok(Vec::new());
         }
         Ok(resp.json::<Vec<T>>().await?)
+    }
+
+    /// Fetches the current winds/temps aloft forecast ("FD" bulletin) —
+    /// the one product in this crate with no JSON API, served as raw
+    /// fixed-width text (see `winds_aloft` module docs for the format).
+    ///
+    /// `level` is `"low"` (3,000–39,000 ft) or `"high"` (45,000/53,000
+    /// ft); `fcst_hour` is `"06"`, `"12"`, or `"24"`; `region` is
+    /// `"all"` or a regional code (see aviationweather.gov's own docs
+    /// for the full list — not duplicated here since this client
+    /// doesn't validate it, the upstream API does).
+    pub async fn fetch_winds_aloft(
+        &self,
+        level: &str,
+        fcst_hour: &str,
+        region: &str,
+    ) -> Result<WindsAloftBulletin, WeatherError> {
+        let url = format!("{}/windtemp", self.base_url);
+        let text = self
+            .http
+            .get(&url)
+            .query(&[("level", level), ("fcst", fcst_hour), ("region", region)])
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        Ok(parse_windtemp_bulletin(&text)?)
     }
 }
 
