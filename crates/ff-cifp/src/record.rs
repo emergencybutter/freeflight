@@ -1,18 +1,21 @@
 //! ARINC 424 record classification.
 //!
-//! Every CIFP record is a fixed-width (132 column) line. Columns 1, 5 and 6
-//! (1-indexed) — record type, section code, subsection code — identify what
-//! kind of record it is; the remaining columns are section-specific.
+//! Every CIFP record is a fixed-width (132 column) line. Column 5
+//! (1-indexed, index 4) always carries the Section Code. Where the
+//! *Subsection* code lives depends on the section: sections keyed to an
+//! airport/heliport identifier (Airport, Runway, SID/STAR/Approach — all
+//! Section `P`) carry a 4-character identifier at columns 7-10 and a
+//! 2-character ICAO region code at columns 11-12, which pushes their
+//! subsection code out to column 13 (index 12); column 6 (index 5) is a
+//! spare/blank column for those records. Other sections (VHF/NDB navaid,
+//! enroute) put the subsection at column 6 (index 5) instead.
 //!
-//! The section/subsection → [`RecordCategory`] mapping below reflects the
-//! commonly documented ARINC 424 layout (record type 'S', then Section
-//! P=Airport, subsections D/E/F=SID/STAR/Approach, G=Runway, N=NDB at
-//! airport; Section D=VHF navaid, DB=NDB navaid; Section E=Enroute, with
-//! EA=Airway, EU=Enroute communication). **Verify column offsets and every
-//! mapping against the current FAA CIFP User's Guide / ARINC 424 Attachment
-//! 5 before relying on parsed field values** — this module only classifies
-//! records well enough to route them to the right (not-yet-implemented)
-//! field extractor; see [`crate::extract`].
+//! This dual-position handling — try index 5 first, fall back to index
+//! 12 — mirrors the approach taken by the open-source `arinc424` parser
+//! (github.com/jack-laverty/arinc424, see `record.py`'s
+//! `identifier_1`/`identifier_2` fallback), which was used to cross-check
+//! these offsets against a real, working implementation rather than
+//! guessing at the ARINC 424 spec from memory.
 use ff_core::ProcedureKind;
 
 pub const RECORD_LENGTH: usize = 132;
@@ -31,40 +34,47 @@ pub enum RecordCategory {
 }
 
 /// A single fixed-width CIFP line plus its classification. Field
-/// extraction from `raw` is deferred to `crate::extract` (unimplemented in
-/// this scaffold — see module docs).
+/// extraction from `raw` is done by `crate::extract`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawRecord {
     pub raw: String,
     pub category: RecordCategory,
 }
 
-/// Classify a single 132-column CIFP line by its section/subsection code.
+fn category_for(section: char, subsection: char) -> Option<RecordCategory> {
+    match (section, subsection) {
+        ('P', 'A') => Some(RecordCategory::Airport),
+        ('P', 'G') => Some(RecordCategory::Runway),
+        ('P', 'D') => Some(RecordCategory::Procedure(ProcedureKind::Sid)),
+        ('P', 'E') => Some(RecordCategory::Procedure(ProcedureKind::Star)),
+        ('P', 'F') => Some(RecordCategory::Procedure(ProcedureKind::Approach)),
+        ('P', 'N') => Some(RecordCategory::NdbNavaid),
+        ('D', 'B') => Some(RecordCategory::NdbNavaid),
+        ('D', _) => Some(RecordCategory::VhfNavaid),
+        ('E', 'A') => Some(RecordCategory::Airway),
+        ('E', 'U') => Some(RecordCategory::EnrouteCommunication),
+        ('E', _) => Some(RecordCategory::Waypoint),
+        _ => None,
+    }
+}
+
+/// Classify a single CIFP line by its section/subsection code.
 ///
-/// Returns `None` if the line is shorter than a full record (e.g. a
-/// trailing blank line) rather than guessing at a partial record.
+/// Returns `None` if the line is too short to contain a section code and
+/// both candidate subsection positions (e.g. a trailing blank line)
+/// rather than guessing at a partial record.
 pub fn classify_line(line: &str) -> Option<RawRecord> {
-    if line.len() < 6 {
+    if line.len() < 13 {
         return None;
     }
     let bytes = line.as_bytes();
     let section = bytes[4] as char;
-    let subsection = bytes[5] as char;
+    let subsection_col6 = bytes[5] as char;
+    let subsection_col13 = bytes[12] as char;
 
-    let category = match (section, subsection) {
-        ('P', 'A') => RecordCategory::Airport,
-        ('P', 'G') => RecordCategory::Runway,
-        ('P', 'D') => RecordCategory::Procedure(ProcedureKind::Sid),
-        ('P', 'E') => RecordCategory::Procedure(ProcedureKind::Star),
-        ('P', 'F') => RecordCategory::Procedure(ProcedureKind::Approach),
-        ('P', 'N') => RecordCategory::NdbNavaid,
-        ('D', _) if subsection != 'B' => RecordCategory::VhfNavaid,
-        ('D', 'B') => RecordCategory::NdbNavaid,
-        ('E', 'A') => RecordCategory::Airway,
-        ('E', 'U') => RecordCategory::EnrouteCommunication,
-        ('E', _) => RecordCategory::Waypoint,
-        _ => RecordCategory::Unknown,
-    };
+    let category = category_for(section, subsection_col6)
+        .or_else(|| category_for(section, subsection_col13))
+        .unwrap_or(RecordCategory::Unknown);
 
     Some(RawRecord {
         raw: line.to_string(),
@@ -75,6 +85,7 @@ pub fn classify_line(line: &str) -> Option<RawRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::line_with;
 
     #[test]
     fn short_lines_are_ignored() {
@@ -82,10 +93,45 @@ mod tests {
     }
 
     #[test]
-    fn classifies_airport_records() {
-        // cols: 1=S(rec type) 2-4=USA(area) 5=P(section) 6=A(subsection)
-        let line = "SUSAPA".to_string() + &" ".repeat(RECORD_LENGTH - 6);
+    fn classifies_airport_records_via_the_column_13_subsection() {
+        // Airport ident at [6,10), ICAO region at [10,12), subsection 'A' at
+        // index 12 — column 6 (index 5) stays blank, as in real CIFP PA rows.
+        let line = line_with(&[(0, "SUSAP"), (6, "KSFO"), (10, "K2"), (12, "A")]);
         let record = classify_line(&line).unwrap();
         assert_eq!(record.category, RecordCategory::Airport);
+    }
+
+    #[test]
+    fn classifies_runway_records() {
+        let line = line_with(&[(0, "SUSAP"), (6, "KSFO"), (10, "K2"), (12, "G")]);
+        let record = classify_line(&line).unwrap();
+        assert_eq!(record.category, RecordCategory::Runway);
+    }
+
+    #[test]
+    fn classifies_sid_star_approach_records() {
+        let sid = line_with(&[(0, "SUSAP"), (6, "KSFO"), (10, "K2"), (12, "D")]);
+        let star = line_with(&[(0, "SUSAP"), (6, "KSFO"), (10, "K2"), (12, "E")]);
+        let approach = line_with(&[(0, "SUSAP"), (6, "KSFO"), (10, "K2"), (12, "F")]);
+        assert_eq!(
+            classify_line(&sid).unwrap().category,
+            RecordCategory::Procedure(ProcedureKind::Sid)
+        );
+        assert_eq!(
+            classify_line(&star).unwrap().category,
+            RecordCategory::Procedure(ProcedureKind::Star)
+        );
+        assert_eq!(
+            classify_line(&approach).unwrap().category,
+            RecordCategory::Procedure(ProcedureKind::Approach)
+        );
+    }
+
+    #[test]
+    fn classifies_enroute_airway_records_via_the_column_6_subsection() {
+        // Enroute records use the column-6 (index 5) subsection directly.
+        let line = line_with(&[(0, "SUSA"), (4, "EA")]);
+        let record = classify_line(&line).unwrap();
+        assert_eq!(record.category, RecordCategory::Airway);
     }
 }
