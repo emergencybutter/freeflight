@@ -47,6 +47,12 @@ Built and validated against real FAA/NOAA data end to end:
   traffic (see "Live weather in apps/web"); `/cycles/latest` and
   `/cycles/:id/bundle.sqlite` serve a real `ff-etl`-published bundle,
   confirmed by downloading and opening it.
+- `ff-sync` (cycle manifest/checksum): `apps/web` now actually syncs a
+  cycle from `ff-api` (checksum-verified, cached in IndexedDB) instead
+  of only reading the static bundled SQLite — see "Offline cycle sync"
+  below. `ff-sync`'s own `CycleManifest` was never actually exercised
+  against `ff-api` before this pass and had drifted out of sync with
+  it; fixed and confirmed live.
 
 Scaffolded but not validated against real/live data:
 - `ff-notam` (FAA NOTAM client): the API it originally targeted turned
@@ -55,9 +61,6 @@ Scaffolded but not validated against real/live data:
   no credentials available in this environment (see "ff-notam" below).
 - `ff-planning` (nav-log/route math) and `ff-postflight` (track
   analysis) — unit-tested with synthetic inputs, no real flight data.
-- `ff-sync` (client-side cycle bundle sync) — skeleton only; `apps/web`
-  still reads a static bundled SQLite file rather than syncing from
-  `ff-api`'s new `/cycles/*` routes.
 - `apps/android` — just a placeholder `README.md`, no Kotlin project.
 - No route-planning UI in `apps/web` yet (DESIGN.md's nav-log/flight-
   plan builder) — the client is still read-only.
@@ -438,6 +441,78 @@ unaffected either way.
 Not done: the 9,000 ft winds-aloft altitude isn't selectable, and
 there's no click/hover popup on hazard polygons (just color + shape).
 Both are natural small follow-ups, not attempted this pass.
+
+## Offline cycle sync — done (scoped down from DESIGN.md §8's literal storage tech)
+
+Went to wire this up and found `ff-sync`'s `CycleManifest` had never
+actually been exercised against `ff-api`: it required `effective_date`
+(never sent) and non-optional `pmtiles_url`/`pmtiles_sha256` (also
+never sent — the real `ff-etl` pipeline doesn't fetch chart imagery
+yet), while `ff-api`'s actual `/cycles/latest` returned a bare
+`{cycle_id, bundle_url}` with no checksum at all. Neither side had ever
+been run against the other. Fixed:
+
+- `CycleManifest` now matches reality: dropped `effective_date`
+  (redundant — `ff-etl` names cycles by their effective date already,
+  e.g. `"2026-07-09"`), made `pmtiles_url`/`pmtiles_sha256` `Option`.
+- `ff-api`'s `/cycles/latest` now constructs and returns
+  `ff_sync::CycleManifest` directly (compiler-enforced shape match —
+  the two can't drift apart silently again the way they just did) and
+  computes a real `sqlite_sha256` by hashing the published bundle file.
+- Verified live: ran `ff-etl` to publish a real cycle, started `ff-api`,
+  confirmed the served checksum matches an independently-computed
+  `sha256sum` of the downloaded file, and confirmed `ff_sync`'s own
+  `fetch_latest_manifest` (the actual Rust client function, not just
+  the JSON shape) deserializes the live response correctly.
+
+Before touching `apps/web`, checked with the user on two real
+architecture decisions rather than assuming:
+
+- **Storage**: DESIGN.md §8 specifies sqlite-wasm + OPFS. `apps/web`
+  still uses `sql.js` in-memory (a stand-in noted since it was first
+  built). Migrating to sqlite-wasm + OPFS now would be a bigger, riskier
+  lift (different init/query API, Worker requirements for full OPFS
+  support). Chose instead: keep `sql.js`, cache the downloaded bytes in
+  IndexedDB (`apps/web/src/sync.ts`). This delivers DESIGN.md §8's
+  actual behavior — persists across reloads, checksum-verified before
+  use, works offline once synced — without the sql.js migration. Real
+  OPFS migration is still open if wanted later.
+- **UI depth**: silent auto-sync on load with a status line, no manual
+  "check for updates" button (small addition if wanted later).
+
+Implementation (`apps/web/src/sync.ts`, wired into `db.ts`/`App.tsx`):
+`syncCycle()` fetches `/cycles/latest`, and if the cached copy's
+`sqlite_sha256` already matches, reuses it with no re-download; if new,
+downloads the bundle, hashes it client-side with Web Crypto
+(`crypto.subtle.digest("SHA-256", ...)` — same algorithm as
+`ff_sync::verify_checksum` on the Rust side, just no shared code
+between the two, JS and Rust each independently correct), and caches it
+in IndexedDB only if the hash matches. Falls back to whatever's cached
+(even stale) if `ff-api` is unreachable, and to the static bundled
+`public/demo-cycle.sqlite` as a last resort. A status line always says
+which (`"Cycle 2026-07-09 · synced from ff-api"` /
+`"... offline (cached copy ...)"` / `"Using bundled demo data ..."`).
+
+Verified all three paths for real in a browser (Playwright, using
+persistent browser profiles to actually exercise IndexedDB across
+separate page loads — not just unit-testing the logic in isolation):
+1. First load with `ff-api` up: downloads, verifies, caches; status
+   shows "synced".
+2. Reload with `ff-api` still up: re-checks `/cycles/latest` but does
+   *not* re-download (checksum already matches the cache) — confirmed
+   via captured network requests, not just the status text.
+3. `ff-api` stopped, previously-synced browser profile: falls back to
+   the cached cycle, status shows "offline (cached copy)", airport
+   data still renders correctly from the cached bundle.
+4. `ff-api` stopped, fresh browser profile (nothing cached): falls back
+   to the bundled demo data, status shows that clearly.
+
+Not done: no manual "sync now" control, no download progress indicator
+for large bundles (this demo bundle is ~400KB — a real regional/ARTCC
+bundle would be much bigger and might want one), and Android's
+equivalent (`ff-uniffi`) isn't wired to any of this — `ff-sync`'s Rust
+logic is shared-ready for that, but nothing calls it from the Android
+side since `apps/android` doesn't exist yet.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 

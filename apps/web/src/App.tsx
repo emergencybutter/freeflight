@@ -1,21 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Database } from "sql.js";
-import { loadDemoDatabase, queryAll } from "./db";
+import { loadDatabase, queryAll } from "./db";
 import { MapView } from "./MapView";
+import type { SyncSource } from "./sync";
 import type { Airport, Frequency, Metar, Procedure, ProcedureLeg, ProcedureTransition, Runway, Taf } from "./types";
 import { API_BASE_URL, fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
+function syncStatusText(cycleId: string | null, source: SyncSource): string {
+  switch (source) {
+    case "synced":
+      return `Cycle ${cycleId} · synced from ff-api`;
+    case "cached":
+      return `Cycle ${cycleId} · offline (cached copy — ff-api unreachable)`;
+    case "bundled":
+      return "Using bundled demo data (ff-api unreachable, nothing cached yet)";
+  }
+}
+
 export default function App() {
   const [db, setDb] = useState<Database | null>(null);
+  const [syncStatus, setSyncStatus] = useState<{ cycleId: string | null; source: SyncSource } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedIcao, setSelectedIcao] = useState<string | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadDemoDatabase()
-      .then((database) => {
+    loadDatabase()
+      .then(({ db: database, cycleId, source }) => {
         setDb(database);
+        setSyncStatus({ cycleId, source });
         const airports = queryAll<Airport>(database, "SELECT icao FROM airport ORDER BY icao");
         if (airports.length > 0) {
           setSelectedIcao(airports[0].icao);
@@ -32,20 +46,21 @@ export default function App() {
   if (loadError) {
     return (
       <div className="error">
-        Failed to load demo data: {loadError}
+        Failed to load cycle data: {loadError}
         <br />
-        Run <code>cargo run -p ff-etl --example build_demo_bundle -- &lt;cifp-file&gt; apps/web/public/demo-cycle.sqlite
-        KSFO KOAK KSJC KPAO KHWD</code> first.
+        Nothing to fall back to — check that <code>apps/web/public/demo-cycle.sqlite</code> exists (see
+        apps/web/README.md).
       </div>
     );
   }
 
-  if (!db) {
-    return <div className="loading">Loading freeflight demo…</div>;
+  if (!db || !syncStatus) {
+    return <div className="loading">Loading freeflight…</div>;
   }
 
   return (
     <div className="app-layout">
+      <div className="sync-status">{syncStatusText(syncStatus.cycleId, syncStatus.source)}</div>
       <MapView
         db={db}
         selectedIcao={selectedIcao}

@@ -2,17 +2,24 @@
 
 Vite + React + TypeScript. A read-only viewer: a MapLibre GL JS map
 (airports + runway centerlines) above an airport list → runways/
-procedures → transitions/legs, backed by `sql.js` reading a static
-SQLite bundle (`public/demo-cycle.sqlite`).
+procedures → transitions/legs, backed by `sql.js` reading a SQLite
+bundle. That bundle is synced from `ff-api`'s published cycle when
+reachable (checksum-verified, cached in IndexedDB — see `src/sync.ts`),
+falling back to a previously-cached cycle or the static
+`public/demo-cycle.sqlite` otherwise. A status line at the top of the
+page always says which.
 
-This is a stand-in for the real architecture described in DESIGN.md
-§5/§10 (`ff-wasm` for shared planning/parsing logic, OPFS-backed local
-storage synced from `ff-api` cycle bundles) — that part isn't wired up
-yet. The current UI proves the data pipeline end to end: real FAA CIFP
-records (parsed by `ff-cifp`) merged with real FAA NASR records (parsed
-by `ff-nasr`, for runway surface type and airport communication
-frequencies — CIFP alone has neither), stored via the `ff-storage`
-schema, rendered in a browser.
+This is a stand-in for part of the real architecture described in
+DESIGN.md §5/§8/§10 — `ff-wasm` for shared planning/parsing logic isn't
+wired up yet, and storage is sql.js + IndexedDB rather than the
+sqlite-wasm + OPFS DESIGN.md specifies (a deliberate, smaller-scope
+stand-in: same "persists across reloads, verified before use" behavior
+without the bigger migration off sql.js — see `src/sync.ts`'s doc
+comment). The cycle-sync and data-pipeline parts otherwise work end to
+end with real data: real FAA CIFP records (parsed by `ff-cifp`) merged
+with real FAA NASR records (parsed by `ff-nasr`, for runway surface
+type and airport communication frequencies — CIFP alone has neither),
+stored via the `ff-storage` schema, rendered in a browser.
 
 The map renders chart imagery as a PMTiles raster layer (via the
 `pmtiles` package's MapLibre protocol handler) whenever the loaded
@@ -59,6 +66,25 @@ With `ff-api` running, the map also shows:
   actually covers (only KSFO, in this demo's 5 airports — small GA
   fields generally aren't winds-aloft reporting points, which is
   correct behavior to show, not a gap).
+
+## Syncing a cycle
+
+The status line at the top of the page (`"Cycle 2026-07-09 · synced
+from ff-api"` / `"... offline (cached copy ...)"` / `"Using bundled
+demo data ..."`) says which cycle bundle is actually loaded and where
+it came from. `ff-api` only has a cycle to serve once `ff-etl` has
+published one:
+
+```sh
+cargo run -p ff-etl    # fetches + publishes a real cycle into FF_ETL_DATA_DIR (default data/)
+cargo run -p ff-api    # serves it at /cycles/latest, /cycles/:id/bundle.sqlite
+```
+
+Without that (or without `ff-api` running at all), the client falls
+back to a previously-synced cycle cached in IndexedDB, and from there
+to the static bundled `public/demo-cycle.sqlite` — same "degrade, don't
+break" pattern as the weather features above. See `src/sync.ts` for the
+checksum-verification and fallback logic.
 
 ## Regenerating the demo bundle
 

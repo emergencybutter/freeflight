@@ -14,6 +14,15 @@
   height: 100vh;
 }
 
+.sync-status {
+  flex-shrink: 0;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+  color: #7c8aa0;
+  background: #0e1626;
+  border-bottom: 1px solid #1c2333;
+}
+
 .map-view {
   height: 42vh;
   flex-shrink: 0;
