@@ -1,20 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
-import type { Database } from "sql.js";
-import { queryAll } from "./db";
-import type {
-  Airport,
-  ChartCatalogEntry,
-  Fix,
-  GAirmet,
-  ProcedureLeg,
-  ProcedureTransition,
-  Runway,
-  Sigmet,
-  WindsAloftBulletin,
-} from "./types";
+import { API_BASE_URL } from "./api";
+import { fetchAirportDetail, fetchCharts, fetchProcedureDetail } from "./data";
+import type { Airport, GAirmet, ProcedureDetail, Runway, Sigmet, WindsAloftBulletin } from "./types";
 import { fetchGairmets, fetchMetars, fetchSigmets, fetchWindsAloft } from "./weather";
 
 const AIRPORTS_SOURCE = "airports";
@@ -163,17 +153,14 @@ function runwaysGeoJson(runways: Runway[]): GeoJSON.FeatureCollection {
 }
 
 /** One line per transition — legs from different transitions (enroute vs.
- * approach vs. missed) aren't a continuous path, so they're never joined. */
-function procedureGeoJson(
-  transitions: ProcedureTransition[],
-  legsByTransition: Map<string, ProcedureLeg[]>,
-  fixes: Map<string, Fix>,
-): GeoJSON.FeatureCollection {
+ * approach vs. missed) aren't a continuous path, so they're never joined.
+ * Fix coordinates come pre-resolved in the /data/procedures/:id response. */
+function procedureGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
-  for (const t of transitions) {
-    const coords = (legsByTransition.get(t.id) ?? [])
-      .map((leg) => (leg.fix_ident ? fixes.get(leg.fix_ident) : undefined))
-      .filter((fix): fix is Fix => fix !== undefined)
+  for (const t of detail.transitions) {
+    const coords = t.legs
+      .map((leg) => (leg.fix_ident ? detail.fixes[leg.fix_ident] : undefined))
+      .filter((fix): fix is { lat: number; lon: number } => fix !== undefined)
       .map((fix) => [fix.lon, fix.lat]);
     if (coords.length >= 2) {
       features.push({
@@ -187,9 +174,8 @@ function procedureGeoJson(
 }
 
 /** Fetches METAR/G-AIRMET/SIGMET/winds-aloft from ff-api and pushes each
- * into its map source independently, so one failing (most likely:
- * ff-api isn't running) doesn't block the others or the base map, which
- * is already usable from the static SQLite bundle regardless. */
+ * into its map source independently, so one failing doesn't block the
+ * others or the base map. */
 async function loadWeatherOverlays(map: MlMap, airports: Airport[]) {
   try {
     const metars = await fetchMetars(airports.map((a) => a.icao));
@@ -229,12 +215,12 @@ async function loadWeatherOverlays(map: MlMap, airports: Airport[]) {
 }
 
 export function MapView({
-  db,
+  airports,
   selectedIcao,
   onSelectAirport,
   selectedProcedureId,
 }: {
-  db: Database;
+  airports: Airport[];
   selectedIcao: string | null;
   onSelectAirport: (icao: string) => void;
   selectedProcedureId: string | null;
@@ -242,25 +228,6 @@ export function MapView({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [loaded, setLoaded] = useState(false);
-
-  const airports = useMemo(() => queryAll<Airport>(db, "SELECT * FROM airport"), [db]);
-  const charts = useMemo(() => queryAll<ChartCatalogEntry>(db, "SELECT * FROM chart_catalog"), [db]);
-  // Every waypoint/navaid ident -> coordinates, so a procedure leg's
-  // fix_ident can be resolved without a per-leg query. Both tables share
-  // the ident/lat/lon shape (see types.ts's `Fix`); idents aren't
-  // globally unique across ICAO regions, so this takes whichever match
-  // comes first, same as the CIFP data itself doesn't disambiguate here.
-  const fixes = useMemo(() => {
-    const rows = [
-      ...queryAll<Fix>(db, "SELECT ident, lat, lon FROM waypoint"),
-      ...queryAll<Fix>(db, "SELECT ident, lat, lon FROM navaid"),
-    ];
-    const map = new Map<string, Fix>();
-    for (const row of rows) {
-      if (!map.has(row.ident)) map.set(row.ident, row);
-    }
-    return map;
-  }, [db]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -330,15 +297,22 @@ export function MapView({
       // Chart imagery renders as the base layer, under the airport/runway/
       // procedure overlays above -- inserted before "airports-circle"
       // (already added) rather than appended, so it doesn't cover them.
-      for (const chart of charts) {
-        const sourceId = `chart-${chart.id}`;
-        map.addSource(sourceId, {
-          type: "raster",
-          url: `pmtiles://${chart.tile_url}`,
-          tileSize: 256,
-        });
-        map.addLayer({ id: sourceId, type: "raster", source: sourceId }, "airports-circle");
-      }
+      // The catalog comes from ff-api (tile_url is an ff-api path like
+      // /bundles/<cycle>/chart.pmtiles, fetched by the pmtiles protocol
+      // via HTTP range requests); fetched async, layers added on arrival.
+      void fetchCharts()
+        .then((charts) => {
+          for (const chart of charts) {
+            const sourceId = `chart-${chart.id}`;
+            map.addSource(sourceId, {
+              type: "raster",
+              url: `pmtiles://${API_BASE_URL}${chart.tile_url}`,
+              tileSize: 256,
+            });
+            map.addLayer({ id: sourceId, type: "raster", source: sourceId }, "airports-circle");
+          }
+        })
+        .catch((err: unknown) => console.warn("couldn't load the chart catalog for the map", err));
 
       // G-AIRMET/SIGMET overlays render above chart imagery but below the
       // airport markers, inserted before "airports-circle" same as charts
@@ -466,47 +440,55 @@ export function MapView({
       setLoaded(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db]);
+  }, [airports]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
 
-    const runways = selectedIcao
-      ? queryAll<Runway>(db, "SELECT * FROM runway WHERE airport_icao = ?", [selectedIcao])
-      : [];
-    (map.getSource(RUNWAYS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(runwaysGeoJson(runways));
+    const setRunways = (runways: Runway[]) =>
+      (map.getSource(RUNWAYS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(runwaysGeoJson(runways));
 
+    let cancelled = false;
     if (selectedIcao) {
+      fetchAirportDetail(selectedIcao)
+        .then((detail) => {
+          if (!cancelled) setRunways(detail.runways);
+        })
+        .catch((err: unknown) => console.warn("couldn't load runways for the map", err));
       const airport = airports.find((a) => a.icao === selectedIcao);
       if (airport) {
         map.flyTo({ center: [airport.lon, airport.lat], zoom: 12, duration: 800 });
       }
+    } else {
+      setRunways([]);
     }
-  }, [db, airports, selectedIcao, loaded]);
+    return () => {
+      cancelled = true;
+    };
+  }, [airports, selectedIcao, loaded]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
 
-    let data = EMPTY_COLLECTION;
+    const setPath = (data: GeoJSON.FeatureCollection) =>
+      (map.getSource(PROCEDURE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(data);
+
+    let cancelled = false;
     if (selectedProcedureId) {
-      const transitions = queryAll<ProcedureTransition>(
-        db,
-        "SELECT * FROM procedure_transition WHERE procedure_id = ?",
-        [selectedProcedureId],
-      );
-      const legsByTransition = new Map<string, ProcedureLeg[]>();
-      for (const t of transitions) {
-        legsByTransition.set(
-          t.id,
-          queryAll<ProcedureLeg>(db, "SELECT * FROM procedure_leg WHERE transition_id = ? ORDER BY seq", [t.id]),
-        );
-      }
-      data = procedureGeoJson(transitions, legsByTransition, fixes);
+      fetchProcedureDetail(selectedProcedureId)
+        .then((detail) => {
+          if (!cancelled) setPath(procedureGeoJson(detail));
+        })
+        .catch((err: unknown) => console.warn("couldn't load the procedure path for the map", err));
+    } else {
+      setPath(EMPTY_COLLECTION);
     }
-    (map.getSource(PROCEDURE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(data);
-  }, [db, fixes, selectedProcedureId, loaded]);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProcedureId, loaded]);
 
   return <div ref={containerRef} className="map-view" />;
 }

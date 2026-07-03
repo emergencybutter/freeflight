@@ -88,7 +88,7 @@ consumed today vs. designed-for; update it as sources come online.
 |---|---|---|---|---|
 | Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle | Implemented; validated against a real cycle file. Airway records recognized but not yet extracted/stored (§6) |
 | Airport/facility directory (runways, frequencies, remarks, services) | FAA NASR subscription | Fixed-width / CSV | 28-day AIRAC cycle | Implemented (runways, surfaces, frequencies); validated against a real subscription |
-| VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Pipeline implemented + validated with a real sectional; not yet in the automated `ff-etl` loop |
+| VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Implemented in the automated `ff-etl` loop (sectional for the region: discover cycle → download → crop to the bundle's airport bbox → tile to PMTiles) |
 | IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
 | Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle | Unstarted |
 | Airspace boundaries (Class B/C/D, SUA, MOA) | FAA NASR shapefiles | Shapefile/CSV | 28-day cycle | Unstarted (schema table exists, never populated) |
@@ -206,19 +206,20 @@ Implemented today:
 | `GET /weather/isigmet` | both clients | `Vec<IntlSigmet>` |
 | `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin` |
 | `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
-| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256) |
-| `GET /cycles/:id/bundle.sqlite` | Android sync | raw SQLite bytes |
+| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle/chart URLs, sha256s) |
+| `GET /bundles/:id/cycle.sqlite` | Android sync | raw SQLite bytes (static file service, Range-capable) |
+| `GET /bundles/:id/chart.pmtiles` | both clients | chart tiles — PMTiles is fetched via HTTP Range requests (web reads it directly through MapLibre's pmtiles protocol; Android downloads it whole during sync) |
+| `GET /data/airports?bbox=` | web | airports (optionally filtered to a bounding box) |
+| `GET /data/airports/:icao` | web | one airport + runways + frequencies |
+| `GET /data/airports/:icao/procedures` | web | procedure list |
+| `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates |
+| `GET /data/charts?bbox=` | web | chart_catalog entries (optionally bbox-filtered) |
 
-Planned (required by the web thin-client design, §8 — not yet built):
+Planned, not yet built:
 
 | Route | Serves |
 |---|---|
-| `GET /data/airports?bbox=` | airports in a bounding box, for the map view |
-| `GET /data/airports/:icao` | one airport + runways + frequencies |
-| `GET /data/airports/:icao/procedures` | procedure list |
-| `GET /data/procedures/:id` | transitions + legs (+ resolved fix coordinates) |
-| `GET /data/charts?bbox=` | chart_catalog entries covering a bbox |
-| `GET /data/search?q=` | ident/name autocomplete for the route builder (§9.3) |
+| `GET /data/search?q=` | ident/name autocomplete for the route builder (§9.3, Phase 2) |
 
 Conventions: JSON only; no authentication in Phase 1 (see §11's abuse
 note); errors are plain-text bodies with appropriate status codes (502
@@ -375,17 +376,17 @@ need to render procedures with the same fidelity as certified tools.
   `cycle-YYYY-MM-DD.sqlite` and a matching `charts-YYYY-MM-DD.pmtiles` →
   upload to object storage behind a CDN → flip a `latest` pointer only
   after both artifacts pass validation.
-- **Implemented so far** (see §13 Phase 0 and TODO.md): CIFP + NASR
-  fetch/parse/validate/publish runs end to end against live FAA data,
-  scoped to the 5-airport demo region, publishing to a local directory
+- **Implemented so far** (see §13 Phase 0 and TODO.md): CIFP + NASR +
+  sectional-chart fetch/parse/tile/validate/publish runs end to end
+  against live FAA data, scoped to the 5-airport demo region, publishing
+  both artifacts (`cycle.sqlite`, `chart.pmtiles`) to a local directory
   (`FF_ETL_DATA_DIR`) with a `latest.json` pointer rather than object
-  storage/CDN. The chart (PMTiles) artifact is **not** produced by the
-  automated loop yet — the GeoTIFF→PMTiles pipeline exists and is
-  validated, but isn't wired in — so today's `latest` pointer and
-  `CycleManifest` gate on the SQLite artifact only (`pmtiles_*` manifest
-  fields are optional for exactly this reason). "Both artifacts pass
-  validation" becomes real when charts join the loop. No cron trigger
-  yet either; runs are manual.
+  storage/CDN. The chart step discovers the current 56-day chart cycle
+  from the FAA VFR page (independent of the 28-day CIFP cycle), crops
+  the sectional to the bundle's own airport bounding box, and tiles it
+  via `ff-charts`; it needs GDAL's CLI tools on `PATH`. `pmtiles_*`
+  manifest fields stay optional so cycles published before chart tiling
+  joined the loop still parse. No cron trigger yet; runs are manual.
 - Clients never talk to FAA/NOAA chart/procedure endpoints directly.
   Android pulls the pre-processed bundle from `ff-api`/CDN and queries it
   locally (offline-capable, §8). The web client never downloads the
@@ -575,10 +576,10 @@ document survive insertions/removals.
   "recording a track" to the whole client. Trades a simpler web
   architecture for web being unusable with zero connectivity, and gives
   `ff-api` a new responsibility: the `/data/*` JSON query endpoints
-  (§4.1). The web-side sync code built under the old design
-  (`apps/web/src/sync.ts`, its IndexedDB cache, `db.ts`'s sql.js loader)
-  predates this decision and is slated for removal in favor of `/data/*`
-  queries — not yet done; tracked in TODO.md.
+  (§4.1). Implemented: the web-side sync code built under the old design
+  (`sync.ts`, its IndexedDB cache, the sql.js loader — and sql.js
+  itself) has been removed, and the web client now queries `/data/*`
+  per view, failing visibly when `ff-api` is unreachable.
 - **[api-availability] ff-api as single point of failure**: see §11's
   availability and abuse-resistance bullets — one unauthenticated
   instance currently carries the whole product. Open questions: where

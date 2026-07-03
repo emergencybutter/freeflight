@@ -39,10 +39,18 @@ pub enum BundleError {
 
 /// A source chart GeoTIFF to run through `ff-charts::geotiff_to_pmtiles`
 /// and add as a `chart_catalog` row.
+///
+/// `tile_url` is what gets stored in the catalog — i.e. the URL clients
+/// will fetch tiles from — and depends on who serves the file: the
+/// `build_demo_bundle` example uses a site-root-relative path for Vite,
+/// the real pipeline uses `ff-api`'s `/bundles/<cycle>/chart.pmtiles`
+/// route.
 pub struct ChartSource {
     pub geotiff_path: PathBuf,
     pub pmtiles_out: PathBuf,
     pub cycle_id: String,
+    pub name: String,
+    pub tile_url: String,
 }
 
 /// Everything needed to build one cycle bundle: a CIFP file, optionally a
@@ -171,34 +179,6 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         Vec::new()
     };
 
-    let chart = match &source.chart {
-        Some(chart_source) => {
-            let geotiff = GeoTiffSource {
-                path: chart_source.geotiff_path.clone(),
-                kind: ChartKind::Sectional,
-                cycle_id: chart_source.cycle_id.clone(),
-            };
-            let bbox = geotiff_to_pmtiles(&geotiff, &chart_source.pmtiles_out)?;
-            let tile_url = format!(
-                "/{}",
-                chart_source
-                    .pmtiles_out
-                    .file_name()
-                    .expect("chart pmtiles_out must be a file path")
-                    .to_string_lossy()
-            );
-            Some(ChartCatalogEntry {
-                id: format!("{}-sectional", chart_source.cycle_id),
-                name: "Sectional".to_string(),
-                kind: ChartKind::Sectional,
-                cycle_id: chart_source.cycle_id.clone(),
-                bbox,
-                tile_url,
-            })
-        }
-        None => None,
-    };
-
     if fs::metadata(output_path).is_ok() {
         fs::remove_file(output_path)?;
     }
@@ -301,22 +281,10 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         )?;
     }
 
-    if let Some(c) = &chart {
-        conn.execute(
-            "INSERT INTO chart_catalog (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![
-                c.id,
-                c.name,
-                chart_kind_str(c.kind),
-                c.cycle_id,
-                c.bbox.min_lat,
-                c.bbox.min_lon,
-                c.bbox.max_lat,
-                c.bbox.max_lon,
-                c.tile_url,
-            ],
-        )?;
+    drop(conn);
+
+    if let Some(chart_source) = &source.chart {
+        add_chart(output_path, chart_source)?;
     }
 
     Ok(BundleStats {
@@ -328,8 +296,70 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         legs: parsed.legs.len(),
         navaids: navaids.len(),
         waypoints: waypoints.len(),
-        has_chart: chart.is_some(),
+        has_chart: source.chart.is_some(),
     })
+}
+
+/// Runs `chart.geotiff_path` through `ff-charts::geotiff_to_pmtiles`
+/// (writing `chart.pmtiles_out`) and inserts the matching
+/// `chart_catalog` row into an already-built bundle at `bundle_path`.
+/// Split out from [`build_bundle`] so the real pipeline can add the
+/// chart *after* the bundle exists — the crop bbox is derived from the
+/// bundle's own airports (see `pipeline.rs`), which don't exist until
+/// the bundle is built.
+pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleError> {
+    let geotiff = GeoTiffSource {
+        path: chart.geotiff_path.clone(),
+        kind: ChartKind::Sectional,
+        cycle_id: chart.cycle_id.clone(),
+    };
+    let bbox = geotiff_to_pmtiles(&geotiff, &chart.pmtiles_out)?;
+    let entry = ChartCatalogEntry {
+        id: format!("{}-sectional", chart.cycle_id),
+        name: chart.name.clone(),
+        kind: ChartKind::Sectional,
+        cycle_id: chart.cycle_id.clone(),
+        bbox,
+        tile_url: chart.tile_url.clone(),
+    };
+
+    let conn = rusqlite::Connection::open(bundle_path)?;
+    conn.execute(
+        "INSERT INTO chart_catalog (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            entry.id,
+            entry.name,
+            chart_kind_str(entry.kind),
+            entry.cycle_id,
+            entry.bbox.min_lat,
+            entry.bbox.min_lon,
+            entry.bbox.max_lat,
+            entry.bbox.max_lon,
+            entry.tile_url,
+        ],
+    )?;
+    Ok(())
+}
+
+/// The bounding box of a built bundle's airports (`min_lat, min_lon,
+/// max_lat, max_lon`) — used to crop a full sectional GeoTIFF down to
+/// just the region the bundle covers before tiling it.
+pub fn bundle_airport_bbox(bundle_path: &Path) -> Result<(f64, f64, f64, f64), BundleError> {
+    let conn = rusqlite::Connection::open(bundle_path)?;
+    let bbox = conn.query_row(
+        "SELECT MIN(lat), MIN(lon), MAX(lat), MAX(lon) FROM airport",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, f64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        },
+    )?;
+    Ok(bbox)
 }
 
 /// Parses the NASR extract at `dir` and returns real runway surfaces

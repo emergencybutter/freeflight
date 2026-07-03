@@ -1,38 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
-import type { Database } from "sql.js";
-import { loadDatabase, queryAll } from "./db";
+import { useEffect, useState } from "react";
+import { API_BASE_URL } from "./api";
+import { fetchAirportDetail, fetchAirportProcedures, fetchAirports, fetchCycleManifest, fetchProcedureDetail } from "./data";
 import { MapView } from "./MapView";
-import type { SyncSource } from "./sync";
-import type { Airport, Frequency, Metar, Procedure, ProcedureLeg, ProcedureTransition, Runway, Taf } from "./types";
-import { API_BASE_URL, fetchMetar, fetchTaf } from "./weather";
+import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, Taf } from "./types";
+import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
-function syncStatusText(cycleId: string | null, source: SyncSource): string {
-  switch (source) {
-    case "synced":
-      return `Cycle ${cycleId} · synced from ff-api`;
-    case "cached":
-      return `Cycle ${cycleId} · offline (cached copy — ff-api unreachable)`;
-    case "bundled":
-      return "Using bundled demo data (ff-api unreachable, nothing cached yet)";
-  }
-}
-
 export default function App() {
-  const [db, setDb] = useState<Database | null>(null);
-  const [syncStatus, setSyncStatus] = useState<{ cycleId: string | null; source: SyncSource } | null>(null);
+  const [airports, setAirports] = useState<Airport[] | null>(null);
+  const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedIcao, setSelectedIcao] = useState<string | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadDatabase()
-      .then(({ db: database, cycleId, source }) => {
-        setDb(database);
-        setSyncStatus({ cycleId, source });
-        const airports = queryAll<Airport>(database, "SELECT icao FROM airport ORDER BY icao");
-        if (airports.length > 0) {
-          setSelectedIcao(airports[0].icao);
+    // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
+    // fetch fails there's nothing to fall back to — fail visibly.
+    Promise.all([fetchAirports(), fetchCycleManifest()])
+      .then(([airportList, manifest]) => {
+        setAirports(airportList);
+        setCycleId(manifest.cycle_id);
+        if (airportList.length > 0) {
+          setSelectedIcao(airportList[0].icao);
         }
       })
       .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
@@ -46,61 +35,58 @@ export default function App() {
   if (loadError) {
     return (
       <div className="error">
-        Failed to load cycle data: {loadError}
+        Can't reach ff-api at {API_BASE_URL} — this client has no offline mode (see DESIGN.md §8).
         <br />
-        Nothing to fall back to — check that <code>apps/web/public/demo-cycle.sqlite</code> exists (see
-        apps/web/README.md).
+        Start it with <code>cargo run -p ff-api</code> (and publish a cycle first with <code>cargo run -p ff-etl</code>).
+        <br />
+        <span className="hint">{loadError}</span>
       </div>
     );
   }
 
-  if (!db || !syncStatus) {
+  if (!airports) {
     return <div className="loading">Loading freeflight…</div>;
   }
 
   return (
     <div className="app-layout">
-      <div className="sync-status">{syncStatusText(syncStatus.cycleId, syncStatus.source)}</div>
+      <div className="sync-status">
+        Cycle {cycleId} · live from ff-api at {API_BASE_URL}
+      </div>
       <MapView
-        db={db}
+        airports={airports}
         selectedIcao={selectedIcao}
         onSelectAirport={selectAirport}
         selectedProcedureId={selectedProcedureId}
       />
       <div className="layout">
-        <AirportList db={db} selectedIcao={selectedIcao} onSelect={selectAirport} />
+        <AirportList airports={airports} selectedIcao={selectedIcao} onSelect={selectAirport} />
         {selectedIcao && (
-          <AirportDetail
-            db={db}
+          <AirportPanel
             icao={selectedIcao}
             selectedProcedureId={selectedProcedureId}
             onSelectProcedure={setSelectedProcedureId}
           />
         )}
-        {selectedProcedureId && <ProcedureDetail db={db} procedureId={selectedProcedureId} />}
+        {selectedProcedureId && <ProcedurePanel procedureId={selectedProcedureId} />}
       </div>
     </div>
   );
 }
 
 function AirportList({
-  db,
+  airports,
   selectedIcao,
   onSelect,
 }: {
-  db: Database;
+  airports: Airport[];
   selectedIcao: string | null;
   onSelect: (icao: string) => void;
 }) {
-  const airports = useMemo(
-    () => queryAll<Airport>(db, "SELECT * FROM airport ORDER BY icao"),
-    [db],
-  );
-
   return (
     <div className="panel airport-list">
       <h2>Airports</h2>
-      <p className="hint">{airports.length} loaded from the demo cycle bundle</p>
+      <p className="hint">{airports.length} in the current cycle</p>
       <ul>
         {airports.map((a) => (
           <li key={a.icao}>
@@ -116,49 +102,66 @@ function AirportList({
   );
 }
 
-function AirportDetail({
-  db,
+function AirportPanel({
   icao,
   selectedProcedureId,
   onSelectProcedure,
 }: {
-  db: Database;
   icao: string;
   selectedProcedureId: string | null;
   onSelectProcedure: (id: string) => void;
 }) {
-  const airport = useMemo(
-    () => queryAll<Airport>(db, "SELECT * FROM airport WHERE icao = ?", [icao])[0],
-    [db, icao],
-  );
-  const runways = useMemo(
-    () => queryAll<Runway>(db, "SELECT * FROM runway WHERE airport_icao = ? ORDER BY ident", [icao]),
-    [db, icao],
-  );
-  const frequencies = useMemo(
-    () => queryAll<Frequency>(db, "SELECT * FROM frequency WHERE airport_icao = ?", [icao]),
-    [db, icao],
-  );
-  const procedures = useMemo(
-    () => queryAll<Procedure>(db, "SELECT * FROM procedure WHERE airport_icao = ? ORDER BY kind, ident", [icao]),
-    [db, icao],
-  );
+  const [detail, setDetail] = useState<AirportDetailData | null>(null);
+  const [procedures, setProcedures] = useState<Procedure[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!airport) return null;
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null);
+    setError(null);
+    Promise.all([fetchAirportDetail(icao), fetchAirportProcedures(icao)])
+      .then(([airportDetail, procedureList]) => {
+        if (cancelled) return;
+        setDetail(airportDetail);
+        setProcedures(procedureList);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [icao]);
+
+  if (error) {
+    return (
+      <div className="panel airport-detail">
+        <p className="hint">Failed to load {icao}: {error}</p>
+      </div>
+    );
+  }
+  if (!detail) {
+    return (
+      <div className="panel airport-detail">
+        <p className="hint">loading…</p>
+      </div>
+    );
+  }
 
   const byKind = (kind: string) => procedures.filter((p) => p.kind === kind);
   const freqPriority = ["CTAF", "UNICOM", "TWR", "GND", "CLNC DEL", "ATIS", "AWOS", "APP", "DEP", "OTHER"];
-  const sortedFrequencies = [...frequencies].sort(
+  const sortedFrequencies = [...detail.frequencies].sort(
     (a, b) => freqPriority.indexOf(a.kind) - freqPriority.indexOf(b.kind),
   );
 
   return (
     <div className="panel airport-detail">
       <h2>
-        {airport.icao} — {airport.name}
+        {detail.icao} — {detail.name}
       </h2>
       <p className="hint">
-        {airport.lat.toFixed(4)}, {airport.lon.toFixed(4)} · elevation {airport.elevation_ft} ft
+        {detail.lat.toFixed(4)}, {detail.lon.toFixed(4)} · elevation {detail.elevation_ft} ft
       </p>
 
       <WeatherSection icao={icao} />
@@ -175,7 +178,7 @@ function AirportDetail({
           </tr>
         </thead>
         <tbody>
-          {runways.map((r) => (
+          {detail.runways.map((r) => (
             <tr key={r.ident}>
               <td>{r.ident}</td>
               <td>{r.length_ft.toLocaleString()} ft</td>
@@ -190,7 +193,7 @@ function AirportDetail({
       </table>
 
       <h3>Frequencies</h3>
-      {sortedFrequencies.length === 0 && <p className="hint">none in this bundle</p>}
+      {sortedFrequencies.length === 0 && <p className="hint">none in this cycle</p>}
       {sortedFrequencies.length > 0 && (
         <table>
           <thead>
@@ -215,7 +218,7 @@ function AirportDetail({
       {(["SID", "STAR", "APPROACH"] as const).map((kind) => (
         <div key={kind}>
           <h3>{kind === "APPROACH" ? "Approaches" : kind + "s"}</h3>
-          {byKind(kind).length === 0 && <p className="hint">none in this bundle</p>}
+          {byKind(kind).length === 0 && <p className="hint">none in this cycle</p>}
           <ul className="procedure-list">
             {byKind(kind).map((p) => (
               <li key={p.id}>
@@ -242,9 +245,7 @@ function formatWind(wdir: number | string | null, wspd: number | null, wgst: num
 }
 
 /** Live METAR/TAF for the selected airport, proxied through ff-api
- * (services/ff-api) so the client doesn't hit aviationweather.gov
- * directly. ff-api is a separate process from `npm run dev` — see
- * apps/web/README.md. */
+ * (services/ff-api). */
 function WeatherSection({ icao }: { icao: string }) {
   const [metar, setMetar] = useState<Metar | null>(null);
   const [taf, setTaf] = useState<Taf | null>(null);
@@ -277,12 +278,7 @@ function WeatherSection({ icao }: { icao: string }) {
     <>
       <h3>Weather</h3>
       {loading && <p className="hint">loading…</p>}
-      {error && (
-        <p className="hint">
-          Couldn't reach ff-api at {API_BASE_URL} — is it running? (<code>cargo run -p ff-api</code>, see
-          apps/web/README.md)
-        </p>
-      )}
+      {error && <p className="hint">Couldn't fetch weather: {error}</p>}
       {!loading && !error && (
         <>
           {metar ? (
@@ -310,38 +306,48 @@ function WeatherSection({ icao }: { icao: string }) {
   );
 }
 
-function ProcedureDetail({ db, procedureId }: { db: Database; procedureId: string }) {
-  const procedure = useMemo(
-    () => queryAll<Procedure>(db, "SELECT * FROM procedure WHERE id = ?", [procedureId])[0],
-    [db, procedureId],
-  );
-  const transitions = useMemo(
-    () =>
-      queryAll<ProcedureTransition>(db, "SELECT * FROM procedure_transition WHERE procedure_id = ? ORDER BY kind, ident", [
-        procedureId,
-      ]),
-    [db, procedureId],
-  );
-  const legsByTransition = useMemo(() => {
-    const map = new Map<string, ProcedureLeg[]>();
-    for (const t of transitions) {
-      map.set(
-        t.id,
-        queryAll<ProcedureLeg>(db, "SELECT * FROM procedure_leg WHERE transition_id = ? ORDER BY seq", [t.id]),
-      );
-    }
-    return map;
-  }, [db, transitions]);
+function ProcedurePanel({ procedureId }: { procedureId: string }) {
+  const [detail, setDetail] = useState<ProcedureDetailData | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!procedure) return null;
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null);
+    setError(null);
+    fetchProcedureDetail(procedureId)
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [procedureId]);
+
+  if (error) {
+    return (
+      <div className="panel procedure-detail">
+        <p className="hint">Failed to load procedure: {error}</p>
+      </div>
+    );
+  }
+  if (!detail) {
+    return (
+      <div className="panel procedure-detail">
+        <p className="hint">loading…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="panel procedure-detail">
       <h2>
-        {procedure.kind} {procedure.ident}
+        {detail.kind} {detail.ident}
       </h2>
-      {procedure.runway_ident && <p className="hint">runway {procedure.runway_ident}</p>}
-      {transitions.map((t) => (
+      {detail.runway_ident && <p className="hint">runway {detail.runway_ident}</p>}
+      {detail.transitions.map((t) => (
         <div key={t.id} className="transition">
           <h3>
             {t.kind}
@@ -358,7 +364,7 @@ function ProcedureDetail({ db, procedureId }: { db: Database; procedureId: strin
               </tr>
             </thead>
             <tbody>
-              {(legsByTransition.get(t.id) ?? []).map((leg) => (
+              {t.legs.map((leg) => (
                 <tr key={leg.seq}>
                   <td>{leg.seq}</td>
                   <td>{leg.path_and_term}</td>

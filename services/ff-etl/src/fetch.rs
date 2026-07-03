@@ -11,6 +11,7 @@ use thiserror::Error;
 
 const CIFP_DIR_URL: &str = "https://aeronav.faa.gov/Upload_313-d/cifp/";
 const NASR_URL_TEMPLATE: &str = "https://nfdc.faa.gov/webContent/28DaySub/28DaySubscription_Effective_";
+const VFR_CHARTS_PAGE_URL: &str = "https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/";
 
 #[derive(Debug, Error)]
 pub enum FetchError {
@@ -24,6 +25,10 @@ pub enum FetchError {
     NoCifpCycleFound,
     #[error("no CSV_Data/*.zip entry found inside the NASR subscription package")]
     NoNasrCsvFound,
+    #[error("no visual-chart cycle dates found on the FAA VFR charts page")]
+    NoChartCycleFound,
+    #[error("no .tif entry found inside the sectional chart package")]
+    NoChartTifFound,
 }
 
 pub struct FetchedCifp {
@@ -151,9 +156,104 @@ pub fn fetch_nasr(workdir: &Path, cycle_date: &str) -> Result<PathBuf, FetchErro
     Ok(nasr_dir)
 }
 
+/// Scans the FAA VFR charts page for `visual/MM-DD-YYYY/` chart-cycle
+/// directory URLs and returns the dates found, most recent first. The
+/// page lists the current and next 56-day chart cycles; both directories
+/// exist on `aeronav.faa.gov` (confirmed live), so trying newest-first
+/// with fallback covers the window where the "next" cycle is listed but
+/// a given chart file hasn't been uploaded yet.
+fn chart_cycle_dates(page_html: &str) -> Vec<String> {
+    let mut dates = Vec::new();
+    let mut rest = page_html;
+    while let Some(pos) = rest.find("visual/") {
+        rest = &rest[pos + "visual/".len()..];
+        if rest.len() >= 10 {
+            let candidate = &rest[..10];
+            let bytes = candidate.as_bytes();
+            let shaped = bytes[2] == b'-'
+                && bytes[5] == b'-'
+                && bytes.iter().enumerate().all(|(i, b)| i == 2 || i == 5 || b.is_ascii_digit());
+            if shaped && !dates.contains(&candidate.to_string()) {
+                dates.push(candidate.to_string());
+            }
+        }
+    }
+    // MM-DD-YYYY doesn't sort chronologically as a string; sort by the
+    // rearranged YYYY-MM-DD form, newest first.
+    dates.sort_by_key(|d| std::cmp::Reverse(format!("{}-{}", &d[6..10], &d[0..5])));
+    dates
+}
+
+/// Downloads the named sectional chart (e.g. `"San_Francisco"`) for the
+/// most recent chart cycle listed on the FAA VFR page, extracts the
+/// GeoTIFF into `workdir`, and returns its path. Chart cycles are 56-day
+/// (every other AIRAC cycle), so this is discovered independently of the
+/// CIFP cycle date rather than assuming they match.
+pub fn fetch_sectional_chart(workdir: &Path, sectional_name: &str) -> Result<PathBuf, FetchError> {
+    let client = http_client();
+
+    let page = client.get(VFR_CHARTS_PAGE_URL).send()?.error_for_status()?.text()?;
+    let dates = chart_cycle_dates(&page);
+    if dates.is_empty() {
+        return Err(FetchError::NoChartCycleFound);
+    }
+
+    let mut zip_bytes = None;
+    for date in &dates {
+        let url = format!("https://aeronav.faa.gov/visual/{date}/sectional-files/{sectional_name}.zip");
+        let resp = client.get(&url).send()?;
+        if resp.status().is_success() {
+            tracing::info!(chart_cycle = %date, "downloading sectional chart");
+            zip_bytes = Some(resp.bytes()?);
+            break;
+        }
+        tracing::warn!(chart_cycle = %date, status = %resp.status(), "sectional not available for this cycle, trying older");
+    }
+    let zip_bytes = zip_bytes.ok_or(FetchError::NoChartCycleFound)?;
+
+    let zip_path = workdir.join("sectional.zip");
+    std::fs::write(&zip_path, &zip_bytes)?;
+
+    let zip_file = std::fs::File::open(&zip_path)?;
+    let mut archive = zip::ZipArchive::new(zip_file)?;
+    let tif_index = (0..archive.len())
+        .find(|&i| {
+            archive
+                .by_index(i)
+                .map(|entry| entry.name().ends_with(".tif"))
+                .unwrap_or(false)
+        })
+        .ok_or(FetchError::NoChartTifFound)?;
+
+    let tif_path = workdir.join("sectional.tif");
+    {
+        let mut entry = archive.by_index(tif_index)?;
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)?;
+        std::fs::write(&tif_path, &buf)?;
+    }
+
+    Ok(tif_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_chart_cycle_dates_newest_first() {
+        let html = r#"
+            <a href="https://aeronav.faa.gov/visual/05-14-2026/All_Files/Sectional.zip">x</a>
+            <a href="https://aeronav.faa.gov/visual/07-09-2026/All_Files/Sectional.zip">y</a>
+            <a href="https://aeronav.faa.gov/visual/05-14-2026/Caribbean/Caribbean_1_VFR.zip">z</a>
+        "#;
+        assert_eq!(chart_cycle_dates(html), vec!["07-09-2026".to_string(), "05-14-2026".to_string()]);
+    }
+
+    #[test]
+    fn ignores_malformed_visual_paths() {
+        assert!(chart_cycle_dates("visual/notadate/x.zip").is_empty());
+    }
 
     #[test]
     fn picks_the_latest_cifp_filename_from_a_directory_listing() {

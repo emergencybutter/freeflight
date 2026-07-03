@@ -1,6 +1,8 @@
-// Row shapes mirror the ff-storage schema (DESIGN.md §6) directly —
-// there's no separate wire format yet, so these match the SQLite columns
-// one-to-one.
+// Shapes mirror ff-api's /data/* JSON responses (DESIGN.md §4.1), whose
+// field names in turn mirror the ff-storage schema columns one-to-one —
+// they were originally written against those columns back when this
+// client queried the SQLite bundle itself, and the wire format kept
+// them.
 
 export interface Airport {
   icao: string;
@@ -36,6 +38,13 @@ export interface Frequency {
   remarks: string | null;
 }
 
+/** `GET /data/airports/:icao` — the airport row plus its runways and
+ * frequencies in one response. */
+export interface AirportDetail extends Airport {
+  runways: Runway[];
+  frequencies: Frequency[];
+}
+
 export interface Procedure {
   id: string;
   airport_icao: string;
@@ -44,15 +53,7 @@ export interface Procedure {
   runway_ident: string | null;
 }
 
-export interface ProcedureTransition {
-  id: string;
-  procedure_id: string;
-  ident: string;
-  kind: string;
-}
-
 export interface ProcedureLeg {
-  transition_id: string;
   seq: number;
   path_and_term: string;
   fix_ident: string | null;
@@ -62,12 +63,25 @@ export interface ProcedureLeg {
   turn_direction: string | null;
 }
 
-/** Not a distinct table — a lat/lon lookup merged from `waypoint` and
- * `navaid`, keyed by ident, so procedure legs can be plotted on the map. */
-export interface Fix {
+export interface ProcedureTransitionDetail {
+  id: string;
   ident: string;
+  kind: string;
+  legs: ProcedureLeg[];
+}
+
+export interface FixCoord {
   lat: number;
   lon: number;
+}
+
+/** `GET /data/procedures/:id` — the procedure with its transitions,
+ * legs, and server-resolved coordinates for every referenced fix that
+ * exists in the cycle bundle (runway-threshold pseudo-fixes like
+ * "RW28L" won't appear). */
+export interface ProcedureDetail extends Procedure {
+  transitions: ProcedureTransitionDetail[];
+  fixes: Record<string, FixCoord>;
 }
 
 export interface ChartCatalogEntry {
@@ -80,6 +94,15 @@ export interface ChartCatalogEntry {
   max_lat: number;
   max_lon: number;
   tile_url: string;
+}
+
+/** `GET /cycles/latest` — mirrors ff-sync's CycleManifest. */
+export interface CycleManifest {
+  cycle_id: string;
+  sqlite_url: string;
+  sqlite_sha256: string;
+  pmtiles_url: string | null;
+  pmtiles_sha256: string | null;
 }
 
 // Mirror ff-weather's Metar/Taf wire shape (crates/ff-weather/src/records.rs)

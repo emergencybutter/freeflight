@@ -6,9 +6,6 @@
 /data/
 *.sqlite
 *.pmtiles
-# exception: checked-in sample data for the web demo (apps/web/README.md)
-!apps/web/public/demo-cycle.sqlite
-!apps/web/public/demo-chart.pmtiles
 
 # editor/OS
 .DS_Store

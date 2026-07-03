@@ -19,11 +19,10 @@
 //!
 //! `--chart-geotiff`/`--chart-pmtiles-out` run a source chart GeoTIFF
 //! through `ff_charts::geotiff_to_pmtiles` and add a matching
-//! `chart_catalog` row pointing at the resulting PMTiles file (served
-//! from wherever `--chart-pmtiles-out` puts it — typically
-//! `apps/web/public/...` so Vite serves it as a static asset at the
-//! same path relative to the site root). Both flags are required
-//! together; omit both to build a bundle with no chart imagery.
+//! `chart_catalog` row whose `tile_url` is the output filename at the
+//! site root — i.e. this assumes some static server will serve the
+//! output directory. Both flags are required together; omit both to
+//! build a bundle with no chart imagery.
 use ff_etl::bundle::{build_bundle, BundleSource, ChartSource};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -79,11 +78,26 @@ fn main() {
     let args = parse_args();
 
     let chart = match (&args.chart_geotiff, &args.chart_pmtiles_out) {
-        (Some(geotiff_path), Some(pmtiles_out)) => Some(ChartSource {
-            geotiff_path: PathBuf::from(geotiff_path),
-            pmtiles_out: PathBuf::from(pmtiles_out),
-            cycle_id: "demo".to_string(),
-        }),
+        (Some(geotiff_path), Some(pmtiles_out)) => {
+            let pmtiles_out = PathBuf::from(pmtiles_out);
+            // Site-root-relative, for a static server (e.g. Vite) serving
+            // the output directory — unlike the real pipeline, which
+            // stores ff-api's /bundles/<cycle>/chart.pmtiles route here.
+            let tile_url = format!(
+                "/{}",
+                pmtiles_out
+                    .file_name()
+                    .expect("--chart-pmtiles-out must be a file path")
+                    .to_string_lossy()
+            );
+            Some(ChartSource {
+                geotiff_path: PathBuf::from(geotiff_path),
+                pmtiles_out,
+                cycle_id: "demo".to_string(),
+                name: "Demo Sectional Excerpt".to_string(),
+                tile_url,
+            })
+        }
         (None, None) => None,
         _ => {
             eprintln!("--chart-geotiff and --chart-pmtiles-out must be given together");

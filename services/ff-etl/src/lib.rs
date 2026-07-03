@@ -2,6 +2,7 @@
 //! sources (DESIGN.md §7).
 
 pub mod bundle;
+pub mod chart_prep;
 pub mod fetch;
 pub mod pipeline;
 pub mod publish;

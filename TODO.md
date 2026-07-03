@@ -27,10 +27,12 @@ Built and validated against real FAA/NOAA data end to end:
   out to real GDAL CLI tools (gdalwarp/gdal_translate/gdaladdo), then a
   pure-Rust step repacks MBTiles into PMTiles. Validated against a real
   FAA sectional GeoTIFF (see "Chart imagery" below).
-- `apps/web`: a real (if minimal) MapLibre-based viewer reading a
-  SQLite cycle bundle via `sql.js` — airport list, runway/procedure
-  detail, a map with real chart imagery, airport markers, runway
-  centerlines, and procedure-leg paths.
+- `apps/web`: a real (if minimal) MapLibre-based viewer — airport list,
+  runway/procedure detail, a map with real chart imagery, airport
+  markers, runway centerlines, procedure-leg paths, and live weather
+  overlays. A thin client of `ff-api`'s `/data/*` endpoints per
+  DESIGN.md §8 (no local DB, no offline mode — see "Web thin client"
+  below).
 - `ff-weather` (aviationweather.gov client): `Metar`/`Taf` deserialization
   validated against real captured METAR/TAF responses (see "ff-weather"
   below) — three type/edge-case bugs found and fixed. `GAirmet`/`Sigmet`/
@@ -40,19 +42,21 @@ Built and validated against real FAA/NOAA data end to end:
   Winds/temps aloft (the one product with no JSON API — a real
   fixed-width text parser, see "Winds/temps aloft" below) added too.
 - `services/ff-etl` (real batch pipeline, distinct from the
-  `build_demo_bundle` example): fetches the live CIFP cycle and matching
-  NASR subscription, builds an `ff-storage`-schema bundle, validates it,
-  and publishes it — run for real, not just built (see "Phase 0" below).
+  `build_demo_bundle` example): fetches the live CIFP cycle, matching
+  NASR subscription, and the region's sectional chart; builds an
+  `ff-storage`-schema bundle + PMTiles chart archive; validates and
+  publishes both — run for real, not just built (see "Phase 0" and
+  "Web thin client" below). Chart steps need GDAL CLI tools on PATH.
 - `services/ff-api`: weather proxy routes run for real against live
-  traffic (see "Live weather in apps/web"); `/cycles/latest` and
-  `/cycles/:id/bundle.sqlite` serve a real `ff-etl`-published bundle,
-  confirmed by downloading and opening it.
-- `ff-sync` (cycle manifest/checksum): `apps/web` now actually syncs a
-  cycle from `ff-api` (checksum-verified, cached in IndexedDB) instead
-  of only reading the static bundled SQLite — see "Offline cycle sync"
-  below. `ff-sync`'s own `CycleManifest` was never actually exercised
-  against `ff-api` before this pass and had drifted out of sync with
-  it; fixed and confirmed live.
+  traffic (see "Live weather in apps/web"); `/cycles/latest` +
+  `/bundles/*` (Range-capable static files) + the `/data/*` JSON query
+  endpoints all serve a real `ff-etl`-published cycle, confirmed live.
+- `ff-sync` (cycle manifest/checksum): Rust-side manifest/checksum
+  logic confirmed live against `ff-api` (its `CycleManifest` had
+  silently drifted from what `ff-api` served until they were first
+  actually run against each other — fixed, and `ff-api` now constructs
+  that exact type). Its consumer is the future Android client; the web
+  client no longer syncs anything (see "Web thin client" below).
 
 Scaffolded but not validated against real/live data:
 - `ff-notam` (FAA NOTAM client): the API it originally targeted turned
@@ -187,11 +191,10 @@ ways (agreed with the user before implementing):
   boundary. DESIGN.md says "e.g. a single ARTCC" — expanding to an
   actual ARTCC selection (NASR has the association data for this) is a
   follow-up, not done here.
-- **Charts**: `fetch_charts` is still not implemented — the
-  GeoTIFF→PMTiles pipeline itself is done and validated (see "Chart
-  imagery" below), just not wired into this automated fetch loop yet.
-  Automating "download the current cycle's sectional, crop it to the
-  region, tile it" is a clean, separate follow-up.
+- **Charts**: `fetch_charts` was still unimplemented as of this pass —
+  since done in a follow-up: the pipeline now fetches, crops, and tiles
+  the region's sectional automatically (see "Web thin client + chart
+  automation" below).
 
 ## Chart imagery — done
 
@@ -222,11 +225,13 @@ FAA charts are public domain; no attribution/licensing blocker.
 
 ## Possible follow-ups
 
-- Only one sectional is bundled (San Francisco, covering the 5 demo
-  airports). Expanding demo coverage to other regions would need
-  additional cropped GeoTIFFs run through the same pipeline.
-- The crop bounding box is hand-picked around the 5 demo ICAOs; no
-  tooling yet derives it automatically from the airport list.
+- Only one sectional is covered (San Francisco, matching the 5-airport
+  region) — the region definition (`REGION_ICAOS` + `REGION_SECTIONAL`
+  in `pipeline.rs`) is still hardcoded; real region/ARTCC selection
+  would need to pick the right sectional(s) too.
+- ~~The crop bounding box is hand-picked~~ — done: the pipeline now
+  derives it from the built bundle's own airports plus a margin (see
+  "Web thin client" below).
 
 ## ff-weather — validated against live data, three bugs fixed
 
@@ -442,7 +447,16 @@ Not done: the 9,000 ft winds-aloft altitude isn't selectable, and
 there's no click/hover popup on hazard polygons (just color + shape).
 Both are natural small follow-ups, not attempted this pass.
 
-## Offline cycle sync — done (scoped down from DESIGN.md §8's literal storage tech)
+## Offline cycle sync — built, then superseded by a design change
+
+**Superseded**: after this was built and verified, the design changed
+(DESIGN.md v0.2, risk [web-offline]) to scope offline capability to
+Android only — the web-side sync stack described below (`sync.ts`,
+IndexedDB cache, sql.js loading) has since been **removed** in favor of
+a thin client querying `ff-api` per view (see "Web thin client" below).
+The `ff-sync` manifest fix and `ff-api` checksum work from this pass
+survive (Android's future sync path uses them); the section is kept for
+the record of what was validated and why.
 
 Went to wire this up and found `ff-sync`'s `CycleManifest` had never
 actually been exercised against `ff-api`: it required `effective_date`
@@ -513,6 +527,55 @@ bundle would be much bigger and might want one), and Android's
 equivalent (`ff-uniffi`) isn't wired to any of this — `ff-sync`'s Rust
 logic is shared-ready for that, but nothing calls it from the Android
 side since `apps/android` doesn't exist yet.
+
+## Web thin client + chart automation — done
+
+Synced the code with DESIGN.md v0.2's [web-offline] decision, in one
+pass (both halves verified live end to end):
+
+**ff-etl: charts joined the automated loop.** `fetch_sectional_chart`
+discovers the current 56-day chart cycle by scraping the FAA VFR page
+for `visual/MM-DD-YYYY/` URLs (chart cycles are every other AIRAC
+cycle, so the CIFP cycle date can't just be reused — newest listed is
+tried first with fallback, since FAA lists current + next and both
+directories exist live). The sectional is cropped to a bbox derived
+from the built bundle's own airports plus a 0.35° margin (closing the
+"hand-picked bbox" follow-up), palette-expanded, and tiled via the
+existing validated `ff-charts` pipeline. `publish_bundle` now publishes
+`chart.pmtiles` next to `cycle.sqlite` and `latest.json` points at
+both; `/cycles/latest` fills the manifest's `pmtiles_url`/`sha256`
+(still `Option` — cycles published before this still parse). Full
+pipeline run: ~33s including the 74MB chart download and GDAL work.
+
+**ff-api: the `/data/*` endpoints from DESIGN.md §4.1**, opening the
+latest published bundle server-side per request (re-resolves
+`latest.json` every time, so a new `ff-etl` publish is picked up with
+no restart): `/data/airports[?bbox]`, `/data/airports/:icao`,
+`/data/airports/:icao/procedures`, `/data/procedures/:id` (with
+server-resolved fix coordinates), `/data/charts[?bbox]`. Bundle files
+moved from a custom read-whole-file route to a `ServeDir` static
+service at `/bundles/…` — PMTiles is fetched via HTTP Range requests,
+which the old handler couldn't serve (confirmed live: 206 Partial
+Content). `/data/search` deliberately not built until the Phase 2
+route builder exists to consume it.
+
+**apps/web: now the §8 thin client.** Deleted `sync.ts` (IndexedDB
+cache), `db.ts`, sql.js and its wasm bundle (~40KB gzip off the build,
+plus the whole 660KB wasm chunk), and the checked-in demo
+bundle/chart files in `public/` (with their `.gitignore` exceptions).
+Every view fetches from `ff-api` (`data.ts`); chart imagery streams
+straight from `/bundles/<cycle>/chart.pmtiles` by range request. The
+status line shows the served cycle; if `ff-api` is unreachable the app
+shows a clear full-page error — no fallback, per §8's "fail visibly"
+bar, verified in a browser with `ff-api` stopped. Also verified with
+everything up: chart imagery, procedure paths, runways, weather
+overlays, no console errors.
+
+Note for older sections above: references to "the checked-in demo
+bundle" / `apps/web/public/demo-cycle.sqlite` describe a state that no
+longer exists — the only bundle now is whatever `ff-etl` last
+published. `build_demo_bundle` (the example) still works for building
+bundles from local files but nothing consumes its output by default.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 
