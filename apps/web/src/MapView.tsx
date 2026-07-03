@@ -3,7 +3,7 @@ import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
-import { fetchAirportDetail, fetchCharts, fetchProcedureDetail } from "./data";
+import { fetchAirportDetail, fetchAirportsInBbox, fetchCharts, fetchProcedureDetail } from "./data";
 import type { Airport, GAirmet, ProcedureDetail, Runway, Sigmet, WindsAloftBulletin } from "./types";
 import { fetchGairmets, fetchMetars, fetchSigmets, fetchWindsAloft } from "./weather";
 
@@ -173,23 +173,76 @@ function procedureGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features };
 }
 
-/** Fetches METAR/G-AIRMET/SIGMET/winds-aloft from ff-api and pushes each
- * into its map source independently, so one failing doesn't block the
- * others or the base map. */
-async function loadWeatherOverlays(map: MlMap, airports: Airport[]) {
+/** Below this zoom the map doesn't show airport markers at all — a
+ * nationwide bundle has ~13k airports, and a CONUS-wide marker soup is
+ * useless as well as slow. */
+const AIRPORT_MIN_ZOOM = 6;
+
+/** Cap on how many visible airports get a METAR flight-category lookup
+ * per refresh — one batched request, but aviationweather.gov shouldn't
+ * be asked for hundreds of stations every pan. */
+const MAX_METAR_AIRPORTS = 60;
+
+/** Fetches the airports for the map's current view (bbox query, §4.1)
+ * and refreshes the marker/winds-aloft sources; colors markers by METAR
+ * flight category for up to MAX_METAR_AIRPORTS of them. Keeps the
+ * fetched list in `visibleAirportsRef` so the click handler can hand a
+ * full Airport object to the app. */
+async function refreshVisibleAirports(
+  map: MlMap,
+  visibleAirportsRef: { current: Airport[] },
+  windsBulletinRef: { current: WindsAloftBulletin | null },
+) {
+  const clear = () => {
+    visibleAirportsRef.current = [];
+    (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_COLLECTION);
+    (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_COLLECTION);
+  };
+  if (map.getZoom() < AIRPORT_MIN_ZOOM) {
+    clear();
+    return;
+  }
+  const bounds = map.getBounds();
+  const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+  let airports: Airport[];
   try {
-    const metars = await fetchMetars(airports.map((a) => a.icao));
+    airports = await fetchAirportsInBbox(bbox);
+  } catch (err) {
+    console.warn("couldn't load airports for the map view", err);
+    return;
+  }
+  visibleAirportsRef.current = airports;
+  (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+    airportsGeoJson(airports, new Map()),
+  );
+  if (windsBulletinRef.current) {
+    (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+      windsAloftGeoJson(windsBulletinRef.current, airports, WINDS_ALOFT_ALTITUDE_FT),
+    );
+  }
+
+  try {
+    const metars = await fetchMetars(airports.slice(0, MAX_METAR_AIRPORTS).map((a) => a.icao));
     const flightCategories = new Map<string, string>();
     for (const m of metars) {
       if (m.fltCat) flightCategories.set(m.icaoId, m.fltCat);
     }
-    (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
-      airportsGeoJson(airports, flightCategories),
-    );
+    // The view may have moved on while the METARs were in flight — only
+    // apply if these airports are still the current set.
+    if (visibleAirportsRef.current === airports) {
+      (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+        airportsGeoJson(airports, flightCategories),
+      );
+    }
   } catch (err) {
     console.warn("couldn't load METAR flight categories for the map", err);
   }
+}
 
+/** Fetches the CONUS-wide hazard overlays and the winds-aloft bulletin
+ * (cached in `windsBulletinRef` for reuse as the view moves). Each is
+ * independent, so one failing doesn't block the others. */
+async function loadWeatherOverlays(map: MlMap, windsBulletinRef: { current: WindsAloftBulletin | null }) {
   try {
     const gairmets = await fetchGairmets();
     (map.getSource(GAIRMET_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(gairmetGeoJson(gairmets));
@@ -205,28 +258,25 @@ async function loadWeatherOverlays(map: MlMap, airports: Airport[]) {
   }
 
   try {
-    const bulletin = await fetchWindsAloft("low", "06", "all");
-    (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
-      windsAloftGeoJson(bulletin, airports, WINDS_ALOFT_ALTITUDE_FT),
-    );
+    windsBulletinRef.current = await fetchWindsAloft("low", "06", "all");
   } catch (err) {
     console.warn("couldn't load winds aloft for the map", err);
   }
 }
 
 export function MapView({
-  airports,
-  selectedIcao,
+  selectedAirport,
   onSelectAirport,
   selectedProcedureId,
 }: {
-  airports: Airport[];
-  selectedIcao: string | null;
-  onSelectAirport: (icao: string) => void;
+  selectedAirport: Airport | null;
+  onSelectAirport: (airport: Airport) => void;
   selectedProcedureId: string | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
+  const visibleAirportsRef = useRef<Airport[]>([]);
+  const windsBulletinRef = useRef<WindsAloftBulletin | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -241,7 +291,7 @@ export function MapView({
     map.addControl(new maplibregl.NavigationControl(), "top-right");
 
     map.on("load", () => {
-      map.addSource(AIRPORTS_SOURCE, { type: "geojson", data: airportsGeoJson(airports, new Map()) });
+      map.addSource(AIRPORTS_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
       map.addLayer({
         id: "airports-circle",
         type: "circle",
@@ -409,7 +459,8 @@ export function MapView({
 
       map.on("click", "airports-circle", (e) => {
         const icao = e.features?.[0]?.properties?.icao as string | undefined;
-        if (icao) onSelectAirport(icao);
+        const airport = icao ? visibleAirportsRef.current.find((a) => a.icao === icao) : undefined;
+        if (airport) onSelectAirport(airport);
       });
       map.on("mouseenter", "airports-circle", () => {
         map.getCanvas().style.cursor = "pointer";
@@ -418,18 +469,15 @@ export function MapView({
         map.getCanvas().style.cursor = "";
       });
 
-      if (airports.length > 0) {
-        const bounds = airports.reduce(
-          (b, a) => b.extend([a.lon, a.lat]),
-          new maplibregl.LngLatBounds([airports[0].lon, airports[0].lat], [airports[0].lon, airports[0].lat]),
-        );
-        map.fitBounds(bounds, { padding: 60, maxZoom: 10, duration: 0 });
-      }
-
-      // Weather overlays are all fetched from ff-api, which isn't started
-      // by `npm run dev` (see apps/web/README.md) — each is independent so
-      // one being unreachable doesn't block the others or the base map.
-      void loadWeatherOverlays(map, airports);
+      // Airport markers are view-driven (bbox query per moveend, hidden
+      // below AIRPORT_MIN_ZOOM) — a nationwide bundle is too big to draw
+      // whole. Weather overlays load once; the winds bulletin is cached
+      // and re-applied to whatever airports are in view. Each fetch is
+      // independent so one failing doesn't block the others.
+      void loadWeatherOverlays(map, windsBulletinRef).then(() => refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef));
+      map.on("moveend", () => {
+        void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef);
+      });
 
       setLoaded(true);
     });
@@ -440,7 +488,7 @@ export function MapView({
       setLoaded(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports]);
+  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -450,23 +498,20 @@ export function MapView({
       (map.getSource(RUNWAYS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(runwaysGeoJson(runways));
 
     let cancelled = false;
-    if (selectedIcao) {
-      fetchAirportDetail(selectedIcao)
+    if (selectedAirport) {
+      fetchAirportDetail(selectedAirport.icao)
         .then((detail) => {
           if (!cancelled) setRunways(detail.runways);
         })
         .catch((err: unknown) => console.warn("couldn't load runways for the map", err));
-      const airport = airports.find((a) => a.icao === selectedIcao);
-      if (airport) {
-        map.flyTo({ center: [airport.lon, airport.lat], zoom: 12, duration: 800 });
-      }
+      map.flyTo({ center: [selectedAirport.lon, selectedAirport.lat], zoom: 12, duration: 800 });
     } else {
       setRunways([]);
     }
     return () => {
       cancelled = true;
     };
-  }, [airports, selectedIcao, loaded]);
+  }, [selectedAirport, loaded]);
 
   useEffect(() => {
     const map = mapRef.current;

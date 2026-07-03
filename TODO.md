@@ -43,10 +43,12 @@ Built and validated against real FAA/NOAA data end to end:
   fixed-width text parser, see "Winds/temps aloft" below) added too.
 - `services/ff-etl` (real batch pipeline, distinct from the
   `build_demo_bundle` example): fetches the live CIFP cycle, matching
-  NASR subscription, and the region's sectional chart; builds an
-  `ff-storage`-schema bundle + PMTiles chart archive; validates and
-  publishes both — run for real, not just built (see "Phase 0" and
-  "Web thin client" below). Chart steps need GDAL CLI tools on PATH.
+  NASR subscription, and the region's sectional chart; builds a
+  **nationwide** `ff-storage`-schema bundle (~13k airports, ~14k
+  procedures, ~31MB) + PMTiles chart archive; validates and publishes
+  both — run for real, not just built (see "Phase 0", "Web thin
+  client", and "Nationwide bundle" below). Chart steps need GDAL CLI
+  tools on PATH.
 - `services/ff-api`: weather proxy routes run for real against live
   traffic (see "Live weather in apps/web"); `/cycles/latest` +
   `/bundles/*` (Range-capable static files) + the `/data/*` JSON query
@@ -576,6 +578,57 @@ bundle" / `apps/web/public/demo-cycle.sqlite` describe a state that no
 longer exists — the only bundle now is whatever `ff-etl` last
 published. `build_demo_bundle` (the example) still works for building
 bundles from local files but nothing consumes its output by default.
+
+## Nationwide bundle + airport search — done
+
+Until this pass the published cycle contained exactly 5 hardcoded Bay
+Area airports — any other ICAO simply wasn't in the data, and the UI
+had no search input anyway. The thin-client change removed the original
+reason for that limit (the browser no longer downloads the bundle), so:
+
+- **`ff-etl`**: `BundleSource.icaos` became `Option` (`None` =
+  nationwide, the pipeline's new default; the `build_demo_bundle`
+  example still passes an explicit list). Three things only surfaced at
+  nationwide scale, all found by actually running it:
+  - The insert loop needed one transaction around it — SQLite fsyncs
+    per statement in autocommit, and ~250k rows one-commit-at-a-time
+    crawls.
+  - NASR child-row grouping was quadratic (per-runway scans of all ~45k
+    runway ends; per-airport scans of all frequency rows) — invisible
+    with 5 airports, minutes at 13k. Pre-grouped by airport id.
+  - **Foreign keys caught a real source disagreement**: NASR has
+    frequencies for thousands of airports CIFP has no airport record
+    for, and CIFP has runway/procedure rows for a few airports whose
+    airport record fails extraction. Child rows are now filtered to
+    airports actually in the bundle; the first nationwide run failed
+    with `FOREIGN KEY constraint failed`, which is how this was found.
+  - Result: 13,321 airports, 8,429 runways, 31,412 frequencies, 14,316
+    procedures, 201,076 legs — ~31MB, built + published in ~33s total
+    (within DESIGN.md §11's tens-of-MB target). Chart imagery stays
+    regional: the crop bbox now comes from `CHART_ANCHOR_ICAOS`, not
+    all bundle airports (a CONUS-wide bbox would have gdalwarp inflate
+    one sectional to cover the country as mostly-nodata).
+- **`ff-api`**: `/data/search?q=` implemented (prefix match on
+  ICAO/FAA/IATA idents, substring on name, exact-ident match sorted
+  first, capped at 20) — pulled forward from its planned Phase 2 slot
+  since the search box is the consumer that justifies it.
+- **`apps/web`**: the fixed airport list is now a search box
+  (debounced, 2+ chars). The map's airport markers are view-driven —
+  `/data/airports?bbox=` per `moveend`, hidden below zoom 6 (13k
+  markers CONUS-wide is soup), flight-category METAR lookups capped at
+  60 visible airports per refresh, winds-aloft labels recomputed from
+  the cached bulletin for whatever's in view. Selection carries the
+  full `Airport` object (the map needs coords to fly to a
+  search-selected airport that isn't in view yet).
+
+Verified in a real browser: searched and selected KORD (never in the
+old demo bundle), got its 8 runways, live METAR/TAF, and correct
+plain-background map (only the SF sectional is tiled — that's the
+remaining regional scope, see "Possible follow-ups"); Bay Area view
+now shows every airport in view over the sectional, not just the old
+5. Search quirk noted: `"ohare"` doesn't match `O'HARE` (apostrophe) —
+`"chicago"`, `"KORD"`, and `"ORD"` all do; punctuation-insensitive
+name matching is a possible small follow-up.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 

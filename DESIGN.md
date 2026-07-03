@@ -214,12 +214,7 @@ Implemented today:
 | `GET /data/airports/:icao/procedures` | web | procedure list |
 | `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates |
 | `GET /data/charts?bbox=` | web | chart_catalog entries (optionally bbox-filtered) |
-
-Planned, not yet built:
-
-| Route | Serves |
-|---|---|
-| `GET /data/search?q=` | ident/name autocomplete for the route builder (§9.3, Phase 2) |
+| `GET /data/search?q=` | web | airport ident/name search (prefix on ICAO/FAA/IATA, substring on name, capped at 20) — pulled forward from Phase 2 once bundles went nationwide and a fixed airport list stopped making sense; the §9.3 route builder will reuse it |
 
 Conventions: JSON only; no authentication in Phase 1 (see §11's abuse
 note); errors are plain-text bodies with appropriate status codes (502
@@ -615,14 +610,15 @@ document survive insertions/removals.
   fixture tests (and validated against real cycle files — see TODO.md),
   and `ff-etl` producing a first cycle bundle end to end: fetches the
   current CIFP/NASR cycle live from FAA, builds an `ff-storage`-schema
-  bundle, validates it against the previously published cycle, and
-  publishes it for `ff-api` to serve (`/cycles/latest`,
-  `/cycles/:id/bundle.sqlite`). Scoped to the same 5-airport Bay Area
-  region as the web demo rather than a full ARTCC boundary, and doesn't
-  fetch/tile chart imagery yet (that pipeline exists and is validated,
-  see "Chart imagery" in TODO.md, just not wired into this automated
-  loop) — real object storage for `publish_bundle` is also still a local
-  directory, not a bucket. See TODO.md for the specifics.
+  bundle (nationwide: every airport/procedure in the CIFP file, ~13k
+  airports/~14k procedures, ~31MB — within §11's tens-of-MB target),
+  fetches/crops/tiles the region's sectional chart, validates against
+  the previously published cycle, and publishes both artifacts for
+  `ff-api` to serve (§4.1). Chart imagery is the remaining regional
+  scope: one sectional, cropped around hardcoded Bay Area anchor
+  airports — real region/multi-sectional selection is still a follow-up,
+  and `publish_bundle`'s object storage is still a local directory, not
+  a bucket. See TODO.md for the specifics.
 - **Phase 1 — MVP (read-only)**: web + Android chart/procedure/airport
   viewer, weather/NOTAM briefing. Offline cycle sync is Android-only
   (§8) — the milestone this phase is really chasing is "can I look

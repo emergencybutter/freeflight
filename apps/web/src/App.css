@@ -59,6 +59,23 @@
   font-size: 0.85rem;
 }
 
+.airport-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  background: #131a2a;
+  border: 1px solid #232c40;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+}
+
+.airport-search:focus {
+  outline: none;
+  border-color: #3d7fc4;
+}
+
 .airport-list ul,
 .procedure-list {
   list-style: none;

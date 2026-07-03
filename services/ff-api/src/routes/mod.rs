@@ -28,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         .route("/weather/windtemp", get(weather::get_winds_aloft))
         .route("/cycles/latest", get(cycles::latest))
         .route("/data/airports", get(data::airports))
+        .route("/data/search", get(data::search))
         .route("/data/airports/:icao", get(data::airport_detail))
         .route("/data/airports/:icao/procedures", get(data::airport_procedures))
         .route("/data/procedures/:id", get(data::procedure_detail))

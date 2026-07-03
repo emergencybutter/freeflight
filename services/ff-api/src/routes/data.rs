@@ -226,6 +226,54 @@ pub async fn airports(State(state): State<AppState>, Query(query): Query<BboxQue
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+}
+
+/// Ident/name airport search for the web client's search box: exact-ish
+/// prefix match on ICAO/FAA/IATA idents, substring match on the name,
+/// case-insensitive, capped at 20 rows. (Pulled forward from its planned
+/// Phase 2 slot — the search box is the consumer that justifies it.)
+pub async fn search(State(state): State<AppState>, Query(query): Query<SearchQuery>) -> Response {
+    let q = query.q.trim().to_uppercase();
+    if q.is_empty() {
+        return Json(Vec::<AirportRow>::new()).into_response();
+    }
+    let result = with_bundle(&state, move |conn| {
+        let prefix = format!("{q}%");
+        let substring = format!("%{q}%");
+        let mut rows = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type FROM airport
+             WHERE icao LIKE ?1 OR faa_id LIKE ?1 OR iata LIKE ?1 OR UPPER(name) LIKE ?2
+             ORDER BY (icao = ?3) DESC, icao
+             LIMIT 20",
+        )?;
+        let mapped = stmt.query_map(rusqlite::params![prefix, substring, q], |row| {
+            Ok(AirportRow {
+                icao: row.get(0)?,
+                faa_id: row.get(1)?,
+                iata: row.get(2)?,
+                name: row.get(3)?,
+                lat: row.get(4)?,
+                lon: row.get(5)?,
+                elevation_ft: row.get(6)?,
+                airport_type: row.get(7)?,
+            })
+        })?;
+        for airport in mapped {
+            rows.push(airport?);
+        }
+        Ok(rows)
+    })
+    .await;
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 pub async fn airport_detail(State(state): State<AppState>, UrlPath(icao): UrlPath<String>) -> Response {
     let result = with_bundle(&state, move |conn| {
         let airport = conn

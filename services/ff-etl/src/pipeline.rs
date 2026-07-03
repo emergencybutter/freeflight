@@ -3,7 +3,6 @@ use crate::chart_prep::crop_sectional_to_bbox;
 use crate::fetch::{fetch_cifp, fetch_nasr, fetch_sectional_chart};
 use crate::publish::{latest_bundle_path, publish_bundle};
 use crate::validate::validate_bundle;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -23,15 +22,14 @@ pub enum EtlError {
     Io(#[from] std::io::Error),
 }
 
-/// Bay Area demo scope (matching the original web demo bundle) —
-/// DESIGN.md §13 says "one FAA region, e.g. a single ARTCC" for Phase 0;
-/// this reuses the same 5 airports already validated end to end rather
-/// than a full ARTCC boundary. Expanding to a real ARTCC selection is a
-/// follow-up (see TODO.md).
-const REGION_ICAOS: &[&str] = &["KSFO", "KOAK", "KSJC", "KPAO", "KHWD"];
+/// The bundle itself is nationwide (every airport/procedure in the CIFP
+/// file — the web thin client queries it server-side, so bundle size no
+/// longer gates a browser download). Chart imagery is still regional:
+/// one sectional, cropped around these anchor airports. Covering more
+/// sectionals is the remaining hardcoded-region follow-up (see TODO.md).
+const CHART_ANCHOR_ICAOS: &[&str] = &["KSFO", "KOAK", "KSJC", "KPAO", "KHWD"];
 
-/// The FAA sectional covering the region — like `REGION_ICAOS`, part of
-/// the hardcoded region definition until real region selection exists.
+/// The FAA sectional covering the chart region above.
 const REGION_SECTIONAL: &str = "San_Francisco";
 
 /// Margin (degrees) added around the region's airport bounding box when
@@ -62,7 +60,6 @@ pub fn run() -> Result<(), EtlError> {
     let nasr_dir = fetch_nasr(workdir.path(), &cifp.cycle_date)?;
     tracing::info!("fetched NASR");
 
-    let icaos: HashSet<String> = REGION_ICAOS.iter().map(|s| s.to_string()).collect();
     let bundle_path = workdir.path().join("cycle.sqlite");
     let stats = build_bundle(
         &BundleSource {
@@ -71,7 +68,8 @@ pub fn run() -> Result<(), EtlError> {
             // The chart is added after the build: its crop bbox comes
             // from the built bundle's own airports (below).
             chart: None,
-            icaos,
+            // Nationwide — no ICAO filter (see CHART_ANCHOR_ICAOS docs).
+            icaos: None,
         },
         &bundle_path,
     )?;
@@ -79,7 +77,7 @@ pub fn run() -> Result<(), EtlError> {
 
     tracing::info!(sectional = REGION_SECTIONAL, "fetching sectional chart");
     let chart_tif = fetch_sectional_chart(workdir.path(), REGION_SECTIONAL)?;
-    let (min_lat, min_lon, max_lat, max_lon) = bundle_airport_bbox(&bundle_path)?;
+    let (min_lat, min_lon, max_lat, max_lon) = bundle_airport_bbox(&bundle_path, CHART_ANCHOR_ICAOS)?;
     let bbox = (
         min_lat - CHART_BBOX_MARGIN_DEG,
         min_lon - CHART_BBOX_MARGIN_DEG,

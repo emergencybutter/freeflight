@@ -109,7 +109,7 @@ fn main() {
         cifp_path: PathBuf::from(&args.cifp_path),
         nasr_dir: args.nasr_dir.map(PathBuf::from),
         chart,
-        icaos: args.icaos,
+        icaos: Some(args.icaos),
     };
 
     let stats = build_bundle(&source, &PathBuf::from(&args.output_path)).expect("failed to build bundle");

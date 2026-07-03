@@ -1,34 +1,27 @@
 import { useEffect, useState } from "react";
 import { API_BASE_URL } from "./api";
-import { fetchAirportDetail, fetchAirportProcedures, fetchAirports, fetchCycleManifest, fetchProcedureDetail } from "./data";
+import { fetchAirportDetail, fetchAirportProcedures, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
 import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, Taf } from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
 export default function App() {
-  const [airports, setAirports] = useState<Airport[] | null>(null);
   const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedIcao, setSelectedIcao] = useState<string | null>(null);
+  const [selectedAirport, setSelectedAirport] = useState<Airport | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
 
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
     // fetch fails there's nothing to fall back to — fail visibly.
-    Promise.all([fetchAirports(), fetchCycleManifest()])
-      .then(([airportList, manifest]) => {
-        setAirports(airportList);
-        setCycleId(manifest.cycle_id);
-        if (airportList.length > 0) {
-          setSelectedIcao(airportList[0].icao);
-        }
-      })
+    fetchCycleManifest()
+      .then((manifest) => setCycleId(manifest.cycle_id))
       .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
   }, []);
 
-  const selectAirport = (icao: string) => {
-    setSelectedIcao(icao);
+  const selectAirport = (airport: Airport | null) => {
+    setSelectedAirport(airport);
     setSelectedProcedureId(null);
   };
 
@@ -44,7 +37,7 @@ export default function App() {
     );
   }
 
-  if (!airports) {
+  if (!cycleId) {
     return <div className="loading">Loading freeflight…</div>;
   }
 
@@ -54,16 +47,15 @@ export default function App() {
         Cycle {cycleId} · live from ff-api at {API_BASE_URL}
       </div>
       <MapView
-        airports={airports}
-        selectedIcao={selectedIcao}
+        selectedAirport={selectedAirport}
         onSelectAirport={selectAirport}
         selectedProcedureId={selectedProcedureId}
       />
       <div className="layout">
-        <AirportList airports={airports} selectedIcao={selectedIcao} onSelect={selectAirport} />
-        {selectedIcao && (
+        <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
+        {selectedAirport && (
           <AirportPanel
-            icao={selectedIcao}
+            icao={selectedAirport.icao}
             selectedProcedureId={selectedProcedureId}
             onSelectProcedure={setSelectedProcedureId}
           />
@@ -74,23 +66,64 @@ export default function App() {
   );
 }
 
-function AirportList({
-  airports,
+function AirportSearch({
   selectedIcao,
   onSelect,
 }: {
-  airports: Airport[];
   selectedIcao: string | null;
-  onSelect: (icao: string) => void;
+  onSelect: (airport: Airport) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Airport[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Debounced search-as-you-type against /data/search.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      searchAirports(q)
+        .then((airports) => {
+          if (cancelled) return;
+          setResults(airports);
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setError(err instanceof Error ? err.message : String(err));
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
   return (
     <div className="panel airport-list">
       <h2>Airports</h2>
-      <p className="hint">{airports.length} in the current cycle</p>
+      <input
+        className="airport-search"
+        type="search"
+        placeholder="Search ident or name (e.g. KSFO, O'Hare)…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      {error && <p className="hint">search failed: {error}</p>}
+      {!error && query.trim().length < 2 && (
+        <p className="hint">Nationwide cycle — search any US airport, or zoom the map in to see airports in view.</p>
+      )}
+      {!error && query.trim().length >= 2 && results.length === 0 && <p className="hint">no matches</p>}
       <ul>
-        {airports.map((a) => (
+        {results.map((a) => (
           <li key={a.icao}>
-            <button className={a.icao === selectedIcao ? "selected" : ""} onClick={() => onSelect(a.icao)}>
+            <button className={a.icao === selectedIcao ? "selected" : ""} onClick={() => onSelect(a)}>
               <strong>{a.icao}</strong> {a.iata ? `(${a.iata})` : ""}
               <br />
               <span className="airport-name">{a.name}</span>

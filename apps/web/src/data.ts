@@ -15,8 +15,15 @@ export async function fetchCycleManifest(): Promise<CycleManifest> {
   return fetchJson<CycleManifest>("/cycles/latest");
 }
 
-export async function fetchAirports(): Promise<Airport[]> {
-  return fetchJson<Airport[]>("/data/airports");
+/** Airports within `minLon,minLat,maxLon,maxLat` — bundles are
+ * nationwide (~13k airports), so the map always asks for a bounding box
+ * rather than everything. */
+export async function fetchAirportsInBbox(bbox: string): Promise<Airport[]> {
+  return fetchJson<Airport[]>(`/data/airports?bbox=${encodeURIComponent(bbox)}`);
+}
+
+export async function searchAirports(q: string): Promise<Airport[]> {
+  return fetchJson<Airport[]>(`/data/search?q=${encodeURIComponent(q)}`);
 }
 
 export async function fetchAirportDetail(icao: string): Promise<AirportDetail> {

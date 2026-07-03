@@ -55,13 +55,20 @@ pub struct ChartSource {
 
 /// Everything needed to build one cycle bundle: a CIFP file, optionally a
 /// NASR extract directory for enrichment, optionally chart imagery, and
-/// the set of ICAOs to include (CIFP/NASR cover the whole US per file —
-/// this is how a bundle stays scoped to one region).
+/// optionally a set of ICAOs to restrict to (`None` = the whole file,
+/// i.e. a nationwide bundle — CIFP/NASR cover the whole US per file).
 pub struct BundleSource {
     pub cifp_path: PathBuf,
     pub nasr_dir: Option<PathBuf>,
     pub chart: Option<ChartSource>,
-    pub icaos: HashSet<String>,
+    pub icaos: Option<HashSet<String>>,
+}
+
+fn wanted(icaos: &Option<HashSet<String>>, icao: &str) -> bool {
+    match icaos {
+        Some(set) => set.contains(icao),
+        None => true,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -94,21 +101,21 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         match record.category {
             RecordCategory::Airport => {
                 if let Ok(airport) = extract_airport(&record) {
-                    if icaos.contains(&airport.icao) {
+                    if wanted(icaos, &airport.icao) {
                         airports.push(airport);
                     }
                 }
             }
             RecordCategory::Runway => {
                 if let Ok(end) = extract_runway_end(&record) {
-                    if icaos.contains(&end.airport_icao) {
+                    if wanted(icaos, &end.airport_icao) {
                         runway_ends.push(end);
                     }
                 }
             }
             RecordCategory::Procedure(_) => {
                 if let Ok(row) = extract_procedure_leg_row(&record) {
-                    if icaos.contains(&row.airport_icao) {
+                    if wanted(icaos, &row.airport_icao) {
                         leg_rows.push(row);
                     }
                 }
@@ -116,6 +123,19 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
             _ => {}
         }
     }
+
+    // Every child table references airport(icao) by foreign key, and at
+    // nationwide scope the sources genuinely disagree about the airport
+    // set: NASR has frequencies for thousands of airports CIFP has no
+    // airport record for, and CIFP itself has runway/procedure records
+    // for a handful of airports whose airport record fails extraction.
+    // Keep only children of airports actually going into the bundle —
+    // anything else would fail the FK constraint at insert time (which
+    // is exactly how this was discovered; a 5-airport region never hit
+    // it).
+    let airport_icaos: HashSet<&str> = airports.iter().map(|a| a.icao.as_str()).collect();
+    runway_ends.retain(|end| airport_icaos.contains(end.airport_icao.as_str()));
+    leg_rows.retain(|row| airport_icaos.contains(row.airport_icao.as_str()));
 
     let mut runways = pair_runway_ends(&runway_ends);
     let parsed = build_procedures(&leg_rows);
@@ -171,19 +191,27 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         }
     }
 
-    let frequencies = if let Some(nasr_dir) = &source.nasr_dir {
+    let mut frequencies = if let Some(nasr_dir) = &source.nasr_dir {
         let (surfaces, frequencies) = load_nasr_enrichment(nasr_dir, icaos)?;
         apply_nasr_surfaces(&mut runways, &surfaces);
         frequencies
     } else {
         Vec::new()
     };
+    // Same FK-integrity filter as runways/legs above, for NASR-sourced
+    // frequencies whose airport CIFP doesn't know.
+    frequencies.retain(|f| airport_icaos.contains(f.airport_icao.as_str()));
 
     if fs::metadata(output_path).is_ok() {
         fs::remove_file(output_path)?;
     }
     let output_path_str = output_path.to_str().expect("output path must be valid UTF-8");
-    let conn = ff_storage::open(output_path_str).map_err(|e| BundleError::Parse(e.to_string()))?;
+    let mut conn = ff_storage::open(output_path_str).map_err(|e| BundleError::Parse(e.to_string()))?;
+    // One transaction around all inserts: a nationwide bundle writes
+    // hundreds of thousands of rows, and SQLite fsyncs per statement in
+    // autocommit mode — per-row commits took minutes, one transaction
+    // takes seconds.
+    let conn = conn.transaction()?;
 
     for a in &airports {
         conn.execute(
@@ -281,7 +309,7 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         )?;
     }
 
-    drop(conn);
+    conn.commit()?;
 
     if let Some(chart_source) = &source.chart {
         add_chart(output_path, chart_source)?;
@@ -342,23 +370,24 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
     Ok(())
 }
 
-/// The bounding box of a built bundle's airports (`min_lat, min_lon,
-/// max_lat, max_lon`) — used to crop a full sectional GeoTIFF down to
-/// just the region the bundle covers before tiling it.
-pub fn bundle_airport_bbox(bundle_path: &Path) -> Result<(f64, f64, f64, f64), BundleError> {
+/// The bounding box (`min_lat, min_lon, max_lat, max_lon`) of the named
+/// airports in a built bundle — used to crop a sectional GeoTIFF down to
+/// the chart's region before tiling it. Takes an explicit ICAO list
+/// rather than using every airport in the bundle: bundles are nationwide
+/// now, and a whole-CONUS bbox would ask gdalwarp to inflate one
+/// sectional to cover the country (mostly nodata).
+pub fn bundle_airport_bbox(bundle_path: &Path, icaos: &[&str]) -> Result<(f64, f64, f64, f64), BundleError> {
     let conn = rusqlite::Connection::open(bundle_path)?;
-    let bbox = conn.query_row(
-        "SELECT MIN(lat), MIN(lon), MAX(lat), MAX(lon) FROM airport",
-        [],
-        |row| {
-            Ok((
-                row.get::<_, f64>(0)?,
-                row.get::<_, f64>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, f64>(3)?,
-            ))
-        },
-    )?;
+    let placeholders = vec!["?"; icaos.len()].join(",");
+    let sql = format!("SELECT MIN(lat), MIN(lon), MAX(lat), MAX(lon) FROM airport WHERE icao IN ({placeholders})");
+    let bbox = conn.query_row(&sql, rusqlite::params_from_iter(icaos.iter()), |row| {
+        Ok((
+            row.get::<_, f64>(0)?,
+            row.get::<_, f64>(1)?,
+            row.get::<_, f64>(2)?,
+            row.get::<_, f64>(3)?,
+        ))
+    })?;
     Ok(bbox)
 }
 
@@ -371,7 +400,7 @@ type SurfacesByAirportAndRunway = HashMap<(String, String), RunwaySurface>;
 
 fn load_nasr_enrichment(
     dir: &Path,
-    icaos: &HashSet<String>,
+    icaos: &Option<HashSet<String>>,
 ) -> Result<(SurfacesByAirportAndRunway, Vec<Frequency>), BundleError> {
     let airports = parse_apt_base(&fs::read(dir.join("APT_BASE.csv"))?)
         .map_err(|e| BundleError::Parse(format!("APT_BASE.csv: {e}")))?;
@@ -384,31 +413,46 @@ fn load_nasr_enrichment(
 
     // ARPT_ID (FAA local id, e.g. "SFO") -> our airport_icao (e.g. "KSFO"):
     // APT_RWY/APT_RWY_END/FRQ are keyed by ARPT_ID, not ICAO.
-    let wanted: HashMap<String, String> = airports
+    let wanted_airports: HashMap<String, String> = airports
         .iter()
         .filter_map(|a| {
             let icao = a.icao_id.clone().unwrap_or_else(|| a.arpt_id.clone());
-            icaos.contains(&icao).then(|| (a.arpt_id.clone(), icao))
+            wanted(icaos, &icao).then(|| (a.arpt_id.clone(), icao))
         })
         .collect();
 
+    // Group the per-airport child rows once, up front — the per-runway
+    // "scan every runway end in the country" version of this was fine
+    // for a 5-airport region but quadratic (~45k × ~45k) once bundles
+    // went nationwide.
+    let mut ends_by_arpt: HashMap<&str, Vec<ff_nasr::AptRunwayEndRow>> = HashMap::new();
+    for end in &runway_ends {
+        ends_by_arpt.entry(end.arpt_id.as_str()).or_default().push(end.clone());
+    }
+    let mut freqs_by_facility: HashMap<&str, Vec<ff_nasr::FrqRow>> = HashMap::new();
+    for freq in &freqs {
+        freqs_by_facility
+            .entry(freq.serviced_facility.as_str())
+            .or_default()
+            .push(freq.clone());
+    }
+    static NO_ENDS: &[ff_nasr::AptRunwayEndRow] = &[];
+    static NO_FREQS: &[ff_nasr::FrqRow] = &[];
+
     let mut surfaces = HashMap::new();
     for rwy in &runways {
-        let Some(icao) = wanted.get(&rwy.arpt_id) else {
+        let Some(icao) = wanted_airports.get(&rwy.arpt_id) else {
             continue;
         };
-        let ends: Vec<_> = runway_ends
-            .iter()
-            .filter(|e| e.arpt_id == rwy.arpt_id)
-            .cloned()
-            .collect();
-        let runway = ff_nasr::runway_from_rows(rwy, &ends, icao);
+        let ends = ends_by_arpt.get(rwy.arpt_id.as_str()).map_or(NO_ENDS, |v| v.as_slice());
+        let runway = ff_nasr::runway_from_rows(rwy, ends, icao);
         surfaces.insert((icao.clone(), runway.ident), runway.surface);
     }
 
     let mut frequencies = Vec::new();
-    for (arpt_id, icao) in &wanted {
-        frequencies.extend(frequencies_for_airport(&freqs, arpt_id, icao));
+    for (arpt_id, icao) in &wanted_airports {
+        let rows = freqs_by_facility.get(arpt_id.as_str()).map_or(NO_FREQS, |v| v.as_slice());
+        frequencies.extend(frequencies_for_airport(rows, arpt_id, icao));
     }
 
     Ok((surfaces, frequencies))
