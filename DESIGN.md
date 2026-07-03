@@ -405,6 +405,23 @@ need to render procedures with the same fidelity as certified tools.
   `/tmp` or a small root disk will fail partway through (once with "no
   space" mid-GDAL, once more with "no space" on the final `latest.json`
   write after all 53 charts had already copied successfully).
+  `chart_prep::crop_legend_and_collar` also trims FAA's baked-in legend/
+  border margin before tiling: each sectional's raster shares one
+  geotransform across its whole canvas (confirmed via FAA's own per-
+  chart metadata — "only the main body of the chart is accurately
+  georeferenced"), so left uncropped the legend/collar warps and tiles
+  as if it were real chart imagery. The old region-cropped pipeline hid
+  this by accident; going nationwide/full-extent exposed it. Detected
+  per chart (a small preview scanned edge-in for the legend's white
+  background vs. the chart body's near-total terrain-color coverage),
+  not a fixed position, since placement/size varies chart to chart —
+  validated against a real Wichita sectional (left legend column +
+  bottom margin) and a real Western Aleutian Islands sectional (near
+  none). Also fixed: `fetch_sectional_chart` used to keep only the
+  first `.tif` in a sectional's zip, silently dropping the rest — a real
+  bug for the handful of sectionals FAA ships as multiple separately-
+  georeferenced files (Western Aleutian Islands' East/West split,
+  Hawaiian Islands' Honolulu/Mariana/Samoan insets).
 - Clients never talk to FAA/NOAA chart/procedure endpoints directly.
   Android pulls the pre-processed bundle from `ff-api`/CDN and queries it
   locally (offline-capable, §8). The web client never downloads the

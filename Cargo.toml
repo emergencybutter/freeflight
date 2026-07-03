@@ -50,6 +50,7 @@ axum = "0.7"
 tower-http = "0.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [profile.release]
 lto = true

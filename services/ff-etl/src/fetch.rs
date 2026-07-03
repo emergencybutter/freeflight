@@ -268,16 +268,32 @@ fn chart_cycle_dates(page_html: &str) -> Vec<String> {
     dates
 }
 
+/// One georeferenced `.tif` extracted from a sectional's zip, labeled by
+/// its own filename rather than the zip's name — see
+/// [`fetch_sectional_chart`] for why a zip can hold more than one.
+pub struct SectionalTif {
+    /// e.g. `"San_Francisco"`, or `"Western_Aleutian_Islands_East"` for
+    /// a part of a split sectional.
+    pub label: String,
+    pub tif_path: PathBuf,
+}
+
 /// Downloads the named sectional chart (e.g. `"San_Francisco"`) for
-/// whichever of `cycle`'s candidate dates (newest first) actually has it,
-/// extracts the GeoTIFF into `workdir`, and returns its path. `cycle`
-/// comes from [`discover_chart_cycle`], called once per pipeline run
-/// rather than re-scraping the FAA VFR page for every individual chart.
+/// whichever of `cycle`'s candidate dates (newest first) actually has
+/// it, and extracts every `.tif` inside — usually exactly one, but
+/// confirmed live that some sectionals ship their zip with more than
+/// one separately-georeferenced file (e.g. `Western_Aleutian_Islands`
+/// splits into an East and a West `.tif`; FAA's own per-file metadata
+/// notes Hawaiian Islands similarly bundles Honolulu/Mariana/Samoan
+/// insets). Taking only the first `.tif` — what an earlier version of
+/// this function did — silently dropped the rest. `cycle` comes from
+/// [`discover_chart_cycle`], called once per pipeline run rather than
+/// re-scraping the FAA VFR page for every individual chart.
 pub fn fetch_sectional_chart(
     workdir: &Path,
     sectional_name: &str,
     cycle: &ChartCycle,
-) -> Result<PathBuf, FetchError> {
+) -> Result<Vec<SectionalTif>, FetchError> {
     let client = http_client();
 
     let mut zip_bytes = None;
@@ -299,24 +315,35 @@ pub fn fetch_sectional_chart(
 
     let zip_file = std::fs::File::open(&zip_path)?;
     let mut archive = zip::ZipArchive::new(zip_file)?;
-    let tif_index = (0..archive.len())
-        .find(|&i| {
+    let tif_indices: Vec<usize> = (0..archive.len())
+        .filter(|&i| {
             archive
                 .by_index(i)
                 .map(|entry| entry.name().ends_with(".tif"))
                 .unwrap_or(false)
         })
-        .ok_or(FetchError::NoChartTifFound)?;
+        .collect();
+    if tif_indices.is_empty() {
+        return Err(FetchError::NoChartTifFound);
+    }
 
-    let tif_path = workdir.join("sectional.tif");
-    {
-        let mut entry = archive.by_index(tif_index)?;
+    let mut results = Vec::with_capacity(tif_indices.len());
+    for (n, index) in tif_indices.into_iter().enumerate() {
+        let mut entry = archive.by_index(index)?;
+        let label = Path::new(entry.name())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(sectional_name)
+            .trim_end_matches(" SEC")
+            .replace(' ', "_");
+        let tif_path = workdir.join(format!("sectional_{n}.tif"));
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf)?;
         std::fs::write(&tif_path, &buf)?;
+        results.push(SectionalTif { label, tif_path });
     }
 
-    Ok(tif_path)
+    Ok(results)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
 use crate::bundle::{add_airspace, add_chart, build_bundle, BundleSource, ChartSource};
-use crate::chart_prep::expand_palette_to_rgb;
+use crate::chart_prep::{crop_legend_and_collar, expand_palette_to_rgb};
 use crate::fetch::{
     discover_chart_cycle, fetch_cifp, fetch_nasr, fetch_sectional_chart, ChartCycle,
 };
@@ -87,33 +87,40 @@ pub fn run() -> Result<(), EtlError> {
     for sectional_name in &chart_cycle.sectional_names {
         tracing::info!(sectional = %sectional_name, "fetching sectional chart");
         let chart_workdir = tempfile::tempdir()?;
-        let chart_tif = fetch_sectional_chart(chart_workdir.path(), sectional_name, &chart_cycle)?;
-        let rgb_tif = expand_palette_to_rgb(&chart_tif, chart_workdir.path())?;
+        // Usually one part; a handful of sectionals (e.g. Western
+        // Aleutian Islands' East/West split) ship more than one
+        // separately-georeferenced .tif per zip — see fetch_sectional_chart.
+        let parts = fetch_sectional_chart(chart_workdir.path(), sectional_name, &chart_cycle)?;
+        for part in parts {
+            let cropped_tif = crop_legend_and_collar(&part.tif_path, chart_workdir.path())?;
+            let rgb_tif = expand_palette_to_rgb(&cropped_tif, chart_workdir.path())?;
 
-        let slug = sectional_name.to_lowercase();
-        let pmtiles_filename = format!("chart-{slug}.pmtiles");
-        let pmtiles_path = chart_workdir.path().join(&pmtiles_filename);
-        add_chart(
-            &bundle_path,
-            &ChartSource {
-                id: format!("{}-{slug}", cifp.cycle_date),
-                geotiff_path: rgb_tif,
-                pmtiles_out: pmtiles_path.clone(),
-                cycle_id: cifp.cycle_date.clone(),
-                name: format!("{} Sectional", sectional_name.replace('_', " ")),
-                // Where ff-api serves published chart files (see
-                // ff-api's /bundles route and publish.rs's layout).
-                tile_url: format!("/bundles/{}/{pmtiles_filename}", cifp.cycle_date),
-            },
-        )?;
-        tracing::info!(sectional = %sectional_name, "tiled sectional into PMTiles and added chart_catalog entry");
+            let slug = part.label.to_lowercase();
+            let pmtiles_filename = format!("chart-{slug}.pmtiles");
+            let pmtiles_path = chart_workdir.path().join(&pmtiles_filename);
+            add_chart(
+                &bundle_path,
+                &ChartSource {
+                    id: format!("{}-{slug}", cifp.cycle_date),
+                    geotiff_path: rgb_tif,
+                    pmtiles_out: pmtiles_path.clone(),
+                    cycle_id: cifp.cycle_date.clone(),
+                    name: format!("{} Sectional", part.label.replace('_', " ")),
+                    // Where ff-api serves published chart files (see
+                    // ff-api's /bundles route and publish.rs's layout).
+                    tile_url: format!("/bundles/{}/{pmtiles_filename}", cifp.cycle_date),
+                },
+            )?;
+            tracing::info!(sectional = %part.label, "tiled sectional into PMTiles and added chart_catalog entry");
 
-        // Copy out of chart_workdir before it's dropped (and cleaned up)
-        // at the end of this loop iteration, so the next chart doesn't
-        // pile its own multi-hundred-MB intermediates on top.
-        let published_copy = workdir.path().join(&pmtiles_filename);
-        std::fs::copy(&pmtiles_path, &published_copy)?;
-        published_pmtiles.push((pmtiles_filename, published_copy));
+            // Copy out of chart_workdir before it's dropped (and cleaned
+            // up) once every part of this sectional is done, so the next
+            // sectional doesn't pile its own multi-hundred-MB
+            // intermediates on top.
+            let published_copy = workdir.path().join(&pmtiles_filename);
+            std::fs::copy(&pmtiles_path, &published_copy)?;
+            published_pmtiles.push((pmtiles_filename, published_copy));
+        }
     }
 
     let previous_bundle_path = latest_bundle_path(&data_dir)?;
