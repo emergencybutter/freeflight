@@ -388,7 +388,7 @@ export function MapView({
         id: "procedure-line",
         type: "line",
         source: PROCEDURE_SOURCE,
-        paint: { "line-color": "#7fd0ff", "line-width": 2, "line-dasharray": [2, 1.5] },
+        paint: { "line-color": "#e254e0", "line-width": 4, "line-dasharray": [2, 1.5] },
       });
 
       // Chart imagery renders as the base layer, under the airport/runway/

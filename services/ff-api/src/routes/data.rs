@@ -482,7 +482,16 @@ pub async fn procedure_detail(
         let mut fixes = HashMap::new();
         for ident in &fix_idents {
             // Waypoints first, then navaids — same "first match wins"
-            // the web client used when it resolved these itself.
+            // the web client used when it resolved these itself. Runway-
+            // threshold pseudo-fixes (e.g. "RW10R" — ARINC 424's way of
+            // pointing a leg at a runway end rather than a named
+            // waypoint/navaid) are never rows in either table, so they
+            // fall through to a third lookup against this procedure's
+            // own airport's runway ends: without it, the final-approach
+            // leg into the runway just vanishes from the drawn path,
+            // which reads as the approach never actually reaching the
+            // runway. Scoped to `airport_icao` because runway end idents
+            // like "10R" aren't unique across airports.
             let coord = conn
                 .query_row("SELECT lat, lon FROM waypoint WHERE ident = ?1", [ident], |row| {
                     Ok(FixCoord {
@@ -497,6 +506,28 @@ pub async fn procedure_detail(
                             lon: row.get(1)?,
                         })
                     })
+                })
+                .or_else(|_| {
+                    let rwy_ident = ident.strip_prefix("RW").ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+                    conn.query_row(
+                        "SELECT le_ident, le_lat, le_lon, he_ident, he_lat, he_lon
+                         FROM runway WHERE airport_icao = ?1 AND (le_ident = ?2 OR he_ident = ?2)",
+                        rusqlite::params![procedure.airport_icao, rwy_ident],
+                        |row| {
+                            let le_ident: String = row.get(0)?;
+                            if le_ident == rwy_ident {
+                                Ok(FixCoord {
+                                    lat: row.get(1)?,
+                                    lon: row.get(2)?,
+                                })
+                            } else {
+                                Ok(FixCoord {
+                                    lat: row.get(4)?,
+                                    lon: row.get(5)?,
+                                })
+                            }
+                        },
+                    )
                 });
             if let Ok(coord) = coord {
                 fixes.insert(ident.clone(), coord);
