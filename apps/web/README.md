@@ -33,9 +33,8 @@ npm install
 npm run dev
 ```
 
-Live METAR/TAF for the selected airport (in the airport detail panel)
-needs `services/ff-api` running separately — it's a Rust process, not
-part of `npm run dev`:
+Live weather needs `services/ff-api` running separately — it's a Rust
+process, not part of `npm run dev`:
 
 ```sh
 cargo run -p ff-api
@@ -43,10 +42,23 @@ cargo run -p ff-api
 
 Defaults to `http://localhost:8080`; the web client points there by
 default too (override with `VITE_FF_API_BASE_URL`). Without it running,
-the weather section just shows a "couldn't reach ff-api" hint — the
-rest of the app (charts, airports, procedures) is unaffected, since
-that's all read from the static SQLite bundle. `ff-api` in turn proxies
-the real `aviationweather.gov` Data API — no API key needed.
+the weather section just shows a "couldn't reach ff-api" hint and the
+map's weather overlays silently stay empty (each logs a `console.warn`
+rather than failing) — the rest of the app (charts, airports,
+procedures) is unaffected, since that's all read from the static
+SQLite bundle. `ff-api` in turn proxies the real `aviationweather.gov`
+Data API — no API key needed.
+
+With `ff-api` running, the map also shows:
+- Airport markers colored by METAR flight category (green VFR, blue
+  MVFR, red IFR, magenta LIFR).
+- Current G-AIRMET (turbulence/icing/IFR/mountain obscuration/freezing
+  level) and SIGMET (convective) polygons/lines for the whole US —
+  visible when zoomed out past the Bay Area demo region.
+- A winds-aloft label at 9,000 ft for any demo airport the NWS forecast
+  actually covers (only KSFO, in this demo's 5 airports — small GA
+  fields generally aren't winds-aloft reporting points, which is
+  correct behavior to show, not a gap).
 
 ## Regenerating the demo bundle
 

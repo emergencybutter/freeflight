@@ -32,6 +32,12 @@ pub struct Metar {
     pub lon: Option<f64>,
     pub elev: Option<i32>,
     pub name: Option<String>,
+    /// The API's own computed flight category (`"VFR"`, `"MVFR"`,
+    /// `"IFR"`, `"LIFR"`) — confirmed live across VFR/MVFR samples.
+    /// Kept `Option` defensively: haven't confirmed it's always present
+    /// (e.g. if ceiling/visibility data is missing/malformed upstream).
+    #[serde(rename = "fltCat")]
+    pub flt_cat: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

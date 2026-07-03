@@ -280,7 +280,7 @@ handled correctly, shows "no current TAF") and KSFO (both present)
 render real, current METAR/TAF text and decoded summaries with no
 console errors.
 
-## AIRMET/SIGMET — client + ff-api proxy done, no map UI yet
+## AIRMET/SIGMET — done, now including map rendering
 
 aviationweather.gov actually exposes four related-but-different
 endpoints, not one: `/airmet` (old plain-text bulletin, no polygon —
@@ -322,13 +322,11 @@ and via a live opt-in test through the actual `WeatherClient` methods.
 `ff-api` proxies all three (`/weather/gairmet`, `/weather/sigmet`,
 `/weather/isigmet`) — confirmed live, real data flowing through.
 
-Deliberately stopped here (agreed with the user beforehand):
-- **Winds/temps aloft**: done in a follow-up pass — see below.
-- **No map rendering yet**: `apps/web` doesn't draw AIRMET/SIGMET
-  polygons on the MapLibre map. DESIGN.md §9.2 wants exactly that; this
-  pass stopped at validated backend clients + proxy routes, same
-  stopping point chosen for chart imagery before it got its own pass.
-- **Plain-text `/airmet`**: not implemented at all — no coordinates to
+Deliberately stopped short of two things at the time (agreed with the
+user beforehand), both since done in follow-up passes:
+- **Winds/temps aloft**: done — see below.
+- **Map rendering**: done — see "Weather on the map" below.
+- **Plain-text `/airmet`**: still not implemented — no coordinates to
   plot, and `GAirmet` covers the map-drawing use case this project
   actually needs.
 
@@ -386,8 +384,60 @@ method. Proxied through `ff-api` (`/weather/windtemp`, with
 `level`/`fcst`/`region` query params defaulting to `low`/`06`/`all`) —
 confirmed live for both `level=low` and `level=high`.
 
-Same stopping point as AIRMET/SIGMET: backend client + proxy route
-only, no map/route overlay in `apps/web` yet.
+Now rendered on the map too — see "Weather on the map" below.
+
+## Weather on the map — done
+
+Wired METAR flight category, G-AIRMET, SIGMET, and winds-aloft into
+`apps/web`'s MapLibre map (`MapView.tsx`), closing out the "no map UI
+yet" gap both prior passes stopped at.
+
+- **METAR**: airport circle markers are colored by the API's own
+  `fltCat` field (green VFR / blue MVFR / red IFR / magenta LIFR).
+  `fltCat` wasn't modeled in `ff-weather`'s `Metar` struct before this —
+  added it, confirmed live it's reliably a string across VFR/MVFR
+  samples (not yet seen IFR/LIFR live, kept `Option` defensively), and
+  locked it in with a fixture assertion.
+- **G-AIRMET**: `"AREA"` records render as filled/outlined polygons,
+  `"LINE"` records (e.g. freezing-level lines) as dashed lines, colored
+  by hazard type. The API's coords (recall: numeric-looking strings)
+  get parsed to numbers here; `"AREA"` rings are already closed on live
+  data, confirmed before assuming a GeoJSON `Polygon` would just work.
+- **SIGMET**: filled red polygons (always a flat, already-closed ring
+  on live data — confirmed, unlike `IntlSigmet`, which still isn't
+  rendered: it's oceanic/international, out of this US-only app's map
+  scope, even though the backend client exists).
+- **Winds aloft**: a text label (e.g. `"15kt -5°C"` or `"LGT VRB"`) at
+  9,000 ft for whichever demo airports the NWS bulletin actually
+  covers by station ident — winds-aloft stations use 3-letter FAA
+  idents (`"SFO"`), not ICAO codes, so this strips the CONUS `"K"`
+  prefix to match. Of this demo's 5 airports, only KSFO turned out to
+  be a reporting point (confirmed live) — small GA fields generally
+  aren't, and the map correctly shows nothing for the other 4 rather
+  than fabricating a value. Wind direction is reported as where the
+  wind comes *from* (aviation convention); the arrow glyph is rotated
+  180° from that so it visually points where the wind is going.
+  Altitude (9,000 ft) isn't user-selectable yet — a fixed default for
+  this pass, not a full altitude picker.
+
+Verified in a real browser (Playwright), zoomed out from the Bay Area
+demo view to where CONUS-wide hazard polygons are actually visible:
+real SIGMET/G-AIRMET shapes rendered with correct colors, the winds-
+aloft label appeared precisely anchored at KSFO (not smeared across
+nearby airports), airport markers showed green (all-VFR on the day
+this was checked), and click-to-select still worked correctly with all
+the new layers active. No console errors.
+
+Each of the four fetches (METAR/G-AIRMET/SIGMET/winds-aloft) is
+independent and fails silently to `console.warn` if `ff-api` isn't
+running — consistent with how the airport detail panel's weather
+section already degrades, and confirmed the base map (chart imagery,
+airports, procedures — all from the static SQLite bundle) is
+unaffected either way.
+
+Not done: the 9,000 ft winds-aloft altitude isn't selectable, and
+there's no click/hover popup on hazard polygons (just color + shape).
+Both are natural small follow-ups, not attempted this pass.
 
 ## ff-notam — old API retired, client rewritten (unvalidated)
 

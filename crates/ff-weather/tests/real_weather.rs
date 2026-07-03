@@ -35,6 +35,12 @@ fn parses_real_metar_response() {
         khwd.wdir,
         Some(serde_json::Value::String("VRB".to_string()))
     );
+    assert_eq!(khwd.flt_cat, Some("VFR".to_string()));
+    let koak = metars
+        .iter()
+        .find(|m| m.icao_id == "KOAK")
+        .expect("KOAK metar present");
+    assert_eq!(koak.flt_cat, Some("MVFR".to_string()));
 }
 
 #[test]

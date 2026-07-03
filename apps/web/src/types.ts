@@ -108,6 +108,7 @@ export interface Metar {
   lon: number | null;
   elev: number | null;
   name: string | null;
+  fltCat: string | null;
 }
 
 export interface TafForecastPeriod {
@@ -129,4 +130,89 @@ export interface Taf {
   validTimeTo: number;
   rawTAF: string;
   fcsts: TafForecastPeriod[];
+}
+
+// Mirror ff-weather's GAirmet/Sigmet wire shape (crates/ff-weather/src/hazards.rs).
+
+export interface GAirmetCoord {
+  // Numeric-looking but really strings on the wire — see hazards.rs.
+  lat: string;
+  lon: string;
+}
+
+export interface GAirmet {
+  tag: string;
+  forecastHour: number;
+  validTime: string;
+  hazard: string;
+  geometryType: string;
+  latlonpairs: number;
+  frequency: string | null;
+  severity: string | null;
+  due_to: string | null;
+  status: string;
+  top: string | null;
+  base: string | null;
+  fzltop: string | null;
+  fzlbase: string | null;
+  level: string | null;
+  receiptTime: number;
+  issueTime: number;
+  expireTime: number;
+  product: string;
+  geom: string;
+  coords: GAirmetCoord[];
+}
+
+export interface SigmetCoord {
+  lat: number;
+  lon: number;
+}
+
+export interface Sigmet {
+  icaoId: string;
+  alphaChar: string;
+  seriesId: string;
+  receiptTime: string;
+  creationTime: string;
+  validTimeFrom: number;
+  validTimeTo: number;
+  airSigmetType: string;
+  hazard: string;
+  altitudeHi1: number | null;
+  altitudeHi2: number | null;
+  altitudeLow1: number | null;
+  altitudeLow2: number | null;
+  movementDir: number | null;
+  movementSpd: number | null;
+  rawAirSigmet: string;
+  postProcessFlag: number;
+  severity: number;
+  coords: SigmetCoord[];
+}
+
+// Mirror ff-weather's winds_aloft wire shape
+// (crates/ff-weather/src/winds_aloft.rs). `Wind` is a Rust enum with the
+// default serde external tagging: the unit variant serializes as the bare
+// string `"LightAndVariable"`, the struct variant as
+// `{ "Directional": { direction_deg, speed_kt } }` — confirmed against
+// ff-api's actual /weather/windtemp response.
+export type Wind = "LightAndVariable" | { Directional: { direction_deg: number; speed_kt: number } };
+
+export interface WindsAloftLevel {
+  altitude_ft: number;
+  wind: Wind;
+  temp_c: number | null;
+}
+
+export interface StationWindsAloft {
+  station_id: string;
+  levels: WindsAloftLevel[];
+}
+
+export interface WindsAloftBulletin {
+  data_based_on: string;
+  valid_time: string;
+  for_use: string;
+  stations: StationWindsAloft[];
 }
