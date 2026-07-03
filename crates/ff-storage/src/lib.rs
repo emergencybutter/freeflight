@@ -1,15 +1,18 @@
 //! SQLite schema and migrations (DESIGN.md §6, §8), shared by `ff-etl`
-//! (building cycle bundles) and native clients (Android via `ff-uniffi`)
-//! that open the schema directly with `rusqlite`. The web client instead
-//! uses a JS-side `sqlite-wasm`/OPFS store with the same table shapes,
-//! kept in sync with `migrations/` by hand for now.
+//! (building cycle bundles), `ff-api` (server-side queries for the web
+//! client, which has no local database of its own — see §8), and native
+//! clients (Android via `ff-uniffi`) that open the schema directly with
+//! `rusqlite`.
 use rusqlite::Connection;
 use thiserror::Error;
 
 /// Ordered list of migrations to apply, each `(version, sql)`. Applied in
 /// order inside one transaction per `open()` call; already-applied
 /// versions (tracked in `schema_migrations`) are skipped.
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/0001_init.sql")),
+    (2, include_str!("migrations/0002_airspace_bbox.sql")),
+];
 
 #[derive(Debug, Error)]
 pub enum StorageError {

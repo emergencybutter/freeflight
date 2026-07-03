@@ -42,7 +42,9 @@ pub struct FetchedCifp {
     pub cifp_path: PathBuf,
 }
 
-fn http_client() -> reqwest::blocking::Client {
+/// Shared by `airspace.rs` too — same FAA-facing ETL job, same client
+/// config.
+pub(crate) fn http_client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .user_agent("freeflight-etl/0.1 (+https://github.com/emergencybutter/freeflight)")
         .build()

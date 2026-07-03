@@ -1,4 +1,5 @@
-use crate::bundle::{add_chart, build_bundle, BundleSource, ChartSource};
+use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
+use crate::bundle::{add_airspace, add_chart, build_bundle, BundleSource, ChartSource};
 use crate::chart_prep::expand_palette_to_rgb;
 use crate::fetch::{
     discover_chart_cycle, fetch_cifp, fetch_nasr, fetch_sectional_chart, ChartCycle,
@@ -17,6 +18,8 @@ pub enum EtlError {
     #[error(transparent)]
     ChartPrep(#[from] crate::chart_prep::ChartPrepError),
     #[error(transparent)]
+    Airspace(#[from] crate::airspace::AirspaceError),
+    #[error(transparent)]
     Validate(#[from] crate::validate::ValidateError),
     #[error(transparent)]
     Publish(#[from] crate::publish::PublishError),
@@ -25,11 +28,12 @@ pub enum EtlError {
 }
 
 /// Runs the DESIGN.md §7 data pipeline end to end: fetch the current
-/// CIFP/NASR cycle plus every current FAA sectional chart, parse/tile
-/// them into an `ff-storage`-schema SQLite bundle plus one PMTiles
-/// archive per sectional, validate against the previously published
-/// cycle, then publish everything locally under `FF_ETL_DATA_DIR`
-/// (default `data/`) for `ff-api` to serve.
+/// CIFP/NASR cycle, every current FAA sectional chart, and current
+/// Class B/C/D + Special Use Airspace boundaries; parse/tile them into
+/// an `ff-storage`-schema SQLite bundle plus one PMTiles archive per
+/// sectional, validate against the previously published cycle, then
+/// publish everything locally under `FF_ETL_DATA_DIR` (default `data/`)
+/// for `ff-api` to serve.
 ///
 /// The chart steps need GDAL's CLI tools (`gdal_translate`, `gdalwarp`,
 /// `gdaladdo`) on `PATH` — the same external dependency
@@ -66,6 +70,12 @@ pub fn run() -> Result<(), EtlError> {
         &bundle_path,
     )?;
     tracing::info!(?stats, "built cycle bundle");
+
+    tracing::info!("fetching Class B/C/D and Special Use Airspace boundaries");
+    let mut airspace_volumes = fetch_class_airspace()?;
+    airspace_volumes.extend(fetch_special_use_airspace()?);
+    add_airspace(&bundle_path, &airspace_volumes)?;
+    tracing::info!(count = airspace_volumes.len(), "added airspace boundaries");
 
     let chart_cycle: ChartCycle = discover_chart_cycle()?;
     tracing::info!(

@@ -3,8 +3,8 @@ import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
-import { fetchAirportDetail, fetchAirportsInBbox, fetchCharts, fetchProcedureDetail } from "./data";
-import type { Airport, GAirmet, ProcedureDetail, Runway, Sigmet, WindsAloftBulletin } from "./types";
+import { fetchAirportDetail, fetchAirportsInBbox, fetchAirspaceInBbox, fetchCharts, fetchProcedureDetail } from "./data";
+import type { Airport, AirspaceVolume, GAirmet, ProcedureDetail, Runway, Sigmet, WindsAloftBulletin } from "./types";
 import { fetchGairmets, fetchMetars, fetchSigmets, fetchWindsAloft } from "./weather";
 
 const AIRPORTS_SOURCE = "airports";
@@ -13,6 +13,7 @@ const PROCEDURE_SOURCE = "procedure-path";
 const GAIRMET_SOURCE = "gairmets";
 const SIGMET_SOURCE = "sigmets";
 const WINDS_ALOFT_SOURCE = "winds-aloft";
+const AIRSPACE_SOURCE = "airspace";
 
 // Bay Area demo scope only has stations at this one altitude reliably —
 // see MapView's winds-aloft fetch for why this isn't user-selectable yet.
@@ -35,6 +36,22 @@ const GAIRMET_HAZARD_COLORS: Record<string, string> = {
   SFC_WND: "#e0c341",
 };
 const DEFAULT_GAIRMET_COLOR = "#ffb020";
+
+// Roughly follows real sectional-chart convention (blue = Class B/D,
+// magenta = Class C, red/orange = the military-flavored special-use
+// kinds) rather than inventing an arbitrary categorical palette — a
+// pilot reading this map already has that color association.
+const AIRSPACE_CLASS_COLORS: Record<string, string> = {
+  B: "#3d7fc4",
+  C: "#c23fd1",
+  D: "#3d7fc4",
+  MOA: "#d1663f",
+  RESTRICTED: "#d13f3f",
+  PROHIBITED: "#d13f3f",
+  WARNING: "#e0973f",
+  ALERT: "#e0c341",
+};
+const DEFAULT_AIRSPACE_COLOR = "#8a8a8a";
 
 // Registered once per page load (module scope, not per-component-mount):
 // MapLibre's addProtocol is global, and re-registering on every mount
@@ -95,6 +112,20 @@ function sigmetGeoJson(records: Sigmet[]): GeoJSON.FeatureCollection {
         coordinates: [r.coords.map((c) => [c.lon, c.lat])],
       },
       properties: { hazard: r.hazard, seriesId: r.seriesId },
+    })),
+  };
+}
+
+/** `boundary_geojson` is a GeoJSON `Polygon` geometry object (not a
+ * whole `Feature`), stored/served as an unparsed string — see
+ * `AirspaceVolume`'s doc comment in types.ts. */
+function airspaceGeoJson(volumes: AirspaceVolume[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: volumes.map((v) => ({
+      type: "Feature",
+      geometry: JSON.parse(v.boundary_geojson) as GeoJSON.Geometry,
+      properties: { id: v.id, name: v.name, class: v.class, floor: v.floor, ceiling: v.ceiling },
     })),
   };
 }
@@ -239,6 +270,22 @@ async function refreshVisibleAirports(
   }
 }
 
+/** Airspace boundaries are view-driven (bbox query per moveend, same as
+ * airports) but not zoom-gated the way airports are — a Class B/C/D or
+ * SUA boundary is relevant situational awareness at any zoom, and a
+ * bbox at a low zoom still only returns what's actually in view rather
+ * than nationwide, so there's no marker-soup-style volume problem here. */
+async function refreshVisibleAirspace(map: MlMap) {
+  const bounds = map.getBounds();
+  const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+  try {
+    const volumes = await fetchAirspaceInBbox(bbox);
+    (map.getSource(AIRSPACE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(airspaceGeoJson(volumes));
+  } catch (err) {
+    console.warn("couldn't load airspace boundaries for the map view", err);
+  }
+}
+
 /** Fetches the CONUS-wide hazard overlays and the winds-aloft bulletin
  * (cached in `windsBulletinRef` for reuse as the view moves). Each is
  * independent, so one failing doesn't block the others. */
@@ -364,6 +411,52 @@ export function MapView({
         })
         .catch((err: unknown) => console.warn("couldn't load the chart catalog for the map", err));
 
+      // Airspace boundaries render above chart imagery but below weather
+      // hazards/airports, same insertion point (before "airports-circle")
+      // as the chart loop above and the G-AIRMET/SIGMET sources below.
+      // Filled lightly so overlapping shelves (a busy Class B/C stacks
+      // several) are still readable rather than opaque.
+      const airspaceColorExpr: maplibregl.ExpressionSpecification = [
+        "match",
+        ["get", "class"],
+        "B",
+        AIRSPACE_CLASS_COLORS.B,
+        "C",
+        AIRSPACE_CLASS_COLORS.C,
+        "D",
+        AIRSPACE_CLASS_COLORS.D,
+        "MOA",
+        AIRSPACE_CLASS_COLORS.MOA,
+        "RESTRICTED",
+        AIRSPACE_CLASS_COLORS.RESTRICTED,
+        "PROHIBITED",
+        AIRSPACE_CLASS_COLORS.PROHIBITED,
+        "WARNING",
+        AIRSPACE_CLASS_COLORS.WARNING,
+        "ALERT",
+        AIRSPACE_CLASS_COLORS.ALERT,
+        DEFAULT_AIRSPACE_COLOR,
+      ];
+      map.addSource(AIRSPACE_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer(
+        {
+          id: "airspace-fill",
+          type: "fill",
+          source: AIRSPACE_SOURCE,
+          paint: { "fill-color": airspaceColorExpr, "fill-opacity": 0.05 },
+        },
+        "airports-circle",
+      );
+      map.addLayer(
+        {
+          id: "airspace-line",
+          type: "line",
+          source: AIRSPACE_SOURCE,
+          paint: { "line-color": airspaceColorExpr, "line-width": 1.5 },
+        },
+        "airports-circle",
+      );
+
       // G-AIRMET/SIGMET overlays render above chart imagery but below the
       // airport markers, inserted before "airports-circle" same as charts
       // (added after the chart loop above, so they end up above charts —
@@ -475,8 +568,10 @@ export function MapView({
       // and re-applied to whatever airports are in view. Each fetch is
       // independent so one failing doesn't block the others.
       void loadWeatherOverlays(map, windsBulletinRef).then(() => refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef));
+      void refreshVisibleAirspace(map);
       map.on("moveend", () => {
         void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef);
+        void refreshVisibleAirspace(map);
       });
 
       setLoaded(true);

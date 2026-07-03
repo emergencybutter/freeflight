@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/data/procedures/:id", get(data::procedure_detail))
         .route("/data/charts", get(data::charts))
+        .route("/data/airspace", get(data::airspace))
         .route("/notams", get(notams::get_notams))
         .nest_service("/bundles", bundles)
         .with_state(state)

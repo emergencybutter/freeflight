@@ -96,6 +96,27 @@ export interface ChartCatalogEntry {
   tile_url: string;
 }
 
+/** `GET /data/airspace` — Class B/C/D + Special Use Airspace boundaries.
+ * `class` is `"B"|"C"|"D"|"E"|"G"` or a special-use kind
+ * (`"MOA"|"RESTRICTED"|"PROHIBITED"|"WARNING"|"ALERT"`) — see
+ * `ff-etl/src/bundle.rs`'s `airspace_class_str`. `floor`/`ceiling` are
+ * pre-formatted strings (e.g. `"MSL:7000"`, `"SFC"`, `"FL180"`,
+ * `"UNLTD"`), not structured, since the map only displays them.
+ * `boundary_geojson` is a GeoJSON `Polygon` geometry object (not a whole
+ * `Feature`), stored/served as an unparsed string. */
+export interface AirspaceVolume {
+  id: string;
+  name: string;
+  class: string;
+  floor: string;
+  ceiling: string;
+  boundary_geojson: string;
+  min_lat: number;
+  min_lon: number;
+  max_lat: number;
+  max_lon: number;
+}
+
 /** `GET /cycles/latest` — mirrors ff-sync's CycleManifest. */
 export interface CycleManifest {
   cycle_id: string;

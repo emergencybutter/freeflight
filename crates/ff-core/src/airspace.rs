@@ -24,6 +24,12 @@ pub enum SpecialUseKind {
 pub enum AltitudeLimit {
     Msl(u32),
     Agl(u32),
+    /// Flight level (hundreds of feet at standard pressure, e.g. `180` =
+    /// FL180) — distinct from `Msl` because it's a different reference
+    /// (29.92" Hg, not actual sea level) and FAA's special-use-airspace
+    /// data reports some limits this way (`UPPER_CODE`/`LOWER_CODE` =
+    /// `"STD"`) rather than as MSL feet.
+    FlightLevel(u32),
     Surface,
     Unlimited,
 }

@@ -99,7 +99,7 @@ consumed today vs. designed-for; update it as sources come online.
 | VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Sectionals implemented in the automated `ff-etl` loop, nationwide: discover the current chart cycle → download every FAA sectional (CONUS + Alaska + Hawaii + a few Canadian border charts) → expand palette to RGB → tile each to its own PMTiles archive, one `chart_catalog` row per sectional per cycle. TAC/Helicopter charts unstarted |
 | IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
 | Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle | Unstarted |
-| Airspace boundaries (Class B/C/D, SUA, MOA) | FAA NASR shapefiles | Shapefile/CSV | 28-day cycle | Unstarted (schema table exists, never populated) |
+| Airspace boundaries (Class B/C/D, SUA, MOA) | FAA ArcGIS Hub feature services (`Class_Airspace`, `Special_Use_Airspace` — not the NASR CSV subscription, which only has per-airport Class B/C/D flags, no geometry) | GeoJSON via REST query | continuously current | Implemented in the automated `ff-etl` loop and validated against live data (~1286 Class B/C/D shelves + ~1533 Special Use Airspace areas) |
 | Obstacles | FAA Digital Obstacle File (DOF) | Fixed-width | 56-day cycle | Unstarted |
 | METAR / TAF / PIREP | aviationweather.gov Data API | JSON/XML | real-time | METAR/TAF implemented + validated live; PIREP unstarted |
 | AIRMET / SIGMET / G-AIRMET, winds/temps aloft | aviationweather.gov Data API | JSON/XML/GeoJSON | real-time | Implemented + validated live (G-AIRMET, SIGMET, intl SIGMET, winds/temps aloft) |
@@ -224,6 +224,7 @@ Implemented today:
 | `GET /data/airports/:icao/procedures` | web | procedure list |
 | `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates |
 | `GET /data/charts?bbox=` | web | chart_catalog entries (optionally bbox-filtered) |
+| `GET /data/airspace?bbox=` | web | Class B/C/D + Special Use Airspace boundary polygons (optionally bbox-filtered) |
 | `GET /data/search?q=` | web | airport ident/name search (prefix on ICAO/FAA/IATA, substring on name, capped at 20) — pulled forward from Phase 2 once bundles went nationwide and a fixed airport list stopped making sense; the §9.3 route builder will reuse it |
 
 Conventions: JSON only; no authentication in Phase 1 (see §11's abuse
@@ -392,7 +393,18 @@ need to render procedures with the same fidelity as certified tools.
   CIFP cycle), tiles each sectional at its own full native extent via
   `ff-charts` (no per-region cropping now that there's no single
   "region" left), and needs GDAL's CLI tools on `PATH`. No cron trigger
-  yet; runs are manual.
+  yet; runs are manual. Run for real end to end against live FAA data
+  (all 53 current sectionals, ~16GB of PMTiles output, ~5 hours):
+  confirmed via `ff-api` — `/cycles/latest`'s `sqlite_sha256` matched an
+  independent hash of the published bundle, all 53 `/data/charts`
+  entries had correct bboxes, and a PMTiles file served a real 206
+  Partial Content range response with a valid magic header. Nationwide
+  chart output is disk-hungry enough that both the GDAL workdir
+  (`tempfile::tempdir()`, i.e. `TMPDIR`) and `FF_ETL_DATA_DIR` need to
+  point at a filesystem with tens of GB free — a run against a small
+  `/tmp` or a small root disk will fail partway through (once with "no
+  space" mid-GDAL, once more with "no space" on the final `latest.json`
+  write after all 53 charts had already copied successfully).
 - Clients never talk to FAA/NOAA chart/procedure endpoints directly.
   Android pulls the pre-processed bundle from `ff-api`/CDN and queries it
   locally (offline-capable, §8). The web client never downloads the

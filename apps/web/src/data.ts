@@ -5,6 +5,7 @@ import { fetchJson } from "./api";
 import type {
   Airport,
   AirportDetail,
+  AirspaceVolume,
   ChartCatalogEntry,
   CycleManifest,
   Procedure,
@@ -40,4 +41,12 @@ export async function fetchProcedureDetail(id: string): Promise<ProcedureDetail>
 
 export async function fetchCharts(): Promise<ChartCatalogEntry[]> {
   return fetchJson<ChartCatalogEntry[]>("/data/charts");
+}
+
+/** Airspace boundaries within `minLon,minLat,maxLon,maxLat` — a
+ * nationwide cycle has ~2800 rows (one per shelf/sector, not one per
+ * named airspace) across Class B/C/D + Special Use Airspace, so the map
+ * asks for a bounding box rather than everything, same as airports. */
+export async function fetchAirspaceInBbox(bbox: string): Promise<AirspaceVolume[]> {
+  return fetchJson<AirspaceVolume[]>(`/data/airspace?bbox=${encodeURIComponent(bbox)}`);
 }

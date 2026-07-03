@@ -13,8 +13,9 @@ use ff_cifp::{
     pair_runway_ends, RecordCategory,
 };
 use ff_core::{
-    AirportType, AltitudeConstraint, Frequency, FrequencyKind, Navaid, NavaidType, PathAndTerm,
-    ProcedureKind, Runway, RunwaySurface, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
+    AirportType, AirspaceClass, AirspaceVolume, AltitudeConstraint, AltitudeLimit, Frequency,
+    FrequencyKind, Navaid, NavaidType, PathAndTerm, Polygon, ProcedureKind, Runway, RunwaySurface,
+    SpecialUseKind, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
 use ff_nasr::{
     frequencies_for_airport, parse_apt_base, parse_apt_runway, parse_apt_runway_end, parse_frq,
@@ -377,6 +378,37 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
     Ok(())
 }
 
+/// Inserts every volume from `crate::airspace`'s fetch functions into the
+/// bundle's `airspace` table, one row per volume (a busy Class B/C is
+/// several rows, one per shelf/sector — see `crate::airspace` docs), in
+/// one transaction (same reasoning as `build_bundle`'s insert loop:
+/// ~2800 rows across both real FAA sources as of this writing).
+pub fn add_airspace(bundle_path: &Path, volumes: &[AirspaceVolume]) -> Result<(), BundleError> {
+    let mut conn = rusqlite::Connection::open(bundle_path)?;
+    let tx = conn.transaction()?;
+    for v in volumes {
+        let (min_lat, min_lon, max_lat, max_lon) = polygon_bbox(&v.boundary);
+        tx.execute(
+            "INSERT INTO airspace (id, name, class, floor, ceiling, boundary_geojson, min_lat, min_lon, max_lat, max_lon)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                v.id,
+                v.name,
+                airspace_class_str(&v.class),
+                altitude_limit_str(v.floor),
+                altitude_limit_str(v.ceiling),
+                polygon_geojson(&v.boundary),
+                min_lat,
+                min_lon,
+                max_lat,
+                max_lon,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Parses the NASR extract at `dir` and returns real runway surfaces
 /// (keyed by `(airport_icao, runway_ident)`) and communication
 /// frequencies for just the requested `icaos`, merging on top of what
@@ -532,6 +564,57 @@ fn speed_str(s: SpeedConstraint) -> String {
         SpeedConstraint::AtOrBelow(kt) => format!("At/below {kt} kt"),
         SpeedConstraint::At(kt) => format!("At {kt} kt"),
     }
+}
+
+fn airspace_class_str(c: &AirspaceClass) -> &'static str {
+    match c {
+        AirspaceClass::B => "B",
+        AirspaceClass::C => "C",
+        AirspaceClass::D => "D",
+        AirspaceClass::E => "E",
+        AirspaceClass::G => "G",
+        AirspaceClass::SpecialUse(SpecialUseKind::Moa) => "MOA",
+        AirspaceClass::SpecialUse(SpecialUseKind::Restricted) => "RESTRICTED",
+        AirspaceClass::SpecialUse(SpecialUseKind::Prohibited) => "PROHIBITED",
+        AirspaceClass::SpecialUse(SpecialUseKind::Warning) => "WARNING",
+        AirspaceClass::SpecialUse(SpecialUseKind::Alert) => "ALERT",
+    }
+}
+
+fn altitude_limit_str(a: AltitudeLimit) -> String {
+    match a {
+        AltitudeLimit::Msl(ft) => format!("MSL:{ft}"),
+        AltitudeLimit::Agl(ft) => format!("AGL:{ft}"),
+        AltitudeLimit::FlightLevel(fl) => format!("FL{fl}"),
+        AltitudeLimit::Surface => "SFC".to_string(),
+        AltitudeLimit::Unlimited => "UNLTD".to_string(),
+    }
+}
+
+/// `Polygon.points` are `(lat, lon)` (see its doc comment); GeoJSON wants
+/// `(lon, lat)` and an explicitly closed ring (`Polygon`'s own doc notes
+/// its last point implicitly closes with the first, i.e. isn't repeated
+/// in storage) — both handled here on the way out to `boundary_geojson`.
+fn polygon_geojson(p: &Polygon) -> String {
+    let mut coords: Vec<[f64; 2]> = p.points.iter().map(|&(lat, lon)| [lon, lat]).collect();
+    if let Some(&first) = coords.first() {
+        coords.push(first);
+    }
+    serde_json::json!({ "type": "Polygon", "coordinates": [coords] }).to_string()
+}
+
+fn polygon_bbox(p: &Polygon) -> (f64, f64, f64, f64) {
+    let mut min_lat = f64::MAX;
+    let mut min_lon = f64::MAX;
+    let mut max_lat = f64::MIN;
+    let mut max_lon = f64::MIN;
+    for &(lat, lon) in &p.points {
+        min_lat = min_lat.min(lat);
+        min_lon = min_lon.min(lon);
+        max_lat = max_lat.max(lat);
+        max_lon = max_lon.max(lon);
+    }
+    (min_lat, min_lon, max_lat, max_lon)
 }
 
 fn chart_kind_str(k: ChartKind) -> &'static str {

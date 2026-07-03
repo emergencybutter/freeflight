@@ -128,6 +128,23 @@ pub struct ChartCatalogRow {
     pub tile_url: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AirspaceRow {
+    pub id: String,
+    pub name: String,
+    pub class: String,
+    pub floor: String,
+    pub ceiling: String,
+    /// A GeoJSON `Polygon` geometry object (not a whole `Feature`) — the
+    /// bundle stores exactly what `ff-etl`'s `polygon_geojson` wrote,
+    /// unparsed, so the client's MapLibre source can use it directly.
+    pub boundary_geojson: String,
+    pub min_lat: f64,
+    pub min_lon: f64,
+    pub max_lat: f64,
+    pub max_lon: f64,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BboxQuery {
     /// `minLon,minLat,maxLon,maxLat` (GeoJSON/MapLibre bounds order).
@@ -531,6 +548,53 @@ pub async fn charts(State(state): State<AppState>, Query(query): Query<BboxQuery
                 }
             }
             rows.push(chart);
+        }
+        Ok(rows)
+    })
+    .await;
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+/// Class B/C/D + Special Use Airspace boundaries (DESIGN.md §3), same
+/// bbox-overlap-filter shape as `charts` above — a nationwide cycle has
+/// ~2800 rows across both real FAA sources (one per shelf/sector, not
+/// one per named airspace), too many to always send whole.
+pub async fn airspace(State(state): State<AppState>, Query(query): Query<BboxQuery>) -> Response {
+    let bbox = query.bbox.as_deref().and_then(parse_bbox);
+    let result = with_bundle(&state, move |conn| {
+        let mut rows = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, class, floor, ceiling, boundary_geojson, min_lat, min_lon, max_lat, max_lon FROM airspace",
+        )?;
+        let mapped = stmt.query_map([], |row| {
+            Ok(AirspaceRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                class: row.get(2)?,
+                floor: row.get(3)?,
+                ceiling: row.get(4)?,
+                boundary_geojson: row.get(5)?,
+                min_lat: row.get(6)?,
+                min_lon: row.get(7)?,
+                max_lat: row.get(8)?,
+                max_lon: row.get(9)?,
+            })
+        })?;
+        for volume in mapped {
+            let volume = volume?;
+            if let Some((min_lon, min_lat, max_lon, max_lat)) = bbox {
+                let overlaps = volume.min_lon <= max_lon
+                    && volume.max_lon >= min_lon
+                    && volume.min_lat <= max_lat
+                    && volume.max_lat >= min_lat;
+                if !overlaps {
+                    continue;
+                }
+            }
+            rows.push(volume);
         }
         Ok(rows)
     })
