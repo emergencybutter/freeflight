@@ -15,7 +15,10 @@ pub struct LocationQuery {
 /// `ff-notam`'s crate docs for why that's an email request to
 /// NOTAMS@faa.gov rather than self-service signup, and why the response
 /// is passed through as raw JSON rather than typed structs.
-pub async fn get_notams(State(state): State<AppState>, Query(query): Query<LocationQuery>) -> Response {
+pub async fn get_notams(
+    State(state): State<AppState>,
+    Query(query): Query<LocationQuery>,
+) -> Response {
     let Some(notam) = &state.notam else {
         return (
             StatusCode::NOT_IMPLEMENTED,

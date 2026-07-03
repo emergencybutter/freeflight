@@ -9,7 +9,7 @@
 //! ```sh
 //! cargo test -p ff-weather --test real_winds_aloft -- --ignored --nocapture
 //! ```
-use ff_weather::{parse_windtemp_bulletin, Wind, WeatherClient};
+use ff_weather::{parse_windtemp_bulletin, WeatherClient, Wind};
 
 #[test]
 fn parses_real_low_bulletin_exhaustively() {
@@ -30,7 +30,13 @@ fn parses_real_low_bulletin_exhaustively() {
     // produce a level at all.
     assert!(!abi.levels.iter().any(|l| l.altitude_ft == 3000));
     let l6000 = abi.levels.iter().find(|l| l.altitude_ft == 6000).unwrap();
-    assert_eq!(l6000.wind, Wind::Directional { direction_deg: 160, speed_kt: 16 });
+    assert_eq!(
+        l6000.wind,
+        Wind::Directional {
+            direction_deg: 160,
+            speed_kt: 16
+        }
+    );
     assert_eq!(l6000.temp_c, Some(21));
     // 18000ft: "9900-05" — light and variable wind, with a temp.
     let l18000 = abi.levels.iter().find(|l| l.altitude_ft == 18000).unwrap();
@@ -38,7 +44,13 @@ fn parses_real_low_bulletin_exhaustively() {
     assert_eq!(l18000.temp_c, Some(-5));
     // 30000ft: "222230" — implied-negative temp, no explicit sign.
     let l30000 = abi.levels.iter().find(|l| l.altitude_ft == 30000).unwrap();
-    assert_eq!(l30000.wind, Wind::Directional { direction_deg: 220, speed_kt: 22 });
+    assert_eq!(
+        l30000.wind,
+        Wind::Directional {
+            direction_deg: 220,
+            speed_kt: 22
+        }
+    );
     assert_eq!(l30000.temp_c, Some(-30));
 
     let abr = bulletin
@@ -48,7 +60,13 @@ fn parses_real_low_bulletin_exhaustively() {
         .expect("ABR present");
     // "ABR 1411 ..." — 3000ft: wind only, no temperature at all.
     let abr_3000 = abr.levels.iter().find(|l| l.altitude_ft == 3000).unwrap();
-    assert_eq!(abr_3000.wind, Wind::Directional { direction_deg: 140, speed_kt: 11 });
+    assert_eq!(
+        abr_3000.wind,
+        Wind::Directional {
+            direction_deg: 140,
+            speed_kt: 11
+        }
+    );
     assert_eq!(abr_3000.temp_c, None);
 
     let atl = bulletin

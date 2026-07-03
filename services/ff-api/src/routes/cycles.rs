@@ -39,19 +39,16 @@ pub async fn latest(State(state): State<AppState>) -> Response {
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     };
 
-    let (pmtiles_url, pmtiles_sha256) = match ff_etl::publish::latest_pmtiles_path(&state.data_dir) {
-        Ok(Some(pmtiles_path)) => match tokio::fs::read(&pmtiles_path).await {
-            Ok(pmtiles_bytes) => (
-                Some(format!("/bundles/{cycle_id}/chart.pmtiles")),
-                Some(sha256_hex(&pmtiles_bytes)),
-            ),
-            Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
-        },
-        // Cycles published before chart tiling joined the pipeline
-        // legitimately have no chart — not an error.
-        Ok(None) => (None, None),
-        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
-    };
+    // `CycleManifest` (an `ff-sync` type, shared with the not-yet-built
+    // Android client) only has room for a single chart file — a leftover
+    // from when the pipeline tiled exactly one regional sectional per
+    // cycle. A nationwide cycle now publishes dozens of per-sectional
+    // PMTiles files (see `/data/charts` and `chart_catalog` for the real,
+    // complete list), which that single-file shape can't represent, so
+    // it's left `None` here rather than arbitrarily picking one chart and
+    // implying it's "the" chart. Revisit once Android sync needs real
+    // multi-chart offline support.
+    let (pmtiles_url, pmtiles_sha256) = (None, None);
 
     Json(CycleManifest {
         sqlite_url: format!("/bundles/{cycle_id}/cycle.sqlite"),

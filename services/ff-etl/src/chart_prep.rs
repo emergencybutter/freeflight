@@ -1,13 +1,13 @@
-//! Crops a full FAA sectional GeoTIFF down to a region bounding box and
-//! expands its color palette to RGB, producing the input
-//! `ff-charts::geotiff_to_pmtiles` expects.
+//! Expands a FAA sectional GeoTIFF's color palette to RGB, producing the
+//! input `ff-charts::geotiff_to_pmtiles` expects.
 //!
-//! Both steps were worked out against a real San Francisco sectional
-//! (see TODO.md's "Chart imagery"): the crop must use nearest-neighbor
-//! resampling because the source GeoTIFF is palette-indexed — bilinear
-//! would blend palette *indices* and corrupt every color — and the
-//! palette must then be expanded to RGB so the pipeline's own later
-//! bilinear warp (to Web Mercator) is operating on real color values.
+//! Worked out against a real San Francisco sectional: the source GeoTIFF
+//! is palette-indexed, and
+//! `geotiff_to_pmtiles`'s own later bilinear warp (to Web Mercator) would
+//! blend palette *indices* rather than colors if it ran on the raw
+//! source — corrupting every color. Expanding to RGB first (nearest by
+//! definition — `gdal_translate -expand rgb` is a direct palette lookup,
+//! no resampling involved) fixes that.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
@@ -43,47 +43,24 @@ fn run_tool(tool: &'static str, args: &[&std::ffi::OsStr]) -> Result<(), ChartPr
     Ok(())
 }
 
-/// Crop `source_tif` to the WGS84 bbox (`min_lat, min_lon, max_lat,
-/// max_lon`) and expand its palette to RGB, writing intermediates into
-/// `workdir`. Returns the cropped RGB GeoTIFF's path. Requires
-/// `gdalwarp`/`gdal_translate` on `PATH` (same GDAL CLI dependency as
+/// Expand `source_tif`'s indexed palette to RGB, writing the result into
+/// `workdir`. Returns the RGB GeoTIFF's path, at `source_tif`'s full
+/// native extent (nationwide chart coverage tiles each sectional whole,
+/// rather than cropping to a region — see pipeline.rs). Requires
+/// `gdal_translate` on `PATH` (same GDAL CLI dependency as
 /// `ff-charts::geotiff_to_pmtiles`, which runs downstream of this).
-pub fn crop_sectional_to_bbox(
-    source_tif: &Path,
-    workdir: &Path,
-    bbox: (f64, f64, f64, f64),
-) -> Result<PathBuf, ChartPrepError> {
-    let (min_lat, min_lon, max_lat, max_lon) = bbox;
-    let cropped = workdir.join("chart_cropped.tif");
-    let cropped_rgb = workdir.join("chart_cropped_rgb.tif");
-
-    run_tool(
-        "gdalwarp",
-        &[
-            "-t_srs".as_ref(),
-            "EPSG:4326".as_ref(),
-            "-te".as_ref(),
-            format!("{min_lon}").as_ref(),
-            format!("{min_lat}").as_ref(),
-            format!("{max_lon}").as_ref(),
-            format!("{max_lat}").as_ref(),
-            "-r".as_ref(),
-            "near".as_ref(),
-            "-overwrite".as_ref(),
-            source_tif.as_os_str(),
-            cropped.as_os_str(),
-        ],
-    )?;
+pub fn expand_palette_to_rgb(source_tif: &Path, workdir: &Path) -> Result<PathBuf, ChartPrepError> {
+    let expanded_rgb = workdir.join("chart_rgb.tif");
 
     run_tool(
         "gdal_translate",
         &[
             "-expand".as_ref(),
             "rgb".as_ref(),
-            cropped.as_os_str(),
-            cropped_rgb.as_os_str(),
+            source_tif.as_os_str(),
+            expanded_rgb.as_os_str(),
         ],
     )?;
 
-    Ok(cropped_rgb)
+    Ok(expanded_rgb)
 }

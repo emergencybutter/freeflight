@@ -1,9 +1,10 @@
 //! One-off tool to build a small SQLite demo bundle (a handful of real
 //! airports) from local FAA/NOAA source files, for cases that want a
 //! bundle without waiting on/depending on live network access — the real
-//! pipeline (`cargo run -p ff-etl`, DESIGN.md §7) fetches its own inputs
-//! and always covers the same fixed Bay Area region; this example takes
-//! any CIFP file/NASR extract/ICAO list you already have on disk.
+//! pipeline (`cargo run -p ff-etl`, DESIGN.md §7) fetches its own
+//! nationwide inputs (every airport/procedure, every current FAA
+//! sectional); this example takes any CIFP file/NASR extract/ICAO list
+//! (and at most one chart) you already have on disk instead.
 //!
 //! Usage:
 //! ```sh
@@ -25,8 +26,8 @@
 //! build a bundle with no chart imagery.
 use ff_etl::bundle::{build_bundle, BundleSource, ChartSource};
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::env;
+use std::path::PathBuf;
 
 struct Args {
     cifp_path: String,
@@ -91,6 +92,7 @@ fn main() {
                     .to_string_lossy()
             );
             Some(ChartSource {
+                id: "demo-sectional".to_string(),
                 geotiff_path: PathBuf::from(geotiff_path),
                 pmtiles_out,
                 cycle_id: "demo".to_string(),
@@ -112,7 +114,8 @@ fn main() {
         icaos: Some(args.icaos),
     };
 
-    let stats = build_bundle(&source, &PathBuf::from(&args.output_path)).expect("failed to build bundle");
+    let stats =
+        build_bundle(&source, &PathBuf::from(&args.output_path)).expect("failed to build bundle");
 
     println!(
         "wrote {} airports, {} runways, {} frequencies, {} procedures, {} transitions, {} legs, \

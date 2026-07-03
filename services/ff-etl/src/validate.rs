@@ -26,7 +26,9 @@ pub fn validate_bundle(
     previous_bundle_path: Option<&Path>,
 ) -> Result<(), ValidateError> {
     if stats.airports == 0 {
-        return Err(ValidateError::Failed("bundle has zero airports".to_string()));
+        return Err(ValidateError::Failed(
+            "bundle has zero airports".to_string(),
+        ));
     }
 
     let conn = Connection::open(bundle_path)?;
@@ -41,7 +43,10 @@ pub fn validate_bundle(
         })?;
         for row in rows {
             let (icao, lat, lon) = row?;
-            if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) || (lat == 0.0 && lon == 0.0) {
+            if !(-90.0..=90.0).contains(&lat)
+                || !(-180.0..=180.0).contains(&lon)
+                || (lat == 0.0 && lon == 0.0)
+            {
                 return Err(ValidateError::Failed(format!(
                     "{icao} has implausible coordinates ({lat}, {lon})"
                 )));
@@ -50,7 +55,9 @@ pub fn validate_bundle(
     }
 
     let Some(previous_path) = previous_bundle_path else {
-        tracing::info!("no previously published cycle to compare against — treating this as the baseline");
+        tracing::info!(
+            "no previously published cycle to compare against — treating this as the baseline"
+        );
         return Ok(());
     };
     if !previous_path.exists() {
@@ -62,7 +69,8 @@ pub fn validate_bundle(
     }
 
     let prev_conn = Connection::open(previous_path)?;
-    let prev_airports: usize = prev_conn.query_row("SELECT COUNT(*) FROM airport", [], |row| row.get(0))?;
+    let prev_airports: usize =
+        prev_conn.query_row("SELECT COUNT(*) FROM airport", [], |row| row.get(0))?;
     // A cycle-to-cycle drop this sharp for the same fixed region means
     // something broke upstream, not real-world airport closures.
     if prev_airports > 0 && stats.airports * 2 < prev_airports {
@@ -139,7 +147,10 @@ mod tests {
     fn passes_when_airport_count_is_stable_across_cycles() {
         let dir = tempfile::tempdir().unwrap();
         let prev_path = dir.path().join("prev.sqlite");
-        bundle_with_airports(&prev_path, &[("KSFO", 37.6, -122.4), ("KOAK", 37.7, -122.2)]);
+        bundle_with_airports(
+            &prev_path,
+            &[("KSFO", 37.6, -122.4), ("KOAK", 37.7, -122.2)],
+        );
         let new_path = dir.path().join("new.sqlite");
         bundle_with_airports(&new_path, &[("KSFO", 37.6, -122.4), ("KOAK", 37.7, -122.2)]);
 

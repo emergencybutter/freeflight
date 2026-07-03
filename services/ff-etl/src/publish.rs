@@ -22,18 +22,20 @@ struct LatestPointer {
     /// Relative to the data directory, so the pointer file stays valid if
     /// the whole data directory is moved/re-rooted.
     sqlite_path: String,
-    /// Relative like `sqlite_path`; absent for cycles published before
-    /// chart tiling joined the pipeline.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pmtiles_path: Option<String>,
+    /// Relative like `sqlite_path`, one per published chart. A nationwide
+    /// cycle has one entry per sectional (see pipeline.rs); empty for
+    /// cycles published before chart tiling joined the pipeline.
+    #[serde(default)]
+    pmtiles_paths: Vec<String>,
 }
 
-/// Copies `bundle_path` (and `pmtiles_path`, if given) into
-/// `<data_dir>/cycles/<cycle_id>/` and updates `<data_dir>/latest.json`
-/// to point at them. Returns the published bundle's path.
+/// Copies `bundle_path` and every `(destination_filename, source_path)`
+/// in `pmtiles_files` into `<data_dir>/cycles/<cycle_id>/`, and updates
+/// `<data_dir>/latest.json` to point at them. Returns the published
+/// bundle's path.
 pub fn publish_bundle(
     bundle_path: &Path,
-    pmtiles_path: Option<&Path>,
+    pmtiles_files: &[(String, PathBuf)],
     cycle_id: &str,
     data_dir: &Path,
 ) -> Result<PathBuf, PublishError> {
@@ -42,19 +44,21 @@ pub fn publish_bundle(
     let published_path = cycle_dir.join("cycle.sqlite");
     std::fs::copy(bundle_path, &published_path)?;
 
-    let published_pmtiles = if let Some(pmtiles) = pmtiles_path {
-        std::fs::copy(pmtiles, cycle_dir.join("chart.pmtiles"))?;
-        Some(format!("cycles/{cycle_id}/chart.pmtiles"))
-    } else {
-        None
-    };
+    let mut published_pmtiles = Vec::with_capacity(pmtiles_files.len());
+    for (filename, source_path) in pmtiles_files {
+        std::fs::copy(source_path, cycle_dir.join(filename))?;
+        published_pmtiles.push(format!("cycles/{cycle_id}/{filename}"));
+    }
 
     let pointer = LatestPointer {
         cycle_id: cycle_id.to_string(),
         sqlite_path: format!("cycles/{cycle_id}/cycle.sqlite"),
-        pmtiles_path: published_pmtiles,
+        pmtiles_paths: published_pmtiles,
     };
-    std::fs::write(data_dir.join("latest.json"), serde_json::to_string_pretty(&pointer)?)?;
+    std::fs::write(
+        data_dir.join("latest.json"),
+        serde_json::to_string_pretty(&pointer)?,
+    )?;
 
     Ok(published_path)
 }
@@ -71,14 +75,18 @@ pub fn latest_bundle_path(data_dir: &Path) -> Result<Option<PathBuf>, PublishErr
     Ok(Some(data_dir.join(pointer.sqlite_path)))
 }
 
-/// Like [`latest_bundle_path`], but for the published chart PMTiles —
-/// `Ok(None)` when there's no published cycle or the cycle predates
-/// chart tiling.
-pub fn latest_pmtiles_path(data_dir: &Path) -> Result<Option<PathBuf>, PublishError> {
+/// Like [`latest_bundle_path`], but for the published chart PMTiles files
+/// — empty when there's no published cycle or the cycle predates chart
+/// tiling. A nationwide cycle has one entry per sectional.
+pub fn latest_pmtiles_paths(data_dir: &Path) -> Result<Vec<PathBuf>, PublishError> {
     let pointer_path = data_dir.join("latest.json");
     if !pointer_path.exists() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let pointer: LatestPointer = serde_json::from_str(&std::fs::read_to_string(&pointer_path)?)?;
-    Ok(pointer.pmtiles_path.map(|p| data_dir.join(p)))
+    Ok(pointer
+        .pmtiles_paths
+        .into_iter()
+        .map(|p| data_dir.join(p))
+        .collect())
 }

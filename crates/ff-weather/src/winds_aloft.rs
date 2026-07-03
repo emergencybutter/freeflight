@@ -145,7 +145,10 @@ fn parse_header_columns(header: &str) -> Vec<Column> {
                 i += 1;
             }
             if let Ok(altitude_ft) = header[start..i].parse() {
-                columns.push(Column { altitude_ft, end: i - 1 });
+                columns.push(Column {
+                    altitude_ft,
+                    end: i - 1,
+                });
             }
         } else {
             i += 1;
@@ -204,7 +207,11 @@ fn decode_field(field: &str) -> Option<(Wind, Option<i32>)> {
         7 => {
             let (ds, signed) = field.split_at(4);
             let magnitude: i32 = signed[1..].parse().ok()?;
-            let t = if &signed[0..1] == "-" { -magnitude } else { magnitude };
+            let t = if &signed[0..1] == "-" {
+                -magnitude
+            } else {
+                magnitude
+            };
             (ds, Some(t))
         }
         _ => return None,
@@ -222,7 +229,13 @@ fn decode_field(field: &str) -> Option<(Wind, Option<i32>)> {
         (dd * 10, ff)
     };
 
-    Some((Wind::Directional { direction_deg, speed_kt }, temp_c))
+    Some((
+        Wind::Directional {
+            direction_deg,
+            speed_kt,
+        },
+        temp_c,
+    ))
 }
 
 #[cfg(test)]
@@ -235,7 +248,13 @@ mod tests {
         // shifted by -50*10) is documented in the NWS FD spec but wasn't
         // present in any bulletin captured this session.
         let (wind, temp) = decode_field("731960").unwrap();
-        assert_eq!(wind, Wind::Directional { direction_deg: 230, speed_kt: 119 });
+        assert_eq!(
+            wind,
+            Wind::Directional {
+                direction_deg: 230,
+                speed_kt: 119
+            }
+        );
         assert_eq!(temp, Some(-60));
     }
 

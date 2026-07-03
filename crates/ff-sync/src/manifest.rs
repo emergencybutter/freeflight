@@ -9,9 +9,12 @@ use serde::{Deserialize, Serialize};
 /// route never sent — never actually exercised against each other until
 /// checked). `cycle_id` doubles as the effective date already (`ff-etl`
 /// publishes cycles named e.g. `"2026-07-09"`), so there's no separate
-/// `effective_date` field. `pmtiles_*` are optional because `ff-etl`'s
-/// real pipeline doesn't fetch/tile chart imagery yet (see TODO.md) —
-/// there's often no chart bundle to point at.
+/// `effective_date` field. `pmtiles_*` are optional: a nationwide cycle
+/// now publishes one PMTiles archive per FAA sectional (dozens of
+/// files), which this single-chart shape can't represent, so `ff-api`
+/// currently leaves both `None` rather than arbitrarily picking one
+/// chart (see `ff-api`'s `routes/cycles.rs`) — revisit once a client
+/// needs real multi-chart offline sync.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CycleManifest {
     pub cycle_id: String,

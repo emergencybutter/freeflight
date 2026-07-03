@@ -45,7 +45,7 @@ maplibregl.addProtocol("pmtiles", new PmtilesProtocol().tile);
 // charts.pmtiles (raster sectionals/TACs) as the base layer instead —
 // see the chart_catalog handling below, which renders one when the
 // loaded cycle bundle has one. A plain background keeps the map usable
-// when it doesn't (see TODO.md) and matches the app's dark theme.
+// when it doesn't and matches the app's dark theme.
 const BLANK_STYLE: StyleSpecification = {
   version: 8,
   sources: {},

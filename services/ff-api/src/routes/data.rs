@@ -135,7 +135,10 @@ pub struct BboxQuery {
 }
 
 fn parse_bbox(raw: &str) -> Option<(f64, f64, f64, f64)> {
-    let parts: Vec<f64> = raw.split(',').map_while(|p| p.trim().parse().ok()).collect();
+    let parts: Vec<f64> = raw
+        .split(',')
+        .map_while(|p| p.trim().parse().ok())
+        .collect();
     match parts[..] {
         [min_lon, min_lat, max_lon, max_lat] => Some((min_lon, min_lat, max_lon, max_lat)),
         _ => None,
@@ -156,7 +159,9 @@ impl IntoResponse for DataError {
                 "no cycle bundle has been published yet; run `cargo run -p ff-etl` first",
             )
                 .into_response(),
-            DataError::NotFound(what) => (StatusCode::NOT_FOUND, format!("{what} not found")).into_response(),
+            DataError::NotFound(what) => {
+                (StatusCode::NOT_FOUND, format!("{what} not found")).into_response()
+            }
             DataError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }
@@ -274,7 +279,10 @@ pub async fn search(State(state): State<AppState>, Query(query): Query<SearchQue
     }
 }
 
-pub async fn airport_detail(State(state): State<AppState>, UrlPath(icao): UrlPath<String>) -> Response {
+pub async fn airport_detail(
+    State(state): State<AppState>,
+    UrlPath(icao): UrlPath<String>,
+) -> Response {
     let result = with_bundle(&state, move |conn| {
         let airport = conn
             .query_row(
@@ -355,7 +363,10 @@ pub async fn airport_detail(State(state): State<AppState>, UrlPath(icao): UrlPat
     }
 }
 
-pub async fn airport_procedures(State(state): State<AppState>, UrlPath(icao): UrlPath<String>) -> Response {
+pub async fn airport_procedures(
+    State(state): State<AppState>,
+    UrlPath(icao): UrlPath<String>,
+) -> Response {
     let result = with_bundle(&state, move |conn| {
         let mut rows = Vec::new();
         let mut stmt = conn.prepare(
@@ -383,7 +394,10 @@ pub async fn airport_procedures(State(state): State<AppState>, UrlPath(icao): Ur
     }
 }
 
-pub async fn procedure_detail(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Response {
+pub async fn procedure_detail(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
     let result = with_bundle(&state, move |conn| {
         let procedure = conn
             .query_row(

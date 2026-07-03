@@ -11,5 +11,6 @@ pub use client::{WeatherClient, WeatherError, DEFAULT_BASE_URL};
 pub use hazards::{GAirmet, GAirmetCoord, IntlSigmet, Sigmet, SigmetCoord};
 pub use records::{CloudLayer, Metar, Taf, TafForecastPeriod};
 pub use winds_aloft::{
-    parse_windtemp_bulletin, StationWindsAloft, Wind, WindsAloftBulletin, WindsAloftError, WindsAloftLevel,
+    parse_windtemp_bulletin, StationWindsAloft, Wind, WindsAloftBulletin, WindsAloftError,
+    WindsAloftLevel,
 };

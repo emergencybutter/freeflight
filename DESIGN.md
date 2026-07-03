@@ -1,10 +1,18 @@
 # freeflight — Design Document
 
-Status: Draft v0.2
+Status: Draft v0.3
 Scope: Phase 1 (US-only, free data sources)
 
 Revision history (newest first; details in `git log` for this file):
 
+- **v0.3 (2026-07)**: `ff-etl` bundle and chart coverage both went
+  nationwide — every airport/procedure in the CIFP file, and every
+  current FAA sectional (§3, §7, §13), each tiled at its own full extent
+  rather than cropped to one region. `ff-api` gained `/data/search`
+  (§4.1). `CycleManifest`/`/cycles/latest` leave `pmtiles_*` `None`
+  pending real multi-chart sync support (§4.1). Folded `TODO.md`'s
+  handoff notes into this document and retired that file — implementation
+  status now lives here (§3, §13), with rationale/history in `git log`.
 - **v0.2 (2026-07)**: offline capability scoped to Android only — web
   becomes a thin, connectivity-assuming client of `ff-api` (§8, risk
   [web-offline]). NOTAM source updated to the FAA NMS API after the
@@ -88,7 +96,7 @@ consumed today vs. designed-for; update it as sources come online.
 |---|---|---|---|---|
 | Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle | Implemented; validated against a real cycle file. Airway records recognized but not yet extracted/stored (§6) |
 | Airport/facility directory (runways, frequencies, remarks, services) | FAA NASR subscription | Fixed-width / CSV | 28-day AIRAC cycle | Implemented (runways, surfaces, frequencies); validated against a real subscription |
-| VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Implemented in the automated `ff-etl` loop (sectional for the region: discover cycle → download → crop to the bundle's airport bbox → tile to PMTiles) |
+| VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Sectionals implemented in the automated `ff-etl` loop, nationwide: discover the current chart cycle → download every FAA sectional (CONUS + Alaska + Hawaii + a few Canadian border charts) → expand palette to RGB → tile each to its own PMTiles archive, one `chart_catalog` row per sectional per cycle. TAC/Helicopter charts unstarted |
 | IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
 | Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle | Unstarted |
 | Airspace boundaries (Class B/C/D, SUA, MOA) | FAA NASR shapefiles | Shapefile/CSV | 28-day cycle | Unstarted (schema table exists, never populated) |
@@ -100,9 +108,9 @@ consumed today vs. designed-for; update it as sources come online.
 | GPS track (flight recording) | On-device GPS (browser Geolocation / Android FusedLocationProvider) | — | live | Unstarted (Phase 3) |
 
 Notes:
-- The user's spec said "ARINC 425"; the correct standard for CIFP is
-  **ARINC 424** ("Navigation System Database"). The FAA's CIFP is the
-  ARINC 424-formatted product this design targets.
+- The correct standard for CIFP is **ARINC 424** ("Navigation System
+  Database"). The FAA's CIFP is the ARINC 424-formatted product this
+  design targets.
 - No scraping of paid providers (Jeppesen, Garmin Pilot, ForeFlight's own
   feeds). If a free source disappears or changes terms, that feature is
   disabled rather than replaced with a workaround that violates ToS.
@@ -191,8 +199,10 @@ gets a mature, purpose-built renderer instead of a young Rust GUI stack.
 The contract both clients depend on. Response shapes for `/cycles/*`
 are defined as Rust types in `ff-sync` and constructed by `ff-api`
 directly, so server and client deserializer cannot drift apart silently
-(this bit us once — see TODO.md's offline-sync notes). Weather routes
-pass through `ff-weather`'s validated structs.
+(this bit us once: `CycleManifest` and `/cycles/latest` had never
+actually been run against each other and disagreed on several fields
+until that was checked). Weather routes pass through `ff-weather`'s
+validated structs.
 
 Implemented today:
 
@@ -206,9 +216,9 @@ Implemented today:
 | `GET /weather/isigmet` | both clients | `Vec<IntlSigmet>` |
 | `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin` |
 | `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
-| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle/chart URLs, sha256s) |
+| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256). `pmtiles_url`/`sha256` are always `None`: a nationwide cycle publishes one PMTiles file per sectional, which this single-chart shape can't represent (see `/data/charts` for the real list) — revisit once Android needs multi-chart offline sync |
 | `GET /bundles/:id/cycle.sqlite` | Android sync | raw SQLite bytes (static file service, Range-capable) |
-| `GET /bundles/:id/chart.pmtiles` | both clients | chart tiles — PMTiles is fetched via HTTP Range requests (web reads it directly through MapLibre's pmtiles protocol; Android downloads it whole during sync) |
+| `GET /bundles/:id/chart-<sectional>.pmtiles` | both clients | one sectional's chart tiles, one file per `chart_catalog` row — PMTiles is fetched via HTTP Range requests (web reads it directly through MapLibre's pmtiles protocol) |
 | `GET /data/airports?bbox=` | web | airports (optionally filtered to a bounding box) |
 | `GET /data/airports/:icao` | web | one airport + runways + frequencies |
 | `GET /data/airports/:icao/procedures` | web | procedure list |
@@ -371,17 +381,18 @@ need to render procedures with the same fidelity as certified tools.
   `cycle-YYYY-MM-DD.sqlite` and a matching `charts-YYYY-MM-DD.pmtiles` →
   upload to object storage behind a CDN → flip a `latest` pointer only
   after both artifacts pass validation.
-- **Implemented so far** (see §13 Phase 0 and TODO.md): CIFP + NASR +
+- **Implemented so far** (see §13 Phase 0): CIFP + NASR +
   sectional-chart fetch/parse/tile/validate/publish runs end to end
-  against live FAA data, scoped to the 5-airport demo region, publishing
-  both artifacts (`cycle.sqlite`, `chart.pmtiles`) to a local directory
-  (`FF_ETL_DATA_DIR`) with a `latest.json` pointer rather than object
-  storage/CDN. The chart step discovers the current 56-day chart cycle
-  from the FAA VFR page (independent of the 28-day CIFP cycle), crops
-  the sectional to the bundle's own airport bounding box, and tiles it
-  via `ff-charts`; it needs GDAL's CLI tools on `PATH`. `pmtiles_*`
-  manifest fields stay optional so cycles published before chart tiling
-  joined the loop still parse. No cron trigger yet; runs are manual.
+  against live FAA data, nationwide — every airport/procedure in the
+  CIFP file, and every FAA sectional currently published — writing
+  `cycle.sqlite` plus one `chart-<sectional>.pmtiles` per sectional to a
+  local directory (`FF_ETL_DATA_DIR`) with a `latest.json` pointer
+  rather than object storage/CDN. The chart step discovers the current
+  56-day chart cycle from the FAA VFR page (independent of the 28-day
+  CIFP cycle), tiles each sectional at its own full native extent via
+  `ff-charts` (no per-region cropping now that there's no single
+  "region" left), and needs GDAL's CLI tools on `PATH`. No cron trigger
+  yet; runs are manual.
 - Clients never talk to FAA/NOAA chart/procedure endpoints directly.
   Android pulls the pre-processed bundle from `ff-api`/CDN and queries it
   locally (offline-capable, §8). The web client never downloads the
@@ -564,7 +575,7 @@ document survive insertions/removals.
   instead.
 - **[web-offline] Web offline scope — decided**: after building a first
   pass at web-side offline sync (checksum-verified IndexedDB cache of
-  the cycle bundle — see TODO.md), decided to scope offline capability
+  the cycle bundle), decided to scope offline capability
   to Android only rather than maintain two parallel sync/storage stacks.
   Web becomes a thin client that queries `ff-api` per view and assumes
   connectivity — the same reasoning as [web-gps], generalized from
@@ -591,10 +602,10 @@ document survive insertions/removals.
   using unsupported leg types rather than silently mis-rendering them.
 - **[notam-api] NOTAM API instability**: the original FAA NOTAM Search
   API was retired outright in 2026 and its replacement (the NMS API,
-  §3) issues credentials by email request only — full history in
-  TODO.md's ff-notam section. Current state: `ff-notam` targets the new
-  API and the endpoints are confirmed live, but the actual NOTAM record
-  shape is unvalidated pending credentials. Standing assumption: this
+  §3) issues credentials by email request only. Current state: `ff-notam`
+  targets the new API and the endpoints are confirmed live, but the
+  actual NOTAM record shape is unvalidated pending credentials. Standing
+  assumption: this
   remains the flakiest upstream dependency; `ff-api`'s proxy/cache layer
   should be built to degrade gracefully when it changes again.
 - **[chart-hosting] Chart hosting cost/rights**: re-hosting converted
@@ -607,18 +618,16 @@ document survive insertions/removals.
 
 - **Phase 0 — Foundation**: done. Workspace scaffolding, `ff-core` domain
   types, `ff-storage` schema/migrations, `ff-cifp`/`ff-nasr` parsers with
-  fixture tests (and validated against real cycle files — see TODO.md),
-  and `ff-etl` producing a first cycle bundle end to end: fetches the
-  current CIFP/NASR cycle live from FAA, builds an `ff-storage`-schema
-  bundle (nationwide: every airport/procedure in the CIFP file, ~13k
+  fixture tests (and validated against real cycle files), and `ff-etl`
+  producing a first cycle bundle end to end: fetches the current
+  CIFP/NASR cycle live from FAA, builds an `ff-storage`-schema bundle
+  (nationwide: every airport/procedure in the CIFP file, ~13k
   airports/~14k procedures, ~31MB — within §11's tens-of-MB target),
-  fetches/crops/tiles the region's sectional chart, validates against
-  the previously published cycle, and publishes both artifacts for
-  `ff-api` to serve (§4.1). Chart imagery is the remaining regional
-  scope: one sectional, cropped around hardcoded Bay Area anchor
-  airports — real region/multi-sectional selection is still a follow-up,
-  and `publish_bundle`'s object storage is still a local directory, not
-  a bucket. See TODO.md for the specifics.
+  fetches/tiles every current FAA sectional chart (nationwide, one
+  PMTiles archive each), validates against the previously published
+  cycle, and publishes all artifacts for `ff-api` to serve (§4.1).
+  `publish_bundle`'s object storage is still a local directory, not a
+  bucket — the remaining Phase 0 follow-up.
 - **Phase 1 — MVP (read-only)**: web + Android chart/procedure/airport
   viewer, weather/NOTAM briefing. Offline cycle sync is Android-only
   (§8) — the milestone this phase is really chasing is "can I look

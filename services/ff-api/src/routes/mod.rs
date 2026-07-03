@@ -30,7 +30,10 @@ pub fn router(state: AppState) -> Router {
         .route("/data/airports", get(data::airports))
         .route("/data/search", get(data::search))
         .route("/data/airports/:icao", get(data::airport_detail))
-        .route("/data/airports/:icao/procedures", get(data::airport_procedures))
+        .route(
+            "/data/airports/:icao/procedures",
+            get(data::airport_procedures),
+        )
         .route("/data/procedures/:id", get(data::procedure_detail))
         .route("/data/charts", get(data::charts))
         .route("/notams", get(notams::get_notams))

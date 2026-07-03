@@ -21,8 +21,8 @@ use ff_nasr::{
 };
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -40,12 +40,16 @@ pub enum BundleError {
 /// A source chart GeoTIFF to run through `ff-charts::geotiff_to_pmtiles`
 /// and add as a `chart_catalog` row.
 ///
-/// `tile_url` is what gets stored in the catalog — i.e. the URL clients
-/// will fetch tiles from — and depends on who serves the file: the
-/// `build_demo_bundle` example uses a site-root-relative path for Vite,
-/// the real pipeline uses `ff-api`'s `/bundles/<cycle>/chart.pmtiles`
+/// `id` must be unique per `chart_catalog` row (its primary key) — the
+/// real pipeline now adds one row per sectional per cycle, so it can't be
+/// derived from `cycle_id` alone the way a single-chart-per-cycle bundle
+/// could. `tile_url` is what gets stored in the catalog — i.e. the URL
+/// clients will fetch tiles from — and depends on who serves the file:
+/// the `build_demo_bundle` example uses a site-root-relative path for
+/// Vite, the real pipeline uses `ff-api`'s `/bundles/<cycle>/<file>`
 /// route.
 pub struct ChartSource {
+    pub id: String,
     pub geotiff_path: PathBuf,
     pub pmtiles_out: PathBuf,
     pub cycle_id: String,
@@ -205,8 +209,11 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
     if fs::metadata(output_path).is_ok() {
         fs::remove_file(output_path)?;
     }
-    let output_path_str = output_path.to_str().expect("output path must be valid UTF-8");
-    let mut conn = ff_storage::open(output_path_str).map_err(|e| BundleError::Parse(e.to_string()))?;
+    let output_path_str = output_path
+        .to_str()
+        .expect("output path must be valid UTF-8");
+    let mut conn =
+        ff_storage::open(output_path_str).map_err(|e| BundleError::Parse(e.to_string()))?;
     // One transaction around all inserts: a nationwide bundle writes
     // hundreds of thousands of rows, and SQLite fsyncs per statement in
     // autocommit mode — per-row commits took minutes, one transaction
@@ -343,7 +350,7 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
     };
     let bbox = geotiff_to_pmtiles(&geotiff, &chart.pmtiles_out)?;
     let entry = ChartCatalogEntry {
-        id: format!("{}-sectional", chart.cycle_id),
+        id: chart.id.clone(),
         name: chart.name.clone(),
         kind: ChartKind::Sectional,
         cycle_id: chart.cycle_id.clone(),
@@ -368,27 +375,6 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
         ],
     )?;
     Ok(())
-}
-
-/// The bounding box (`min_lat, min_lon, max_lat, max_lon`) of the named
-/// airports in a built bundle — used to crop a sectional GeoTIFF down to
-/// the chart's region before tiling it. Takes an explicit ICAO list
-/// rather than using every airport in the bundle: bundles are nationwide
-/// now, and a whole-CONUS bbox would ask gdalwarp to inflate one
-/// sectional to cover the country (mostly nodata).
-pub fn bundle_airport_bbox(bundle_path: &Path, icaos: &[&str]) -> Result<(f64, f64, f64, f64), BundleError> {
-    let conn = rusqlite::Connection::open(bundle_path)?;
-    let placeholders = vec!["?"; icaos.len()].join(",");
-    let sql = format!("SELECT MIN(lat), MIN(lon), MAX(lat), MAX(lon) FROM airport WHERE icao IN ({placeholders})");
-    let bbox = conn.query_row(&sql, rusqlite::params_from_iter(icaos.iter()), |row| {
-        Ok((
-            row.get::<_, f64>(0)?,
-            row.get::<_, f64>(1)?,
-            row.get::<_, f64>(2)?,
-            row.get::<_, f64>(3)?,
-        ))
-    })?;
-    Ok(bbox)
 }
 
 /// Parses the NASR extract at `dir` and returns real runway surfaces
@@ -427,7 +413,10 @@ fn load_nasr_enrichment(
     // went nationwide.
     let mut ends_by_arpt: HashMap<&str, Vec<ff_nasr::AptRunwayEndRow>> = HashMap::new();
     for end in &runway_ends {
-        ends_by_arpt.entry(end.arpt_id.as_str()).or_default().push(end.clone());
+        ends_by_arpt
+            .entry(end.arpt_id.as_str())
+            .or_default()
+            .push(end.clone());
     }
     let mut freqs_by_facility: HashMap<&str, Vec<ff_nasr::FrqRow>> = HashMap::new();
     for freq in &freqs {
@@ -444,21 +433,28 @@ fn load_nasr_enrichment(
         let Some(icao) = wanted_airports.get(&rwy.arpt_id) else {
             continue;
         };
-        let ends = ends_by_arpt.get(rwy.arpt_id.as_str()).map_or(NO_ENDS, |v| v.as_slice());
+        let ends = ends_by_arpt
+            .get(rwy.arpt_id.as_str())
+            .map_or(NO_ENDS, |v| v.as_slice());
         let runway = ff_nasr::runway_from_rows(rwy, ends, icao);
         surfaces.insert((icao.clone(), runway.ident), runway.surface);
     }
 
     let mut frequencies = Vec::new();
     for (arpt_id, icao) in &wanted_airports {
-        let rows = freqs_by_facility.get(arpt_id.as_str()).map_or(NO_FREQS, |v| v.as_slice());
+        let rows = freqs_by_facility
+            .get(arpt_id.as_str())
+            .map_or(NO_FREQS, |v| v.as_slice());
         frequencies.extend(frequencies_for_airport(rows, arpt_id, icao));
     }
 
     Ok((surfaces, frequencies))
 }
 
-fn apply_nasr_surfaces(runways: &mut [Runway], surfaces: &HashMap<(String, String), RunwaySurface>) {
+fn apply_nasr_surfaces(
+    runways: &mut [Runway],
+    surfaces: &HashMap<(String, String), RunwaySurface>,
+) {
     for runway in runways.iter_mut() {
         if let Some(surface) = surfaces.get(&(runway.airport_icao.clone(), runway.ident.clone())) {
             runway.surface = *surface;

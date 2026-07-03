@@ -23,7 +23,8 @@ use ff_weather::{GAirmet, IntlSigmet, Sigmet, WeatherClient};
 #[test]
 fn parses_real_gairmet_response_including_area_and_line_geometry() {
     let json = include_str!("fixtures_real_gairmet.json");
-    let records: Vec<GAirmet> = serde_json::from_str(json).expect("deserialize real G-AIRMET response");
+    let records: Vec<GAirmet> =
+        serde_json::from_str(json).expect("deserialize real G-AIRMET response");
     assert!(records.iter().any(|r| r.geometry_type == "AREA"));
     assert!(records.iter().any(|r| r.geometry_type == "LINE"));
     for r in &records {
@@ -31,8 +32,12 @@ fn parses_real_gairmet_response_including_area_and_line_geometry() {
         // Confirms these really do parse as numbers despite being
         // transported as JSON strings.
         for c in &r.coords {
-            c.lat.parse::<f64>().expect("lat should be a parseable number");
-            c.lon.parse::<f64>().expect("lon should be a parseable number");
+            c.lat
+                .parse::<f64>()
+                .expect("lat should be a parseable number");
+            c.lon
+                .parse::<f64>()
+                .expect("lon should be a parseable number");
         }
     }
 }
@@ -40,7 +45,8 @@ fn parses_real_gairmet_response_including_area_and_line_geometry() {
 #[test]
 fn parses_real_sigmet_response() {
     let json = include_str!("fixtures_real_sigmet.json");
-    let records: Vec<Sigmet> = serde_json::from_str(json).expect("deserialize real SIGMET response");
+    let records: Vec<Sigmet> =
+        serde_json::from_str(json).expect("deserialize real SIGMET response");
     assert!(!records.is_empty());
     assert!(records.iter().all(|r| !r.coords.is_empty()));
 }
@@ -48,13 +54,20 @@ fn parses_real_sigmet_response() {
 #[test]
 fn parses_real_isigmet_response_including_area_and_areas_geometry() {
     let json = include_str!("fixtures_real_isigmet.json");
-    let records: Vec<IntlSigmet> = serde_json::from_str(json).expect("deserialize real international SIGMET response");
+    let records: Vec<IntlSigmet> =
+        serde_json::from_str(json).expect("deserialize real international SIGMET response");
 
-    let area = records.iter().find(|r| r.geom == "AREA").expect("an AREA record");
+    let area = records
+        .iter()
+        .find(|r| r.geom == "AREA")
+        .expect("an AREA record");
     assert!(area.coords.is_array());
     assert!(area.coords.as_array().unwrap()[0].is_object());
 
-    let areas = records.iter().find(|r| r.geom == "AREAS").expect("an AREAS record");
+    let areas = records
+        .iter()
+        .find(|r| r.geom == "AREAS")
+        .expect("an AREAS record");
     assert!(areas.coords.is_array());
     assert!(areas.coords.as_array().unwrap()[0].is_array());
 }
@@ -67,5 +80,8 @@ async fn fetches_live_hazards() {
     // given moment is real weather, not something this test controls.
     client.fetch_gairmets().await.expect("live G-AIRMET fetch");
     client.fetch_sigmets().await.expect("live SIGMET fetch");
-    client.fetch_intl_sigmets().await.expect("live international SIGMET fetch");
+    client
+        .fetch_intl_sigmets()
+        .await
+        .expect("live international SIGMET fetch");
 }

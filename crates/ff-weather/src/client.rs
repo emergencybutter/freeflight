@@ -116,7 +116,10 @@ impl WeatherClient {
         self.fetch_hazard("isigmet").await
     }
 
-    async fn fetch_hazard<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<Vec<T>, WeatherError> {
+    async fn fetch_hazard<T: serde::de::DeserializeOwned>(
+        &self,
+        endpoint: &str,
+    ) -> Result<Vec<T>, WeatherError> {
         let url = format!("{}/{endpoint}", self.base_url);
         let resp = self
             .http
