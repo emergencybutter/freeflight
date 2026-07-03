@@ -1,7 +1,18 @@
 # freeflight — Design Document
 
-Status: Draft v0.1
+Status: Draft v0.2
 Scope: Phase 1 (US-only, free data sources)
+
+Revision history (newest first; details in `git log` for this file):
+
+- **v0.2 (2026-07)**: offline capability scoped to Android only — web
+  becomes a thin, connectivity-assuming client of `ff-api` (§8, risk
+  [web-offline]). NOTAM source updated to the FAA NMS API after the
+  original API was retired (§3, risk [notam-api]). Phase 0 marked done
+  (§13). Added `ff-api` HTTP surface (§4.1), data-source status column
+  (§3), briefing-snapshot tables (§6), and security/availability notes
+  (§11, §12).
+- **v0.1**: initial design.
 
 ## 1. Vision
 
@@ -44,7 +55,7 @@ certification.
   traffic or own-ship display, synthetic vision, weight & balance with
   full CG envelope certification, terrain/obstacle alerting, panel/EFIS
   integration, iOS, non-US airspace, paid data sources (Jeppesen, etc.).
-- These are explicitly deferred to later phases (§10) so Phase 1 stays
+- These are explicitly deferred to later phases (§13) so Phase 1 stays
   shippable.
 
 ## 2. Primary Use Cases
@@ -70,20 +81,23 @@ under 17 U.S.C. §105 (no copyright restriction), though attribution and
 "not for navigation" disclaimers are still required by FAA terms of use
 for some products.
 
-| Data | Source | Format | Update cycle |
-|---|---|---|---|
-| Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle |
-| Airport/facility directory (runways, frequencies, remarks, services) | FAA NASR subscription | Fixed-width / CSV | 28-day AIRAC cycle |
-| VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle |
-| IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle |
-| Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle |
-| Airspace boundaries (Class B/C/D, SUA, MOA) | FAA NASR shapefiles | Shapefile/CSV | 28-day cycle |
-| Obstacles | FAA Digital Obstacle File (DOF) | Fixed-width | 56-day cycle |
-| METAR / TAF / PIREP | aviationweather.gov Data API | JSON/XML | real-time |
-| AIRMET / SIGMET / G-AIRMET, winds/temps aloft | aviationweather.gov Data API | JSON/XML/GeoJSON | real-time |
-| NOTAMs | FAA NOTAM Management Service (NMS) API (`api-nms.aim.faa.gov`) | GeoJSON/AIXM | real-time |
-| Terrain elevation | USGS 3DEP / SRTM1 | GeoTIFF (public domain) | static |
-| GPS track (flight recording) | On-device GPS (browser Geolocation / Android FusedLocationProvider) | — | live |
+The Status column keeps this table honest about what's actually
+consumed today vs. designed-for; update it as sources come online.
+
+| Data | Source | Format | Update cycle | Status |
+|---|---|---|---|---|
+| Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle | Implemented; validated against a real cycle file. Airway records recognized but not yet extracted/stored (§6) |
+| Airport/facility directory (runways, frequencies, remarks, services) | FAA NASR subscription | Fixed-width / CSV | 28-day AIRAC cycle | Implemented (runways, surfaces, frequencies); validated against a real subscription |
+| VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Pipeline implemented + validated with a real sectional; not yet in the automated `ff-etl` loop |
+| IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
+| Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle | Unstarted |
+| Airspace boundaries (Class B/C/D, SUA, MOA) | FAA NASR shapefiles | Shapefile/CSV | 28-day cycle | Unstarted (schema table exists, never populated) |
+| Obstacles | FAA Digital Obstacle File (DOF) | Fixed-width | 56-day cycle | Unstarted |
+| METAR / TAF / PIREP | aviationweather.gov Data API | JSON/XML | real-time | METAR/TAF implemented + validated live; PIREP unstarted |
+| AIRMET / SIGMET / G-AIRMET, winds/temps aloft | aviationweather.gov Data API | JSON/XML/GeoJSON | real-time | Implemented + validated live (G-AIRMET, SIGMET, intl SIGMET, winds/temps aloft) |
+| NOTAMs | FAA NOTAM Management Service (NMS) API (`api-nms.aim.faa.gov`) | GeoJSON/AIXM | real-time | Client implemented, endpoint confirmed live; record shape unvalidated pending credentials (risk [notam-api]) |
+| Terrain elevation | USGS 3DEP / SRTM1 | GeoTIFF (public domain) | static | Unstarted |
+| GPS track (flight recording) | On-device GPS (browser Geolocation / Android FusedLocationProvider) | — | live | Unstarted (Phase 3) |
 
 Notes:
 - The user's spec said "ARINC 425"; the correct standard for CIFP is
@@ -172,6 +186,49 @@ This mirrors the architecture used by apps like 1Password and Mozilla
 products: one Rust core, native UI shells, so the map/GPU-heavy surface
 gets a mature, purpose-built renderer instead of a young Rust GUI stack.
 
+### 4.1 ff-api HTTP surface
+
+The contract both clients depend on. Response shapes for `/cycles/*`
+are defined as Rust types in `ff-sync` and constructed by `ff-api`
+directly, so server and client deserializer cannot drift apart silently
+(this bit us once — see TODO.md's offline-sync notes). Weather routes
+pass through `ff-weather`'s validated structs.
+
+Implemented today:
+
+| Route | Consumer | Serves |
+|---|---|---|
+| `GET /health` | ops | liveness |
+| `GET /weather/metar?ids=A,B` | both clients | `Vec<Metar>` (JSON) |
+| `GET /weather/taf?ids=A,B` | both clients | `Vec<Taf>` |
+| `GET /weather/gairmet` | both clients | `Vec<GAirmet>` (all current CONUS) |
+| `GET /weather/sigmet` | both clients | `Vec<Sigmet>` |
+| `GET /weather/isigmet` | both clients | `Vec<IntlSigmet>` |
+| `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin` |
+| `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
+| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256) |
+| `GET /cycles/:id/bundle.sqlite` | Android sync | raw SQLite bytes |
+
+Planned (required by the web thin-client design, §8 — not yet built):
+
+| Route | Serves |
+|---|---|
+| `GET /data/airports?bbox=` | airports in a bounding box, for the map view |
+| `GET /data/airports/:icao` | one airport + runways + frequencies |
+| `GET /data/airports/:icao/procedures` | procedure list |
+| `GET /data/procedures/:id` | transitions + legs (+ resolved fix coordinates) |
+| `GET /data/charts?bbox=` | chart_catalog entries covering a bbox |
+| `GET /data/search?q=` | ident/name autocomplete for the route builder (§9.3) |
+
+Conventions: JSON only; no authentication in Phase 1 (see §11's abuse
+note); errors are plain-text bodies with appropriate status codes (502
+for upstream weather failures, 404 for unknown cycles/airports, 501 for
+unconfigured features). Versioning: none yet — the web client and
+`ff-api` deploy together in Phase 1, so breaking changes are
+coordinated, not negotiated; revisit (URL prefix `/v1/` or media-type
+versioning) before Android ships, since app-store clients can't be
+force-updated in lockstep.
+
 ## 5. Workspace / Crate Layout
 
 ```
@@ -191,15 +248,16 @@ freeflight/
     ff-postflight/      GPS track ingestion, phase-of-flight detection
                         (taxi/climb/cruise/descent/landing), logbook entry
                         generation
-    ff-storage/         SQLite schema + migrations (sqlx), used by the
-                        ETL job, ff-api (server-side queries for the web
-                        client), and (via uniffi) the Android client
+    ff-storage/         SQLite schema + migrations (rusqlite), used by
+                        the ETL job, ff-api (server-side queries for the
+                        web client), and (via uniffi) the Android client
     ff-sync/            cycle bundle download/verify/apply, delta logic
                         — Android-only; the web client has no local
                         cycle copy to sync (§8)
-    ff-wasm/            wasm-bindgen bindings over ff-core/ff-planning/
-                        ff-postflight for the web client (no ff-sync
-                        binding — nothing local to sync, see §8)
+    ff-wasm/            wasm-bindgen bindings over ff-core/ff-planning
+                        for the web client (ff-postflight bindings come
+                        with Phase 3; no ff-sync binding — nothing local
+                        to sync, see §8)
     ff-uniffi/          UniFFI bindings (Kotlin) for the Android client
   services/
     ff-api/             axum server: weather/NOTAM proxy+cache, cycle
@@ -232,36 +290,73 @@ ever needs to parse a locally-supplied CIFP file) the client core.
 
 ## 6. Data Model (`ff-core` / `ff-storage`, simplified)
 
+The authoritative schema is
+`crates/ff-storage/src/migrations/0001_init.sql`; this section is a
+readable summary and must track it, not the other way around. Fixes are
+referenced by **ident** (`fix_ident`, matching ARINC 424's own
+referencing style), not by foreign-key id — idents aren't globally
+unique across ICAO regions, and the CIFP data itself doesn't
+disambiguate, so pretending FK integrity there would be false
+precision.
+
+Cycle-bundle tables (populated by `ff-etl`, read-only in clients):
+
 ```
-airac_cycle(id, effective_date, source_version)
-
-airport(icao, iata, faa_id, name, lat, lon, elevation_ft, airport_type,
-        fuel_types, tower_freq_id, ctaf_freq_id, ...)
-runway(id, airport_icao, ident, length_ft, width_ft, surface,
-       le_lat, le_lon, he_lat, he_lon, le_heading, he_heading)
-frequency(id, airport_icao, kind, freq_mhz, remarks)
-
-navaid(id, ident, type, lat, lon, elevation_ft, freq_khz, ...)
+airport(icao PK, faa_id, iata, name, lat, lon, elevation_ft,
+        airport_type, fuel_types)
+runway(id, airport_icao FK, ident, length_ft, width_ft, surface,
+       le_ident, le_lat, le_lon, le_heading_deg,
+       he_ident, he_lat, he_lon, he_heading_deg)
+frequency(id, airport_icao FK, kind, freq_mhz, remarks)
+navaid(id, ident, navaid_type, lat, lon, elevation_ft, freq_khz, region)
 waypoint(id, ident, lat, lon, region)
-airway(id, ident, kind)        -- V/J/T routes
-airway_leg(airway_id, seq, waypoint_id, min_alt, max_alt)
+procedure(id PK, airport_icao FK, kind, ident, runway_ident)
+procedure_transition(id PK, procedure_id FK, ident, kind)
+procedure_leg(id, transition_id FK, seq, path_and_term, fix_ident,
+              course_deg, altitude_constraint, speed_constraint,
+              turn_direction)
+chart_catalog(id PK, name, kind, cycle_id, min_lat, min_lon, max_lat,
+              max_lon, tile_url)
+```
 
-procedure(id, airport_icao, kind, ident, runway_ident)  -- SID/STAR/APPROACH
-procedure_transition(id, procedure_id, ident, kind)     -- enroute/common/approach/missed
-procedure_leg(id, transition_id, seq, path_and_term, fix_id, course,
-              altitude_constraint, speed_constraint, turn_direction, ...)
+Schema exists but **nothing populates it yet** (unstarted sources, §3):
 
-airspace(id, name, class, floor_ft, ceiling_ft, geometry_geojson)
+```
+airac_cycle(id, effective_date, source_version)  -- cycle id currently
+                                                 -- lives in ff-etl's
+                                                 -- latest.json instead
+airway(id, ident, kind)                          -- V/J/T routes
+airway_leg(airway_id FK, seq, fix_ident, min_altitude_ft, max_altitude_ft)
+airspace(id, name, class, floor, ceiling, boundary_geojson)
+```
 
-chart_catalog(id, name, kind, cycle_id, bbox, tile_url)
+Client-local tables (never part of a published bundle; Android-only in
+practice, since web has no local DB — §8):
 
--- client-local only (not part of the published cycle bundle):
-route_plan(id, name, created_at, aircraft_profile_id)
-route_leg(route_plan_id, seq, waypoint_ref, altitude, notes)
-flight_track(id, started_at, ended_at, aircraft_profile_id)
-track_point(flight_track_id, seq, ts, lat, lon, alt_ft, gs_kt, track_deg)
-flight_log_entry(id, flight_track_id, route_plan_id, departure, arrival,
-                 total_time, taxi_time, landings, ...)
+```
+aircraft_profile(id, name, cruise_tas_kt, fuel_burn_gph,
+                 max_gross_weight_lb, forward_cg_limit_in,
+                 aft_cg_limit_in)
+route_plan(id, name, created_at, aircraft_profile_id FK)
+route_leg(route_plan_id FK, seq, waypoint_ref, altitude_ft, notes)
+flight_track(id, started_at, ended_at, aircraft_profile_id FK)
+track_point(flight_track_id FK, seq, ts, lat, lon, alt_ft, gs_kt,
+            track_deg)
+flight_log_entry(id, flight_track_id FK, route_plan_id FK, departure,
+                 arrival, total_time_seconds, taxi_time_seconds,
+                 landings)
+
+-- planned, not yet in the migration (backs §8's briefing snapshot —
+-- sketched here so the concept has a concrete shape before Phase 1's
+-- briefing UI needs it):
+briefing_snapshot(id, taken_at, route_plan_id FK NULL)
+briefing_item(briefing_snapshot_id FK, kind,     -- METAR|TAF|NOTAM|GAIRMET|SIGMET|WINDS
+              station_or_location, raw_json)     -- the exact upstream
+                                                 -- response frozen at
+                                                 -- briefing time, so a
+                                                 -- stale briefing shows
+                                                 -- what the pilot saw,
+                                                 -- not a re-decode
 ```
 
 `procedure_leg.path_and_term` follows ARINC 424's leg-type coding (IF, TF,
@@ -274,12 +369,23 @@ need to render procedures with the same fidelity as certified tools.
 - Runs on a schedule aligned to FAA's 28-day AIRAC and 56-day chart
   cycles (cron via CI, e.g. GitHub Actions scheduled workflow, or a small
   worker on the same host as `ff-api`).
-- Steps: fetch raw CIFP/NASR/DOF/shapefiles/GeoTIFFs → parse with
+- Target steps: fetch raw CIFP/NASR/DOF/shapefiles/GeoTIFFs → parse with
   `ff-cifp`/`ff-nasr`/`ff-charts` → validate (row counts vs. previous
   cycle, geometry sanity checks) → write a single versioned
   `cycle-YYYY-MM-DD.sqlite` and a matching `charts-YYYY-MM-DD.pmtiles` →
   upload to object storage behind a CDN → flip a `latest` pointer only
   after both artifacts pass validation.
+- **Implemented so far** (see §13 Phase 0 and TODO.md): CIFP + NASR
+  fetch/parse/validate/publish runs end to end against live FAA data,
+  scoped to the 5-airport demo region, publishing to a local directory
+  (`FF_ETL_DATA_DIR`) with a `latest.json` pointer rather than object
+  storage/CDN. The chart (PMTiles) artifact is **not** produced by the
+  automated loop yet — the GeoTIFF→PMTiles pipeline exists and is
+  validated, but isn't wired in — so today's `latest` pointer and
+  `CycleManifest` gate on the SQLite artifact only (`pmtiles_*` manifest
+  fields are optional for exactly this reason). "Both artifacts pass
+  validation" becomes real when charts join the loop. No cron trigger
+  yet either; runs are manual.
 - Clients never talk to FAA/NOAA chart/procedure endpoints directly.
   Android pulls the pre-processed bundle from `ff-api`/CDN and queries it
   locally (offline-capable, §8). The web client never downloads the
@@ -296,10 +402,11 @@ need to render procedures with the same fidelity as certified tools.
 
 **Android is the only offline-capable client.** The web client assumes
 connectivity — it's a planning/briefing tool used before or after a
-flight, not something relied on airborne with no signal (§12 already
-flagged web's background-GPS limits as an Android-primary concern for
-the same underlying reason; this generalizes that call to the whole
-client, not just track recording). Consequences:
+flight, not something relied on airborne with no signal (risk [web-gps]
+already flagged browser limits as making web Android-secondary for
+in-flight use; this generalizes that call to the whole client, not just
+track recording — see risk [web-offline] for the decision record).
+Consequences:
 
 - **Android** owns a local SQLite database — the same `ff-storage`
   schema opened directly with `rusqlite` inside the UniFFI core. On app
@@ -314,18 +421,21 @@ client, not just track recording). Consequences:
 - **Web** has no local database and no `ff-sync`/`ff-wasm` sync bindings
   — there's nothing to keep offline-durable. It fetches whatever the
   current view needs (airports, runways, procedures, chart tile URLs)
-  from `ff-api`'s JSON query endpoints per request. If `ff-api` is
-  unreachable, the web app shows that plainly rather than silently
-  failing or serving stale data — there's no cached/bundled fallback to
-  reach for, by design, not by omission.
+  from `ff-api`'s `/data/*` query endpoints (§4.1) per request. If
+  `ff-api` is unreachable, the web app shows that plainly rather than
+  silently failing or serving stale data — there's no cached/bundled
+  fallback to reach for, by design, not by omission.
 - Weather/NOTAM are fetched opportunistically whenever online on both
   platforms, with a "briefing snapshot" concept: the pilot explicitly
   takes a briefing before flight, which freezes the weather/NOTAM data
   used for planning and time-stamps it clearly in the UI ("Briefing
-  taken 45 min ago"). On Android this snapshot persists locally so it
-  survives going offline after departure. On web it only needs to
-  survive the current session/tab — web assumes connectivity anyway, so
-  there's no separate durable-persistence story required there.
+  taken 45 min ago"). Snapshots store the raw upstream responses, not
+  re-decodable references — a stale briefing must show exactly what the
+  pilot saw when they took it (`briefing_snapshot`/`briefing_item`, §6).
+  On Android this persists locally so it survives going offline after
+  departure. On web it only needs to survive the current session/tab —
+  web assumes connectivity anyway, so there's no separate
+  durable-persistence story required there.
 
 ## 9. Feature Design
 
@@ -358,8 +468,8 @@ client, not just track recording). Consequences:
 
 - Route builder: pick departure/destination airports, add
   fixes/navaids/airways in between (autocomplete against the local cycle
-  DB on Android — works offline; against `ff-api` query endpoints on
-  web — requires connectivity, §8).
+  DB on Android — works offline; against `ff-api`'s `/data/search`
+  endpoint on web — requires connectivity, §4.1/§8).
 - Per-leg: great-circle/rhumb distance & course from `ff-planning`, ETE
   and fuel burn from a user-defined aircraft profile (cruise TAS, fuel
   burn GPH, optional simple winds-aloft correction using the fetched
@@ -427,59 +537,75 @@ client, not just track recording). Consequences:
 - **Legal/compliance**: prominent "not for navigation, VFR/IFR
   supplemental use only" disclaimer; FAA/NOAA data attribution per each
   source's terms of use; no redistribution of any non-public-domain data.
+- **Abuse resistance** (currently unmet): `ff-api` is an unauthenticated
+  public proxy with permissive CORS — as-is, anyone can use it as a free
+  METAR relay, and once NOTAM credentials are configured, anonymous
+  traffic spends *our* NMS quota and could get those credentials
+  rate-limited or revoked. Before any non-local deployment: per-IP rate
+  limiting on the weather/NOTAM proxy routes at minimum; restrict CORS
+  to the real web origin(s); consider a lightweight app token for the
+  clients. Fine to skip while everything runs on localhost — not fine to
+  forget (risk [api-availability]).
+- **Availability**: `ff-api` is a single point of failure by design in
+  Phase 1 — web is fully down without it, and Android can't fetch new
+  cycles or fresh weather (existing synced data keeps working). One
+  instance, no HA story, acceptable for a hobby deployment; revisit
+  before anyone depends on it (risk [api-availability]). The mitigations
+  are cheap and already architecturally supported: cycle bundles and
+  PMTiles are static files servable straight from a CDN with `ff-api`
+  only minting manifests, and the weather proxy is stateless and
+  trivially replicable.
 
 ## 12. Open Questions / Risks
 
-1. **Browser background GPS limits**: web is a poor fit for in-flight
-   track recording (tab throttling, no reliable background execution).
-   Phase 1 web client may need to treat "record a flight" as an
-   Android-only feature and let web users *import* a track (GPX) instead.
-2. **Web offline scope, decided**: after building a first pass at
-   web-side offline sync (checksum-verified IndexedDB cache of the cycle
-   bundle, `ff-sync`'s `CycleManifest` reconciled against `ff-api` — see
-   TODO.md), decided to scope offline capability to Android only rather
-   than maintain two parallel sync/storage stacks. Web becomes a thin
-   client that queries `ff-api` per view and assumes connectivity — the
-   same reasoning as risk #1's GPS limits, generalized from "recording a
-   track" to the whole client. Trades a simpler web architecture (no
-   local SQLite/IndexedDB/checksum-verification stack, no `ff-wasm` sync
-   bindings) for web being unusable with zero connectivity. `ff-api`
-   picks up a responsibility it didn't have before: serving ad hoc
-   airport/runway/procedure/chart-catalog JSON queries, not just
-   proxying weather/NOTAM and hosting cycle bundles (§4, §7, §8). The
-   web-side sync code built under the old design (`apps/web/src/sync.ts`,
-   its IndexedDB cache, `db.ts`'s sql.js loader) predates this decision
-   and is now slated for removal in favor of direct `ff-api` queries —
-   not yet done; tracked in TODO.md.
-3. **d-TPP plate rendering**: FAA plates are PDF, not vector — rendering
-   quality/perf on low-end Android devices needs a spike before
-   committing to in-app PDF rendering vs. "open externally."
-4. **ARINC 424 leg coding completeness**: implementing the full leg-type
-   state machine (RF legs, vectors-to-final, holding patterns) is
-   nontrivial; Phase 1 should scope down to the common leg types (IF, TF,
-   CF, DF, CA/CD/VA/VI) and explicitly flag procedures using unsupported
-   leg types rather than silently mis-rendering them.
-5. **NOTAM API stability**: this prediction proved literally true — the
-   FAA NOTAM Search API this section originally named
-   (`external-api.faa.gov/notamapi/v1/notams`) was retired outright
-   sometime before 2026-07 (confirmed live: it now 404s with "No
-   context-path matches the request URI"). Its replacement, the NOTAM
-   Management Service (NMS) at `api-nms.aim.faa.gov`, also changed how
-   credentials are issued — self-service portal signup is gone, a
-   `client_id`/`client_secret` pair must now be requested by emailing
-   NOTAMS@faa.gov — and switched from static header credentials to an
-   OAuth2 `client_credentials` Bearer-token flow returning GeoJSON/AIXM
-   instead of the old `coreNOTAMData` JSON shape. `ff-notam` targets the
-   new API as of this note, confirmed reachable (live 401 on both the
-   token endpoint and `/nmsapi/notams` with bogus credentials), but the
-   actual NOTAM record shape is still unvalidated pending real
-   credentials — `ff-api`'s proxy/cache layer should keep assuming this
-   is the flakiest dependency.
-6. **Chart hosting cost/rights**: re-hosting converted FAA raster charts
-   as PMTiles is public-domain data, but bandwidth cost for chart tiles
-   at scale should be estimated before wide release (this is why the ETL
-   step produces a single static-hostable file format rather than
-   standing up a tile server).
+Risks are named, not numbered, so cross-references elsewhere in this
+document survive insertions/removals.
+
+- **[web-gps] Browser background GPS limits**: web is a poor fit for
+  in-flight track recording (tab throttling, no reliable background
+  execution). Phase 1 web client may need to treat "record a flight" as
+  an Android-only feature and let web users *import* a track (GPX)
+  instead.
+- **[web-offline] Web offline scope — decided**: after building a first
+  pass at web-side offline sync (checksum-verified IndexedDB cache of
+  the cycle bundle — see TODO.md), decided to scope offline capability
+  to Android only rather than maintain two parallel sync/storage stacks.
+  Web becomes a thin client that queries `ff-api` per view and assumes
+  connectivity — the same reasoning as [web-gps], generalized from
+  "recording a track" to the whole client. Trades a simpler web
+  architecture for web being unusable with zero connectivity, and gives
+  `ff-api` a new responsibility: the `/data/*` JSON query endpoints
+  (§4.1). The web-side sync code built under the old design
+  (`apps/web/src/sync.ts`, its IndexedDB cache, `db.ts`'s sql.js loader)
+  predates this decision and is slated for removal in favor of `/data/*`
+  queries — not yet done; tracked in TODO.md.
+- **[api-availability] ff-api as single point of failure**: see §11's
+  availability and abuse-resistance bullets — one unauthenticated
+  instance currently carries the whole product. Open questions: where
+  does it deploy, who notices when it's down, and what's the trigger for
+  adding rate limiting/CORS restrictions (proposal: before any non-local
+  deployment, not after the first incident).
+- **[dtpp-render] d-TPP plate rendering**: FAA plates are PDF, not
+  vector — rendering quality/perf on low-end Android devices needs a
+  spike before committing to in-app PDF rendering vs. "open externally."
+- **[leg-types] ARINC 424 leg coding completeness**: implementing the
+  full leg-type state machine (RF legs, vectors-to-final, holding
+  patterns) is nontrivial; Phase 1 should scope down to the common leg
+  types (IF, TF, CF, DF, CA/CD/VA/VI) and explicitly flag procedures
+  using unsupported leg types rather than silently mis-rendering them.
+- **[notam-api] NOTAM API instability**: the original FAA NOTAM Search
+  API was retired outright in 2026 and its replacement (the NMS API,
+  §3) issues credentials by email request only — full history in
+  TODO.md's ff-notam section. Current state: `ff-notam` targets the new
+  API and the endpoints are confirmed live, but the actual NOTAM record
+  shape is unvalidated pending credentials. Standing assumption: this
+  remains the flakiest upstream dependency; `ff-api`'s proxy/cache layer
+  should be built to degrade gracefully when it changes again.
+- **[chart-hosting] Chart hosting cost/rights**: re-hosting converted
+  FAA raster charts as PMTiles is public-domain data, but bandwidth cost
+  for chart tiles at scale should be estimated before wide release (this
+  is why the ETL step produces a single static-hostable file format
+  rather than standing up a tile server).
 
 ## 13. Roadmap
 
