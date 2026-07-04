@@ -15,6 +15,7 @@ const GAIRMET_SOURCE = "gairmets";
 const SIGMET_SOURCE = "sigmets";
 const WINDS_ALOFT_SOURCE = "winds-aloft";
 const AIRSPACE_SOURCE = "airspace";
+const PLANNED_ROUTE_SOURCE = "planned-route";
 
 // Bay Area demo scope only has stations at this one altitude reliably —
 // see MapView's winds-aloft fetch for why this isn't user-selectable yet.
@@ -128,6 +129,24 @@ function airspaceGeoJson(volumes: AirspaceVolume[]): GeoJSON.FeatureCollection {
       geometry: JSON.parse(v.boundary_geojson) as GeoJSON.Geometry,
       properties: { id: v.id, name: v.name, class: v.class, floor: v.floor, ceiling: v.ceiling },
     })),
+  };
+}
+
+/** The Flight Plan view's route (App.tsx lifts it so both that view and
+ * this one can see it) as a single straight-leg line — a planned route
+ * is the great-circle legs `ff-planning` computes the nav log from, not
+ * a flown path, so unlike the procedure line this isn't curved. */
+function plannedRouteGeoJson(route: Airport[]): GeoJSON.FeatureCollection {
+  if (route.length < 2) return EMPTY_COLLECTION;
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: route.map((a) => [a.lon, a.lat]) },
+        properties: {},
+      },
+    ],
   };
 }
 
@@ -539,6 +558,7 @@ export function MapView({
   onSelectAirport,
   selectedProcedureId,
   visible,
+  route,
 }: {
   selectedAirport: Airport | null;
   onSelectAirport: (airport: Airport) => void;
@@ -552,6 +572,8 @@ export function MapView({
    * container was `display: none`, so this drives an explicit
    * `resize()` when the map becomes visible again. */
   visible: boolean;
+  /** The Flight Plan view's route (lifted to App.tsx) — drawn in cyan. */
+  route: Airport[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -640,6 +662,16 @@ export function MapView({
         source: PROCEDURE_SOURCE,
         filter: ["==", ["get", "segment"], "missed"],
         paint: { "line-color": "#e254e0", "line-width": 4, "line-dasharray": [2, 1.5] },
+      });
+
+      // The Flight Plan view's route, kept in sync from App.tsx's lifted
+      // `route` state regardless of which view is currently shown.
+      map.addSource(PLANNED_ROUTE_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "planned-route-line",
+        type: "line",
+        source: PLANNED_ROUTE_SOURCE,
+        paint: { "line-color": "#22d3ee", "line-width": 3 },
       });
 
       // One marker + label per fix the selected procedure's legs actually
@@ -874,6 +906,14 @@ export function MapView({
     if (!map || !loaded || !visible) return;
     map.resize();
   }, [visible, loaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    (map.getSource(PLANNED_ROUTE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+      plannedRouteGeoJson(route),
+    );
+  }, [route, loaded]);
 
   useEffect(() => {
     const map = mapRef.current;

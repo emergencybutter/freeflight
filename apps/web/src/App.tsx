@@ -13,6 +13,9 @@ export default function App() {
   const [selectedAirport, setSelectedAirport] = useState<Airport | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "plan">("map");
+  // Lifted out of FlightPlanning (rather than its own local state) so
+  // MapView can draw the planned route too.
+  const [route, setRoute] = useState<Airport[]>([]);
 
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
@@ -69,6 +72,7 @@ export default function App() {
           onSelectAirport={selectAirport}
           selectedProcedureId={selectedProcedureId}
           visible={view === "map"}
+          route={route}
         />
         <div className="layout">
           <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
@@ -83,7 +87,7 @@ export default function App() {
         </div>
       </div>
       <div style={{ display: view === "plan" ? "contents" : "none" }}>
-        <FlightPlanning />
+        <FlightPlanning route={route} onRouteChange={setRoute} />
       </div>
     </div>
   );

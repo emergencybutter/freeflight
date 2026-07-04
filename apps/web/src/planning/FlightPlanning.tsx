@@ -49,10 +49,18 @@ function formatHours(hours: number): string {
  * device sync of plans/profiles is an explicit Phase 4 concern, not
  * this pass. All the math runs client-side via ff-wasm (`./wasm.ts`),
  * not through ff-api — DESIGN.md §5 scopes planning logic to ff-wasm
- * for exactly this reason. */
-export function FlightPlanning() {
+ * for exactly this reason.
+ *
+ * `route`/`onRouteChange` are lifted up to App.tsx (rather than local
+ * state here) so MapView can draw the planned route too. */
+export function FlightPlanning({
+  route,
+  onRouteChange,
+}: {
+  route: Airport[];
+  onRouteChange: (route: Airport[]) => void;
+}) {
   const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
-  const [route, setRoute] = useState<Airport[]>([]);
   const [navLog, setNavLog] = useState<RoutePlanSummary | null>(null);
   const [navLogError, setNavLogError] = useState<string | null>(null);
 
@@ -89,7 +97,7 @@ export function FlightPlanning() {
   return (
     <div className="planning-layout">
       <AircraftProfileForm profile={profile} onChange={setProfile} />
-      <RouteBuilder route={route} onChange={setRoute} />
+      <RouteBuilder route={route} onChange={onRouteChange} />
       <div className="panel nav-log">
         <h2>Nav Log</h2>
         {route.length < 2 && <p className="hint">Add at least two airports to the route to see a nav log.</p>}
