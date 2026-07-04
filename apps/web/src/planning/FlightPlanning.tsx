@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
-import { fetchAirwayDetail, searchIdents } from "../data";
-import type { IdentSearchRow, RouteToken, RouteWaypoint } from "../types";
+import { fetchAirwayDetail, fetchProcedureDetail, searchAirports, searchIdents } from "../data";
+import { buildResolvedProcedure, fetchProcedureOptions, transitionOptions } from "./procedureLookup";
+import type {
+  Airport,
+  IdentSearchRow,
+  Procedure,
+  ProcedureDetail,
+  ProcedureTransitionDetail,
+  ResolvedProcedureRef,
+  RouteState,
+  RouteToken,
+  RouteWaypoint,
+} from "../types";
 import {
   checkWeightBalance,
   planRoute,
@@ -51,17 +62,18 @@ function formatHours(hours: number): string {
  * not through ff-api — DESIGN.md §5 scopes planning logic to ff-wasm
  * for exactly this reason.
  *
- * Route state (tokens) and its expansion into flat points are lifted
- * up to App.tsx so MapView can draw the planned route too — see
- * `expandRoute.ts` for the FOO V123 BAR airway semantics. */
+ * Route state and its expansion into flat points are lifted up to
+ * App.tsx so MapView can draw the planned route too — see
+ * `expandRoute.ts` for the FOO V123 BAR airway semantics and
+ * `procedureLookup.ts` for how a chosen SID/STAR resolves. */
 export function FlightPlanning({
-  tokens,
-  onTokensChange,
+  route,
+  onRouteChange,
   points,
   warnings,
 }: {
-  tokens: RouteToken[];
-  onTokensChange: (tokens: RouteToken[]) => void;
+  route: RouteState;
+  onRouteChange: (route: RouteState) => void;
   points: RouteWaypoint[];
   warnings: string[];
 }) {
@@ -102,7 +114,7 @@ export function FlightPlanning({
   return (
     <div className="planning-layout">
       <AircraftProfileForm profile={profile} onChange={setProfile} />
-      <RouteBuilder tokens={tokens} onChange={onTokensChange} warnings={warnings} />
+      <RouteBuilder route={route} onChange={onRouteChange} warnings={warnings} />
       <div className="panel nav-log">
         <h2>Nav Log</h2>
         {points.length < 2 && <p className="hint">Add at least two points to the route to see a nav log.</p>}
@@ -236,18 +248,200 @@ function tokenIdent(t: RouteToken): string {
   return t.kind === "point" ? t.point.ident : t.ident;
 }
 
-/** One unified search box (airports, waypoints, navaids, airways) —
- * routes are entered flight-plan-string style, e.g. KSFO FOO V123 BAR
- * KLAX; airway tokens expand between their neighbor fixes (see
- * expandRoute.ts), and `warnings` reports airway tokens that can't
- * expand yet. */
+/** Departure/arrival airport picker: a debounced airport-only search
+ * (same pattern as the map view's own airport search) that shows the
+ * chosen airport with a clear button once set, matching the "choose
+ * departure/arrival first" flow the SID/STAR pickers below depend on. */
+function AirportSlot({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: RouteWaypoint | null;
+  onChange: (value: RouteWaypoint | null) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Airport[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      searchAirports(q)
+        .then((airports) => {
+          if (!cancelled) {
+            setResults(airports);
+            setError(null);
+          }
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  if (value) {
+    return (
+      <div className="route-airport-slot">
+        <span>
+          <strong>{label}:</strong> {value.ident} {value.name && <span className="airport-name">{value.name}</span>}
+        </span>
+        <button className="clear-button" onClick={() => onChange(null)} aria-label={`Clear ${label}`}>
+          ×
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="route-airport-slot">
+      <label>{label}</label>
+      <input
+        className="airport-search"
+        type="search"
+        placeholder={`Search ${label.toLowerCase()} airport…`}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {error && <p className="hint">search failed: {error}</p>}
+      {results.length > 0 && (
+        <ul>
+          {results.map((a) => (
+            <li key={a.icao}>
+              <button
+                onClick={() => {
+                  onChange({ ident: a.icao, name: a.name, lat: a.lat, lon: a.lon });
+                  setQuery("");
+                  setResults([]);
+                }}
+              >
+                <strong>{a.icao}</strong> — <span className="airport-name">{a.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+type ProcedurePickerState =
+  | { step: "procedure"; options: Procedure[] }
+  | { step: "transition"; detail: ProcedureDetail; options: ProcedureTransitionDetail[] };
+
+/** "Set SID"/"Set STAR": browses the given airport's real procedures
+ * (fetched live, not typed) — pick a procedure, then a transition (or
+ * skip straight to resolving if it only has one, like most SIDs — see
+ * procedureLookup.ts). Disabled until `airport` is chosen. */
+function ProcedurePickerButton({
+  label,
+  kind,
+  airport,
+  resolved,
+  onResolve,
+}: {
+  label: string;
+  kind: "SID" | "STAR";
+  airport: RouteWaypoint | null;
+  resolved: ResolvedProcedureRef | null;
+  onResolve: (resolved: ResolvedProcedureRef | null) => void;
+}) {
+  const [picker, setPicker] = useState<ProcedurePickerState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const open = () => {
+    if (!airport) return;
+    setError(null);
+    fetchProcedureOptions(airport.ident, kind)
+      .then((options) => setPicker({ step: "procedure", options }))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const resolveWith = (detail: ProcedureDetail, transitionId: string) => {
+    if (!airport) return;
+    const built = buildResolvedProcedure(airport.ident, kind, detail, transitionId);
+    onResolve(built);
+    setPicker(null);
+  };
+
+  const chooseProcedure = (procedure: Procedure) => {
+    fetchProcedureDetail(procedure.id)
+      .then((detail) => {
+        const options = transitionOptions(detail);
+        if (options.length === 1) {
+          resolveWith(detail, options[0].id);
+        } else {
+          setPicker({ step: "transition", detail, options });
+        }
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  return (
+    <div className="procedure-picker">
+      <span className="procedure-picker-header">
+        <button onClick={open} disabled={!airport}>
+          {resolved ? `${label}: ${resolved.procedureIdent}.${resolved.transitionIdent}` : `Set ${label}`}
+        </button>
+        {resolved && (
+          <button className="clear-button" onClick={() => onResolve(null)} aria-label={`Clear ${label}`}>
+            ×
+          </button>
+        )}
+      </span>
+      {error && <p className="hint">{error}</p>}
+      {picker?.step === "procedure" && (
+        <ul>
+          {picker.options.length === 0 && <li className="hint">no {kind}s in this cycle</li>}
+          {picker.options.map((p) => (
+            <li key={p.id}>
+              <button onClick={() => chooseProcedure(p)}>
+                <strong>{p.ident}</strong>
+                {p.runway_ident && <span className="airport-name"> rwy {p.runway_ident}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {picker?.step === "transition" && (
+        <ul>
+          {picker.options.map((t) => (
+            <li key={t.id}>
+              <button onClick={() => resolveWith(picker.detail, t.id)}>
+                <strong>{t.ident}</strong>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The route builder: departure/arrival airports and an optional SID/
+ * STAR are chosen explicitly (dedicated fields/buttons, not typed),
+ * then fixes/navaids/airways in between via one unified search box —
+ * routes read flight-plan-string style, e.g. KSFO FOO V123 BAR KLAX.
+ * Airway tokens expand between their neighbor fixes (see
+ * expandRoute.ts), and `warnings` reports ones that can't expand yet. */
 function RouteBuilder({
-  tokens,
+  route,
   onChange,
   warnings,
 }: {
-  tokens: RouteToken[];
-  onChange: (tokens: RouteToken[]) => void;
+  route: RouteState;
+  onChange: (route: RouteState) => void;
   warnings: string[];
 }) {
   const [query, setQuery] = useState("");
@@ -280,42 +474,74 @@ function RouteBuilder({
     };
   }, [query]);
 
+  const { middleTokens } = route;
+  const setMiddleTokens = (tokens: RouteToken[]) => onChange({ ...route, middleTokens: tokens });
+
   const addResult = (row: IdentSearchRow) => {
     setQuery("");
     setResults([]);
     if (row.kind === "airway") {
       fetchAirwayDetail(row.ident)
-        .then((detail) => onChange([...tokens, { kind: "airway", ident: detail.ident, detail }]))
+        .then((detail) => setMiddleTokens([...middleTokens, { kind: "airway", ident: detail.ident, detail }]))
         .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
       return;
     }
     if (row.lat === null || row.lon === null) return;
-    onChange([
-      ...tokens,
+    setMiddleTokens([
+      ...middleTokens,
       { kind: "point", point: { ident: row.ident, name: row.name, lat: row.lat, lon: row.lon } },
     ]);
   };
-  const removeAt = (i: number) => onChange(tokens.filter((_, idx) => idx !== i));
+  const removeAt = (i: number) => setMiddleTokens(middleTokens.filter((_, idx) => idx !== i));
   const moveUp = (i: number) => {
     if (i === 0) return;
-    const next = [...tokens];
+    const next = [...middleTokens];
     [next[i - 1], next[i]] = [next[i], next[i - 1]];
-    onChange(next);
+    setMiddleTokens(next);
   };
   const moveDown = (i: number) => {
-    if (i === tokens.length - 1) return;
-    const next = [...tokens];
+    if (i === middleTokens.length - 1) return;
+    const next = [...middleTokens];
     [next[i], next[i + 1]] = [next[i + 1], next[i]];
-    onChange(next);
+    setMiddleTokens(next);
   };
 
   return (
     <div className="panel route-builder">
       <h2>Route</h2>
+      <AirportSlot
+        label="Departure"
+        value={route.departure}
+        // Changing departure invalidates any SID resolved against the old one.
+        onChange={(departure) => onChange({ ...route, departure, sid: null })}
+      />
+      <AirportSlot
+        label="Arrival"
+        value={route.arrival}
+        onChange={(arrival) => onChange({ ...route, arrival, star: null })}
+      />
+      <div className="procedure-buttons">
+        <ProcedurePickerButton
+          label="SID"
+          kind="SID"
+          airport={route.departure}
+          resolved={route.sid}
+          onResolve={(sid) => onChange({ ...route, sid })}
+        />
+        <ProcedurePickerButton
+          label="STAR"
+          kind="STAR"
+          airport={route.arrival}
+          resolved={route.star}
+          onResolve={(star) => onChange({ ...route, star })}
+        />
+      </div>
+
+      <h3>Fixes / Airways</h3>
       <input
         className="airport-search"
         type="search"
-        placeholder="Add an airport, fix, navaid, or airway…"
+        placeholder="Add a fix, navaid, or airway…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
@@ -337,22 +563,19 @@ function RouteBuilder({
           ))}
         </ul>
       )}
-      {tokens.length === 0 && (
+      {middleTokens.length === 0 && (
         <p className="hint">
-          No waypoints yet — search above to add the first one. Insert an airway between two of its fixes (e.g. FIX1,
-          V123, FIX2) to route along it.
+          No fixes yet — search above to add one. Insert an airway between two of its fixes (e.g. FIX1, V123, FIX2)
+          to route along it.
         </p>
       )}
       <ol className="route-list">
-        {tokens.map((t, i) => (
+        {middleTokens.map((t, i) => (
           <li key={`${tokenIdent(t)}-${i}`}>
             <span>
               <strong>{tokenIdent(t)}</strong>{" "}
-              {t.kind === "point" ? (
-                t.point.name && <span className="airport-name">{t.point.name}</span>
-              ) : (
-                <span className="airport-name">airway · {t.detail.legs.length} fixes</span>
-              )}
+              {t.kind === "point" && t.point.name && <span className="airport-name">{t.point.name}</span>}
+              {t.kind === "airway" && <span className="airport-name">airway · {t.detail.legs.length} fixes</span>}
             </span>
             <span className="route-list-actions">
               <button onClick={() => moveUp(i)} disabled={i === 0} aria-label={`Move ${tokenIdent(t)} up`}>
@@ -360,7 +583,7 @@ function RouteBuilder({
               </button>
               <button
                 onClick={() => moveDown(i)}
-                disabled={i === tokens.length - 1}
+                disabled={i === middleTokens.length - 1}
                 aria-label={`Move ${tokenIdent(t)} down`}
               >
                 ↓

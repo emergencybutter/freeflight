@@ -122,13 +122,42 @@ export interface RouteWaypoint {
   lon: number;
 }
 
-/** One entry in the route builder, flight-plan-string style: points
+/** A resolved SID/STAR — see planning/procedureLookup.ts. `points` is
+ * already the final ordered fix sequence, ready to splice into a route.
+ * The departure/arrival airport + SID/STAR are dedicated slots in the
+ * route builder (App.tsx), not tokens in the reorderable middle list —
+ * picked explicitly (departure/arrival first, then "Set SID"/"Set
+ * STAR" browses that airport's real procedures) rather than typed as
+ * flight-plan-string notation, since which airport's procedures to
+ * look up is then always already known. */
+export interface ResolvedProcedureRef {
+  airportIcao: string;
+  kind: "SID" | "STAR";
+  procedureIdent: string;
+  transitionIdent: string;
+  points: RouteWaypoint[];
+}
+
+/** One entry in the route builder's reorderable middle list (fixes and
+ * airways between the SID and STAR) — flight-plan-string style: points
  * stand alone; an airway token takes its meaning from its neighbors
  * (`FOO V123 BAR` — expansion inserts V123's fixes strictly between
  * FOO and BAR, in that direction). */
 export type RouteToken =
   | { kind: "point"; point: RouteWaypoint }
   | { kind: "airway"; ident: string; detail: AirwayDetail };
+
+/** The whole route builder's state (App.tsx, lifted so MapView can draw
+ * it too): departure/arrival airports and an optional SID/STAR are
+ * dedicated slots, chosen explicitly and in that order; `middleTokens`
+ * is the reorderable fixes/airways list strung between them. */
+export interface RouteState {
+  departure: RouteWaypoint | null;
+  arrival: RouteWaypoint | null;
+  sid: ResolvedProcedureRef | null;
+  star: ResolvedProcedureRef | null;
+  middleTokens: RouteToken[];
+}
 
 export interface ChartCatalogEntry {
   id: string;

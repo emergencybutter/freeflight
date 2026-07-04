@@ -505,15 +505,22 @@ Consequences:
 
 ### 9.3 Simple flight planning
 
-- Route builder: pick departure/destination airports, add
-  fixes/navaids/airways in between (autocomplete against the local cycle
-  DB on Android — works offline; against `ff-api`'s `/data/search_idents`
-  endpoint on web — requires connectivity, §4.1/§8). Implemented on web:
-  routes are entered flight-plan-string style (`KSFO FIX V123 FIX KLAX`)
-  through one unified search box; an airway token expands to the fixes
-  strictly between its neighbor fixes, in that direction (see
-  `apps/web/src/planning/expandRoute.ts`), and the expanded route draws
-  on the map in cyan with per-fix markers.
+- Route builder: pick departure/destination airports, optionally a
+  SID/STAR for each, and fixes/navaids/airways in between (autocomplete
+  against the local cycle DB on Android — works offline; against
+  `ff-api`'s `/data/search_idents` endpoint on web — requires
+  connectivity, §4.1/§8). Implemented on web: departure/arrival airports
+  are chosen first (dedicated fields), then "Set SID"/"Set STAR" browse
+  that airport's real procedures — pick one, then a transition if it has
+  more than one (see `apps/web/src/planning/procedureLookup.ts`, which
+  also handles real data shapes without a clean literal `COMMON`
+  transition by chaining onto whichever other transition picks up at
+  the chosen one's endpoint fix). Fixes/navaids/airways in between still
+  go through one unified search box, flight-plan-string style
+  (`FIX1 V123 FIX2` — an airway expands to the fixes strictly between
+  its neighbors, in that direction; see `expandRoute.ts`). The full
+  route (departure → SID → fixes/airways → STAR → arrival) draws on the
+  map in cyan with per-fix markers.
 - Per-leg: great-circle/rhumb distance & course from `ff-planning`, ETE
   and fuel burn from a user-defined aircraft profile (cruise TAS, fuel
   burn GPH, optional simple winds-aloft correction using the fetched

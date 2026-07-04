@@ -55,13 +55,16 @@ What you get with everything running:
   procedure draws its path on the map — solid for the approach, dashed
   for the missed segment, with waypoint markers/altitude restrictions
   and rounded rather than angular turns.
-- The Flight Plan view: build a route flight-plan-string style through
-  one search box covering airports, fixes, navaids, and airways (an
-  airway inserted between two of its fixes — `FIX1 V123 FIX2` — expands
-  to the fixes between them, in that direction), set an aircraft
-  profile, and get an auto-computed nav log (no wind correction yet);
-  fill in the profile's weight & CG limits to also get a basic
-  single-envelope weight & balance check. The route draws on the map in
+- The Flight Plan view: pick departure/arrival airports, optionally
+  "Set SID"/"Set STAR" by browsing that airport's real procedures (and
+  a transition, if it has more than one), and add fixes/navaids/airways
+  in between through a unified search box (an airway inserted between
+  two of its fixes — `FIX1 V123 FIX2` — expands to the fixes between
+  them, in that direction). Set an aircraft profile and get an
+  auto-computed nav log (no wind correction yet); fill in the profile's
+  weight & CG limits to also get a basic single-envelope weight &
+  balance check.
+  The route draws on the map in
   cyan with per-fix markers.
 
 Weather overlays degrade independently (each logs a `console.warn` if

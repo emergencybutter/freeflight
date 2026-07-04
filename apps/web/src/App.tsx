@@ -4,9 +4,11 @@ import { fetchAirportDetail, fetchAirportProcedures, fetchCycleManifest, fetchPr
 import { MapView } from "./MapView";
 import { expandRoute } from "./planning/expandRoute";
 import { FlightPlanning } from "./planning/FlightPlanning";
-import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteToken, Taf } from "./types";
+import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteState, RouteWaypoint, Taf } from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
+
+const EMPTY_ROUTE: RouteState = { departure: null, arrival: null, sid: null, star: null, middleTokens: [] };
 
 export default function App() {
   const [cycleId, setCycleId] = useState<string | null>(null);
@@ -15,11 +17,26 @@ export default function App() {
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "plan">("map");
   // Lifted out of FlightPlanning (rather than its own local state) so
-  // MapView can draw the planned route too. Tokens are flight-plan-
-  // string style (points + airways); the expansion into flat points is
-  // computed once here and shared by the map and the nav log.
-  const [routeTokens, setRouteTokens] = useState<RouteToken[]>([]);
-  const expandedRoute = useMemo(() => expandRoute(routeTokens), [routeTokens]);
+  // MapView can draw the planned route too. Departure/arrival/SID/STAR
+  // are dedicated slots (picked explicitly via FlightPlanning's route
+  // builder) rather than positions in a flat token list — see
+  // RouteState's doc comment in types.ts.
+  const [route, setRoute] = useState<RouteState>(EMPTY_ROUTE);
+  const expandedMiddle = useMemo(() => {
+    const before = (route.sid && route.sid.points[route.sid.points.length - 1]) ?? route.departure;
+    const after = route.star?.points[0] ?? route.arrival;
+    return expandRoute(route.middleTokens, before, after);
+  }, [route.middleTokens, route.sid, route.departure, route.star, route.arrival]);
+  const routePoints = useMemo<RouteWaypoint[]>(
+    () => [
+      ...(route.departure ? [route.departure] : []),
+      ...(route.sid?.points ?? []),
+      ...expandedMiddle.points,
+      ...(route.star?.points ?? []),
+      ...(route.arrival ? [route.arrival] : []),
+    ],
+    [route.departure, route.sid, expandedMiddle, route.star, route.arrival],
+  );
 
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
@@ -76,7 +93,7 @@ export default function App() {
           onSelectAirport={selectAirport}
           selectedProcedureId={selectedProcedureId}
           visible={view === "map"}
-          route={expandedRoute.points}
+          route={routePoints}
         />
         <div className="layout">
           <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
@@ -92,10 +109,10 @@ export default function App() {
       </div>
       <div style={{ display: view === "plan" ? "contents" : "none" }}>
         <FlightPlanning
-          tokens={routeTokens}
-          onTokensChange={setRouteTokens}
-          points={expandedRoute.points}
-          warnings={expandedRoute.warnings}
+          route={route}
+          onRouteChange={setRoute}
+          points={routePoints}
+          warnings={expandedMiddle.warnings}
         />
       </div>
     </div>
