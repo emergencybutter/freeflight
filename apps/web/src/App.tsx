@@ -56,28 +56,35 @@ export default function App() {
           </button>
         </span>
       </div>
-      {view === "map" ? (
-        <>
-          <MapView
-            selectedAirport={selectedAirport}
-            onSelectAirport={selectAirport}
-            selectedProcedureId={selectedProcedureId}
-          />
-          <div className="layout">
-            <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
-            {selectedAirport && (
-              <AirportPanel
-                icao={selectedAirport.icao}
-                selectedProcedureId={selectedProcedureId}
-                onSelectProcedure={setSelectedProcedureId}
-              />
-            )}
-            {selectedProcedureId && <ProcedurePanel procedureId={selectedProcedureId} />}
-          </div>
-        </>
-      ) : (
+      {/* Both views stay mounted once shown — conditionally rendering
+          them out of the tree on every toggle used to destroy the
+          Flight Plan view's own React state (the route, the profile,
+          W&B loads) the instant you switched to the map and back.
+          Visibility is CSS-only; MapView gets a `visible` prop so it
+          can call MapLibre's resize() when it reappears, since a map
+          left `display: none` doesn't repaint correctly on its own. */}
+      <div style={{ display: view === "map" ? "contents" : "none" }}>
+        <MapView
+          selectedAirport={selectedAirport}
+          onSelectAirport={selectAirport}
+          selectedProcedureId={selectedProcedureId}
+          visible={view === "map"}
+        />
+        <div className="layout">
+          <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
+          {selectedAirport && (
+            <AirportPanel
+              icao={selectedAirport.icao}
+              selectedProcedureId={selectedProcedureId}
+              onSelectProcedure={setSelectedProcedureId}
+            />
+          )}
+          {selectedProcedureId && <ProcedurePanel procedureId={selectedProcedureId} />}
+        </div>
+      </div>
+      <div style={{ display: view === "plan" ? "contents" : "none" }}>
         <FlightPlanning />
-      )}
+      </div>
     </div>
   );
 }

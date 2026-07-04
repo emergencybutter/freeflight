@@ -538,10 +538,20 @@ export function MapView({
   selectedAirport,
   onSelectAirport,
   selectedProcedureId,
+  visible,
 }: {
   selectedAirport: Airport | null;
   onSelectAirport: (airport: Airport) => void;
   selectedProcedureId: string | null;
+  /** Whether this is the currently-shown view. App.tsx keeps MapView
+   * mounted (rather than conditionally rendering it) even while the
+   * Flight Plan view is showing, toggling visibility via CSS instead —
+   * unmounting it on every switch used to destroy the Flight Plan
+   * view's own state the same way (the actual bug this prop exists to
+   * let App.tsx avoid). MapLibre doesn't repaint correctly after its
+   * container was `display: none`, so this drives an explicit
+   * `resize()` when the map becomes visible again. */
+  visible: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -858,6 +868,12 @@ export function MapView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded || !visible) return;
+    map.resize();
+  }, [visible, loaded]);
 
   useEffect(() => {
     const map = mapRef.current;
