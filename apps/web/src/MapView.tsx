@@ -969,6 +969,33 @@ export function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
+    // Gated on `visible` (like the resize() above, and for the same
+    // reason): a route built in the Flight Plan view never otherwise
+    // moves the camera, so switching to Map leaves it wherever it was —
+    // typically the initial nationwide view, whose zoom is too far out
+    // for chart raster tiles to render at all. That reads as "the tiles
+    // don't load," when the real issue is the map never looked at the
+    // route. Computing the fit while hidden would use a zero-size
+    // container and produce a bogus camera position, so this waits
+    // until the view is actually shown.
+    if (!map || !loaded || !visible || route.length === 0) return;
+    if (route.length === 1) {
+      map.flyTo({ center: [route[0].lon, route[0].lat], zoom: 10 });
+      return;
+    }
+    const lons = route.map((p) => p.lon);
+    const lats = route.map((p) => p.lat);
+    map.fitBounds(
+      [
+        [Math.min(...lons), Math.min(...lats)],
+        [Math.max(...lons), Math.max(...lats)],
+      ],
+      { padding: 60, duration: 800 },
+    );
+  }, [route, visible, loaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (!map || !loaded) return;
 
     const setRunways = (runways: Runway[]) =>
