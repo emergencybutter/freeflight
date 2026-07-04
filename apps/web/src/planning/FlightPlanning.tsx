@@ -119,7 +119,13 @@ export function FlightPlanning({
         <h2>Nav Log</h2>
         {points.length < 2 && <p className="hint">Add at least two points to the route to see a nav log.</p>}
         {navLogError && <p className="hint">Couldn't compute nav log: {navLogError}</p>}
-        {navLog && (
+        {/* navLog is computed async (planRoute() in the effect above) while
+            `points` updates synchronously the instant the route changes —
+            e.g. removing an airway shrinks `points` immediately, but the
+            old, longer navLog can still be around for one render. Guard
+            against indexing `points` with a stale navLog's leg count
+            rather than relying on the effect always winning the race. */}
+        {navLog && navLog.legs.length === points.length - 1 && (
           <>
             <table>
               <thead>
