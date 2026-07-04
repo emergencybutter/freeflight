@@ -84,6 +84,52 @@ export interface ProcedureDetail extends Procedure {
   fixes: Record<string, FixCoord>;
 }
 
+export interface AirwayLegRow {
+  seq: number;
+  fix_ident: string;
+  min_altitude_ft: number | null;
+  max_altitude_ft: number | null;
+}
+
+/** `GET /data/airways/:ident` — the airway's seq-ordered legs plus
+ * server-resolved coordinates for every fix that exists in the cycle
+ * bundle, mirroring `ProcedureDetail.fixes`. */
+export interface AirwayDetail {
+  ident: string;
+  kind: string;
+  legs: AirwayLegRow[];
+  fixes: Record<string, FixCoord>;
+}
+
+/** `GET /data/search_idents` — one row per match across airports,
+ * waypoints, navaids, and airways. `lat`/`lon` are null for airways
+ * (an airway is a path, not a point); `name` is the airport name, or
+ * the airway kind (VICTOR/JET/...), or null. */
+export interface IdentSearchRow {
+  kind: "airport" | "waypoint" | "navaid" | "airway";
+  ident: string;
+  name: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+
+/** One resolved point on a planned route — an airport, waypoint, or
+ * navaid (airway tokens expand into these; see planning/expandRoute). */
+export interface RouteWaypoint {
+  ident: string;
+  name: string | null;
+  lat: number;
+  lon: number;
+}
+
+/** One entry in the route builder, flight-plan-string style: points
+ * stand alone; an airway token takes its meaning from its neighbors
+ * (`FOO V123 BAR` — expansion inserts V123's fixes strictly between
+ * FOO and BAR, in that direction). */
+export type RouteToken =
+  | { kind: "point"; point: RouteWaypoint }
+  | { kind: "airway"; ident: string; detail: AirwayDetail };
+
 export interface ChartCatalogEntry {
   id: string;
   name: string;

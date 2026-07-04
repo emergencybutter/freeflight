@@ -94,7 +94,7 @@ consumed today vs. designed-for; update it as sources come online.
 
 | Data | Source | Format | Update cycle | Status |
 |---|---|---|---|---|
-| Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle | Implemented; validated against a real cycle file. Airway records recognized but not yet extracted/stored (§6) |
+| Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle | Implemented; validated against a real cycle file, airways included (~1.5k airways / ~19k legs nationwide) |
 | Airport/facility directory (runways, frequencies, remarks, services) | FAA NASR subscription | Fixed-width / CSV | 28-day AIRAC cycle | Implemented (runways, surfaces, frequencies); validated against a real subscription |
 | VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Sectionals implemented in the automated `ff-etl` loop, nationwide: discover the current chart cycle → download every FAA sectional (CONUS + Alaska + Hawaii + a few Canadian border charts) → expand palette to RGB → tile each to its own PMTiles archive, one `chart_catalog` row per sectional per cycle. TAC/Helicopter charts unstarted |
 | IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
@@ -225,7 +225,9 @@ Implemented today:
 | `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates |
 | `GET /data/charts?bbox=` | web | chart_catalog entries (optionally bbox-filtered) |
 | `GET /data/airspace?bbox=` | web | Class B/C/D + Special Use Airspace boundary polygons (optionally bbox-filtered) |
-| `GET /data/search?q=` | web | airport ident/name search (prefix on ICAO/FAA/IATA, substring on name, capped at 20) — pulled forward from Phase 2 once bundles went nationwide and a fixed airport list stopped making sense; the §9.3 route builder will reuse it |
+| `GET /data/search?q=` | web | airport ident/name search (prefix on ICAO/FAA/IATA, substring on name, capped at 20) — pulled forward from Phase 2 once bundles went nationwide and a fixed airport list stopped making sense |
+| `GET /data/airways/:ident` | web | one airway's seq-ordered legs + server-resolved fix coordinates (mirrors `/data/procedures/:id`'s `fixes` shape; ident lookup is case-insensitive) |
+| `GET /data/search_idents?q=` | web | unified ident search across airports/waypoints/navaids/airways for the §9.3 route builder's single search box — exact matches first, then airports before fixes, capped at 20 |
 
 Conventions: JSON only; no authentication in Phase 1 (see §11's abuse
 note); errors are plain-text bodies with appropriate status codes (502
@@ -322,6 +324,10 @@ procedure_transition(id PK, procedure_id FK, ident, kind)
 procedure_leg(id, transition_id FK, seq, path_and_term, fix_ident,
               course_deg, altitude_constraint, speed_constraint,
               turn_direction)
+airway(id, ident, kind)                          -- V/J/T/Q + Alaska "other"
+airway_leg(airway_id FK, seq, fix_ident, min_altitude_ft, max_altitude_ft)
+airspace(id, name, class, floor, ceiling, boundary_geojson,
+         min_lat, min_lon, max_lat, max_lon)
 chart_catalog(id PK, name, kind, cycle_id, min_lat, min_lon, max_lat,
               max_lon, tile_url)
 ```
@@ -332,9 +338,6 @@ Schema exists but **nothing populates it yet** (unstarted sources, §3):
 airac_cycle(id, effective_date, source_version)  -- cycle id currently
                                                  -- lives in ff-etl's
                                                  -- latest.json instead
-airway(id, ident, kind)                          -- V/J/T routes
-airway_leg(airway_id FK, seq, fix_ident, min_altitude_ft, max_altitude_ft)
-airspace(id, name, class, floor, ceiling, boundary_geojson)
 ```
 
 Client-local tables (never part of a published bundle; Android-only in
@@ -504,8 +507,13 @@ Consequences:
 
 - Route builder: pick departure/destination airports, add
   fixes/navaids/airways in between (autocomplete against the local cycle
-  DB on Android — works offline; against `ff-api`'s `/data/search`
-  endpoint on web — requires connectivity, §4.1/§8).
+  DB on Android — works offline; against `ff-api`'s `/data/search_idents`
+  endpoint on web — requires connectivity, §4.1/§8). Implemented on web:
+  routes are entered flight-plan-string style (`KSFO FIX V123 FIX KLAX`)
+  through one unified search box; an airway token expands to the fixes
+  strictly between its neighbor fixes, in that direction (see
+  `apps/web/src/planning/expandRoute.ts`), and the expanded route draws
+  on the map in cyan with per-fix markers.
 - Per-leg: great-circle/rhumb distance & course from `ff-planning`, ETE
   and fuel burn from a user-defined aircraft profile (cruise TAS, fuel
   burn GPH, optional simple winds-aloft correction using the fetched

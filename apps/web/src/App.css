@@ -258,3 +258,18 @@ th {
   background: #3a1313;
   color: #ff8080;
 }
+
+.kind-badge {
+  display: inline-block;
+  min-width: 2.4rem;
+  text-align: center;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: #1d3a5f;
+  color: #9fc3e8;
+}
+
+.route-warning {
+  color: #e8c468;
+}

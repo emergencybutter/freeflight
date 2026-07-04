@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportProcedures, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
+import { expandRoute } from "./planning/expandRoute";
 import { FlightPlanning } from "./planning/FlightPlanning";
-import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, Taf } from "./types";
+import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteToken, Taf } from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
@@ -14,8 +15,11 @@ export default function App() {
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "plan">("map");
   // Lifted out of FlightPlanning (rather than its own local state) so
-  // MapView can draw the planned route too.
-  const [route, setRoute] = useState<Airport[]>([]);
+  // MapView can draw the planned route too. Tokens are flight-plan-
+  // string style (points + airways); the expansion into flat points is
+  // computed once here and shared by the map and the nav log.
+  const [routeTokens, setRouteTokens] = useState<RouteToken[]>([]);
+  const expandedRoute = useMemo(() => expandRoute(routeTokens), [routeTokens]);
 
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
@@ -72,7 +76,7 @@ export default function App() {
           onSelectAirport={selectAirport}
           selectedProcedureId={selectedProcedureId}
           visible={view === "map"}
-          route={route}
+          route={expandedRoute.points}
         />
         <div className="layout">
           <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
@@ -87,7 +91,12 @@ export default function App() {
         </div>
       </div>
       <div style={{ display: view === "plan" ? "contents" : "none" }}>
-        <FlightPlanning route={route} onRouteChange={setRoute} />
+        <FlightPlanning
+          tokens={routeTokens}
+          onTokensChange={setRouteTokens}
+          points={expandedRoute.points}
+          warnings={expandedRoute.warnings}
+        />
       </div>
     </div>
   );

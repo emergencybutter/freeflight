@@ -547,6 +547,226 @@ pub async fn procedure_detail(
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct AirwayLegRow {
+    pub seq: i64,
+    pub fix_ident: String,
+    pub min_altitude_ft: Option<i64>,
+    pub max_altitude_ft: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AirwayDetail {
+    pub ident: String,
+    pub kind: String,
+    pub legs: Vec<AirwayLegRow>,
+    /// Coordinates for every `fix_ident` on this airway that resolves to
+    /// a waypoint or navaid in the cycle bundle — resolved server-side
+    /// for the same reason `ProcedureDetail::fixes` is. No runway-end
+    /// fallback here: airways never terminate at a runway pseudo-fix.
+    pub fixes: HashMap<String, FixCoord>,
+}
+
+pub async fn airway_detail(
+    State(state): State<AppState>,
+    UrlPath(ident): UrlPath<String>,
+) -> Response {
+    let result = with_bundle(&state, move |conn| {
+        let (airway_id, ident, kind) = conn
+            .query_row(
+                "SELECT id, ident, kind FROM airway WHERE ident = ?1 COLLATE NOCASE",
+                [&ident],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => DataError::NotFound("airway"),
+                other => DataError::Internal(other.to_string()),
+            })?;
+
+        let mut legs = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT seq, fix_ident, min_altitude_ft, max_altitude_ft
+             FROM airway_leg WHERE airway_id = ?1 ORDER BY seq",
+        )?;
+        let mapped = stmt.query_map([airway_id], |row| {
+            Ok(AirwayLegRow {
+                seq: row.get(0)?,
+                fix_ident: row.get(1)?,
+                min_altitude_ft: row.get(2)?,
+                max_altitude_ft: row.get(3)?,
+            })
+        })?;
+        for leg in mapped {
+            legs.push(leg?);
+        }
+
+        let mut fixes = HashMap::new();
+        for leg in &legs {
+            if fixes.contains_key(&leg.fix_ident) {
+                continue;
+            }
+            // Same waypoint-then-navaid resolution as procedure_detail.
+            let coord = conn
+                .query_row(
+                    "SELECT lat, lon FROM waypoint WHERE ident = ?1",
+                    [&leg.fix_ident],
+                    |row| {
+                        Ok(FixCoord {
+                            lat: row.get(0)?,
+                            lon: row.get(1)?,
+                        })
+                    },
+                )
+                .or_else(|_| {
+                    conn.query_row(
+                        "SELECT lat, lon FROM navaid WHERE ident = ?1",
+                        [&leg.fix_ident],
+                        |row| {
+                            Ok(FixCoord {
+                                lat: row.get(0)?,
+                                lon: row.get(1)?,
+                            })
+                        },
+                    )
+                });
+            if let Ok(coord) = coord {
+                fixes.insert(leg.fix_ident.clone(), coord);
+            }
+        }
+
+        Ok(AirwayDetail {
+            ident,
+            kind,
+            legs,
+            fixes,
+        })
+    })
+    .await;
+    match result {
+        Ok(detail) => Json(detail).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct IdentSearchRow {
+    /// "airport" | "waypoint" | "navaid" | "airway"
+    pub kind: String,
+    pub ident: String,
+    pub name: Option<String>,
+    /// Absent for airways (an airway is a path, not a point).
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+}
+
+/// Unified ident search across airports, waypoints, navaids, and airways
+/// for the route builder's single search box (DESIGN.md §9.3: "add
+/// fixes/navaids/airways in between"). Exact ident matches rank before
+/// prefix matches, airports before fixes; capped at ~20 rows total. The
+/// airport-only `/data/search` keeps serving the map view unchanged.
+pub async fn search_idents(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Response {
+    let q = query.q.trim().to_uppercase();
+    if q.is_empty() {
+        return Json(Vec::<IdentSearchRow>::new()).into_response();
+    }
+    let result = with_bundle(&state, move |conn| {
+        let prefix = format!("{q}%");
+        let mut rows: Vec<(bool, usize, IdentSearchRow)> = Vec::new();
+
+        let mut stmt = conn.prepare(
+            "SELECT icao, name, lat, lon FROM airport
+             WHERE icao LIKE ?1 OR faa_id LIKE ?1 OR iata LIKE ?1
+             ORDER BY icao LIMIT 10",
+        )?;
+        let mapped = stmt.query_map([&prefix], |row| {
+            Ok(IdentSearchRow {
+                kind: "airport".to_string(),
+                ident: row.get(0)?,
+                name: row.get(1)?,
+                lat: row.get(2)?,
+                lon: row.get(3)?,
+            })
+        })?;
+        for r in mapped {
+            rows.push((false, 0, r?));
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT ident, lat, lon FROM navaid WHERE ident LIKE ?1 GROUP BY ident ORDER BY ident LIMIT 10",
+        )?;
+        let mapped = stmt.query_map([&prefix], |row| {
+            Ok(IdentSearchRow {
+                kind: "navaid".to_string(),
+                ident: row.get(0)?,
+                name: None,
+                lat: row.get(1)?,
+                lon: row.get(2)?,
+            })
+        })?;
+        for r in mapped {
+            rows.push((false, 1, r?));
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT ident, lat, lon FROM waypoint WHERE ident LIKE ?1 GROUP BY ident ORDER BY ident LIMIT 10",
+        )?;
+        let mapped = stmt.query_map([&prefix], |row| {
+            Ok(IdentSearchRow {
+                kind: "waypoint".to_string(),
+                ident: row.get(0)?,
+                name: None,
+                lat: row.get(1)?,
+                lon: row.get(2)?,
+            })
+        })?;
+        for r in mapped {
+            rows.push((false, 2, r?));
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT ident, kind FROM airway WHERE ident LIKE ?1 GROUP BY ident ORDER BY ident LIMIT 10",
+        )?;
+        let mapped = stmt.query_map([&prefix], |row| {
+            Ok(IdentSearchRow {
+                kind: "airway".to_string(),
+                ident: row.get(0)?,
+                name: row.get(1)?, // airway kind (VICTOR/JET/...) doubles as its display name
+                lat: None,
+                lon: None,
+            })
+        })?;
+        for r in mapped {
+            rows.push((false, 3, r?));
+        }
+
+        // Exact ident matches first, then airports < navaids < waypoints
+        // < airways, then ident — a stable, predictable ordering for a
+        // dropdown. The bool sorts false-first, so flip it for "exact".
+        for row in &mut rows {
+            row.0 = row.2.ident != q;
+        }
+        rows.sort_by(|a, b| {
+            (a.0, a.1, &a.2.ident).cmp(&(b.0, b.1, &b.2.ident))
+        });
+        rows.truncate(20);
+        Ok(rows.into_iter().map(|(_, _, r)| r).collect::<Vec<_>>())
+    })
+    .await;
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 pub async fn charts(State(state): State<AppState>, Query(query): Query<BboxQuery>) -> Response {
     let bbox = query.bbox.as_deref().and_then(parse_bbox);
     let result = with_bundle(&state, move |conn| {

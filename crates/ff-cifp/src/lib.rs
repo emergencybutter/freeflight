@@ -15,9 +15,9 @@ pub mod parser;
 pub mod record;
 
 pub use extract::{
-    build_procedures, extract_airport, extract_ndb_navaid, extract_procedure_leg_row,
-    extract_runway_end, extract_vhf_navaid, extract_waypoint, pair_runway_ends, CifpRunwayEnd,
-    ParsedProcedures, ProcedureLegRow,
+    build_airways, build_procedures, extract_airport, extract_airway_leg_row, extract_ndb_navaid,
+    extract_procedure_leg_row, extract_runway_end, extract_vhf_navaid, extract_waypoint,
+    pair_runway_ends, AirwayLegRow, CifpRunwayEnd, ParsedProcedures, ProcedureLegRow,
 };
 pub use parser::{classify_bytes, classify_file, CifpError};
 pub use record::{classify_line, RawRecord, RecordCategory};

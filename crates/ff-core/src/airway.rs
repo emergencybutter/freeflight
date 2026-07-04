@@ -10,6 +10,10 @@ pub enum AirwayKind {
     RnavLow,
     /// RNAV Q-route.
     RnavHigh,
+    /// Anything else — real CIFP data includes Alaska/oceanic
+    /// colored-airway idents (A342, B233...) that don't fit the CONUS
+    /// V/J/T/Q naming convention.
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { searchAirports } from "../data";
-import type { Airport } from "../types";
+import { fetchAirwayDetail, searchIdents } from "../data";
+import type { IdentSearchRow, RouteToken, RouteWaypoint } from "../types";
 import {
   checkWeightBalance,
   planRoute,
@@ -51,28 +51,33 @@ function formatHours(hours: number): string {
  * not through ff-api — DESIGN.md §5 scopes planning logic to ff-wasm
  * for exactly this reason.
  *
- * `route`/`onRouteChange` are lifted up to App.tsx (rather than local
- * state here) so MapView can draw the planned route too. */
+ * Route state (tokens) and its expansion into flat points are lifted
+ * up to App.tsx so MapView can draw the planned route too — see
+ * `expandRoute.ts` for the FOO V123 BAR airway semantics. */
 export function FlightPlanning({
-  route,
-  onRouteChange,
+  tokens,
+  onTokensChange,
+  points,
+  warnings,
 }: {
-  route: Airport[];
-  onRouteChange: (route: Airport[]) => void;
+  tokens: RouteToken[];
+  onTokensChange: (tokens: RouteToken[]) => void;
+  points: RouteWaypoint[];
+  warnings: string[];
 }) {
   const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
   const [navLog, setNavLog] = useState<RoutePlanSummary | null>(null);
   const [navLogError, setNavLogError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (route.length < 2) {
+    if (points.length < 2) {
       setNavLog(null);
       setNavLogError(null);
       return;
     }
     let cancelled = false;
     planRoute(
-      route.map((a) => ({ lat: a.lat, lon: a.lon })),
+      points.map((p) => ({ lat: p.lat, lon: p.lon })),
       profile,
     )
       .then((summary) => {
@@ -87,7 +92,7 @@ export function FlightPlanning({
     return () => {
       cancelled = true;
     };
-  }, [route, profile]);
+  }, [points, profile]);
 
   const hasWbEnvelope =
     profile.max_gross_weight_lb !== null &&
@@ -97,10 +102,10 @@ export function FlightPlanning({
   return (
     <div className="planning-layout">
       <AircraftProfileForm profile={profile} onChange={setProfile} />
-      <RouteBuilder route={route} onChange={onRouteChange} />
+      <RouteBuilder tokens={tokens} onChange={onTokensChange} warnings={warnings} />
       <div className="panel nav-log">
         <h2>Nav Log</h2>
-        {route.length < 2 && <p className="hint">Add at least two airports to the route to see a nav log.</p>}
+        {points.length < 2 && <p className="hint">Add at least two points to the route to see a nav log.</p>}
         {navLogError && <p className="hint">Couldn't compute nav log: {navLogError}</p>}
         {navLog && (
           <>
@@ -120,7 +125,7 @@ export function FlightPlanning({
                 {navLog.legs.map((leg, i) => (
                   <tr key={i}>
                     <td>
-                      {route[i].icao} → {route[i + 1].icao}
+                      {points[i].ident} → {points[i + 1].ident}
                     </td>
                     <td>{leg.distance_nm.toFixed(1)}</td>
                     <td>{leg.true_course_deg.toFixed(0)}°</td>
@@ -220,9 +225,33 @@ function AircraftProfileForm({
   );
 }
 
-function RouteBuilder({ route, onChange }: { route: Airport[]; onChange: (route: Airport[]) => void }) {
+const SEARCH_KIND_BADGES: Record<IdentSearchRow["kind"], string> = {
+  airport: "APT",
+  waypoint: "FIX",
+  navaid: "NAV",
+  airway: "AWY",
+};
+
+function tokenIdent(t: RouteToken): string {
+  return t.kind === "point" ? t.point.ident : t.ident;
+}
+
+/** One unified search box (airports, waypoints, navaids, airways) —
+ * routes are entered flight-plan-string style, e.g. KSFO FOO V123 BAR
+ * KLAX; airway tokens expand between their neighbor fixes (see
+ * expandRoute.ts), and `warnings` reports airway tokens that can't
+ * expand yet. */
+function RouteBuilder({
+  tokens,
+  onChange,
+  warnings,
+}: {
+  tokens: RouteToken[];
+  onChange: (tokens: RouteToken[]) => void;
+  warnings: string[];
+}) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Airport[]>([]);
+  const [results, setResults] = useState<IdentSearchRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -234,10 +263,10 @@ function RouteBuilder({ route, onChange }: { route: Airport[]; onChange: (route:
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      searchAirports(q)
-        .then((airports) => {
+      searchIdents(q)
+        .then((rows) => {
           if (!cancelled) {
-            setResults(airports);
+            setResults(rows);
             setError(null);
           }
         })
@@ -251,21 +280,31 @@ function RouteBuilder({ route, onChange }: { route: Airport[]; onChange: (route:
     };
   }, [query]);
 
-  const addAirport = (airport: Airport) => {
-    onChange([...route, airport]);
+  const addResult = (row: IdentSearchRow) => {
     setQuery("");
     setResults([]);
+    if (row.kind === "airway") {
+      fetchAirwayDetail(row.ident)
+        .then((detail) => onChange([...tokens, { kind: "airway", ident: detail.ident, detail }]))
+        .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      return;
+    }
+    if (row.lat === null || row.lon === null) return;
+    onChange([
+      ...tokens,
+      { kind: "point", point: { ident: row.ident, name: row.name, lat: row.lat, lon: row.lon } },
+    ]);
   };
-  const removeAt = (i: number) => onChange(route.filter((_, idx) => idx !== i));
+  const removeAt = (i: number) => onChange(tokens.filter((_, idx) => idx !== i));
   const moveUp = (i: number) => {
     if (i === 0) return;
-    const next = [...route];
+    const next = [...tokens];
     [next[i - 1], next[i]] = [next[i], next[i - 1]];
     onChange(next);
   };
   const moveDown = (i: number) => {
-    if (i === route.length - 1) return;
-    const next = [...route];
+    if (i === tokens.length - 1) return;
+    const next = [...tokens];
     [next[i], next[i + 1]] = [next[i + 1], next[i]];
     onChange(next);
   };
@@ -276,43 +315,68 @@ function RouteBuilder({ route, onChange }: { route: Airport[]; onChange: (route:
       <input
         className="airport-search"
         type="search"
-        placeholder="Add an airport (ident or name)…"
+        placeholder="Add an airport, fix, navaid, or airway…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
       {error && <p className="hint">search failed: {error}</p>}
       {results.length > 0 && (
         <ul>
-          {results.map((a) => (
-            <li key={a.icao}>
-              <button onClick={() => addAirport(a)}>
-                <strong>{a.icao}</strong> — <span className="airport-name">{a.name}</span>
+          {results.map((r) => (
+            <li key={`${r.kind}-${r.ident}`}>
+              <button onClick={() => addResult(r)}>
+                <span className="kind-badge">{SEARCH_KIND_BADGES[r.kind]}</span> <strong>{r.ident}</strong>
+                {r.name && (
+                  <>
+                    {" "}
+                    — <span className="airport-name">{r.name}</span>
+                  </>
+                )}
               </button>
             </li>
           ))}
         </ul>
       )}
-      {route.length === 0 && <p className="hint">No waypoints yet — search above to add the first one.</p>}
+      {tokens.length === 0 && (
+        <p className="hint">
+          No waypoints yet — search above to add the first one. Insert an airway between two of its fixes (e.g. FIX1,
+          V123, FIX2) to route along it.
+        </p>
+      )}
       <ol className="route-list">
-        {route.map((a, i) => (
-          <li key={`${a.icao}-${i}`}>
+        {tokens.map((t, i) => (
+          <li key={`${tokenIdent(t)}-${i}`}>
             <span>
-              <strong>{a.icao}</strong> <span className="airport-name">{a.name}</span>
+              <strong>{tokenIdent(t)}</strong>{" "}
+              {t.kind === "point" ? (
+                t.point.name && <span className="airport-name">{t.point.name}</span>
+              ) : (
+                <span className="airport-name">airway · {t.detail.legs.length} fixes</span>
+              )}
             </span>
             <span className="route-list-actions">
-              <button onClick={() => moveUp(i)} disabled={i === 0} aria-label={`Move ${a.icao} up`}>
+              <button onClick={() => moveUp(i)} disabled={i === 0} aria-label={`Move ${tokenIdent(t)} up`}>
                 ↑
               </button>
-              <button onClick={() => moveDown(i)} disabled={i === route.length - 1} aria-label={`Move ${a.icao} down`}>
+              <button
+                onClick={() => moveDown(i)}
+                disabled={i === tokens.length - 1}
+                aria-label={`Move ${tokenIdent(t)} down`}
+              >
                 ↓
               </button>
-              <button onClick={() => removeAt(i)} aria-label={`Remove ${a.icao}`}>
+              <button onClick={() => removeAt(i)} aria-label={`Remove ${tokenIdent(t)}`}>
                 ×
               </button>
             </span>
           </li>
         ))}
       </ol>
+      {warnings.map((w) => (
+        <p key={w} className="hint route-warning">
+          ⚠ {w}
+        </p>
+      ))}
     </div>
   );
 }

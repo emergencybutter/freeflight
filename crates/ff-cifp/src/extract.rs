@@ -3,18 +3,18 @@
 //! Column ranges below were cross-checked against the open-source
 //! `arinc424` parser (github.com/jack-laverty/arinc424) rather than
 //! guessed at — see that project's `airport.py`, `runway.py`,
-//! `vhf_navaid.py`, `ndb_navaid.py`, `waypoint.py`, and
-//! `sid_star_approach.py` for the field tables. Airport, Runway,
-//! VHF/NDB Navaid, Waypoint, and SID/STAR/Approach legs are extracted;
-//! Airway and enroute-communication records are classified by
-//! `crate::record` but not yet extracted into `ff_core` types.
+//! `vhf_navaid.py`, `ndb_navaid.py`, `waypoint.py`,
+//! `sid_star_approach.py`, and `enroute_airways.py` for the field
+//! tables. Airport, Runway, VHF/NDB Navaid, Waypoint, SID/STAR/Approach
+//! legs, and Enroute Airway legs are extracted; enroute-communication
+//! records are classified by `crate::record` but not yet extracted.
 use crate::decode;
 use crate::parser::CifpError;
 use crate::record::{RawRecord, RecordCategory, RECORD_LENGTH};
 use ff_core::{
-    Airport, AirportType, AltitudeConstraint, Navaid, NavaidType, PathAndTerm, Procedure,
-    ProcedureKind, ProcedureLeg, ProcedureTransition, Runway, RunwayEnd, RunwaySurface,
-    SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
+    Airport, AirportType, Airway, AirwayKind, AirwayLeg, AltitudeConstraint, Navaid, NavaidType,
+    PathAndTerm, Procedure, ProcedureKind, ProcedureLeg, ProcedureTransition, Runway, RunwayEnd,
+    RunwaySurface, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
 use std::collections::BTreeMap;
 
@@ -661,6 +661,96 @@ pub fn build_procedures(rows: &[ProcedureLegRow]) -> ParsedProcedures {
     }
 }
 
+/// One enroute-airway leg record ('ER' primary), extracted but not yet
+/// grouped into an [`Airway`] — see [`build_airways`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AirwayLegRow {
+    pub route_ident: String,
+    pub seq: u32,
+    pub fix_ident: String,
+    pub min_altitude_ft: Option<u32>,
+    pub max_altitude_ft: Option<u32>,
+}
+
+/// 4.1.6.1 Enroute Airways Primary Records (ER). Continuation records
+/// (continuation number != '0' at column 39) reuse these same columns
+/// for restrictive-airspace/notes data and are rejected as
+/// [`CifpError::WrongCategory`], same as a mis-classified record.
+pub fn extract_airway_leg_row(record: &RawRecord) -> Result<AirwayLegRow, CifpError> {
+    if record.category != RecordCategory::Airway {
+        return Err(CifpError::WrongCategory);
+    }
+    let line = &record.raw;
+    ensure_length(line)?;
+
+    if field(line, 38, 39) != "0" {
+        return Err(CifpError::WrongCategory);
+    }
+
+    let route_ident = decode::non_empty(field(line, 13, 18))
+        .ok_or(CifpError::MissingField("Route Identifier"))?;
+    let seq =
+        decode::uint(field(line, 25, 29)).ok_or(CifpError::InvalidField("Sequence Number"))?;
+    let fix_ident =
+        decode::non_empty(field(line, 29, 34)).ok_or(CifpError::MissingField("Fix Identifier"))?;
+    let min_altitude_ft = decode::uint(field(line, 83, 88));
+    let max_altitude_ft = decode::uint(field(line, 93, 98));
+
+    Ok(AirwayLegRow {
+        route_ident,
+        seq,
+        fix_ident,
+        min_altitude_ft,
+        max_altitude_ft,
+    })
+}
+
+/// FAA airway idents follow the CONUS V/J/T/Q convention; anything else
+/// (Alaska/oceanic colored airways like A342, B233) is [`AirwayKind::Other`].
+fn airway_kind_for(ident: &str) -> AirwayKind {
+    match ident.chars().next() {
+        Some('V') => AirwayKind::Victor,
+        Some('J') => AirwayKind::Jet,
+        Some('T') => AirwayKind::RnavLow,
+        Some('Q') => AirwayKind::RnavHigh,
+        _ => AirwayKind::Other,
+    }
+}
+
+/// Group flat 'ER' leg rows into airways with seq-ordered legs — the
+/// airway analog of [`build_procedures`], minus the transition concept
+/// (an airway is a single ordered fix sequence). Duplicate
+/// `(route_ident, seq)` rows keep the first occurrence, matching
+/// `build_procedures`' `seen_leg_keys` behavior.
+pub fn build_airways(rows: &[AirwayLegRow]) -> (Vec<Airway>, Vec<AirwayLeg>) {
+    let mut legs_by_airway: BTreeMap<String, BTreeMap<u32, AirwayLeg>> = BTreeMap::new();
+
+    for row in rows {
+        legs_by_airway
+            .entry(row.route_ident.clone())
+            .or_default()
+            .entry(row.seq)
+            .or_insert_with(|| AirwayLeg {
+                airway_ident: row.route_ident.clone(),
+                seq: row.seq,
+                fix_ident: row.fix_ident.clone(),
+                min_altitude_ft: row.min_altitude_ft,
+                max_altitude_ft: row.max_altitude_ft,
+            });
+    }
+
+    let mut airways = Vec::new();
+    let mut legs = Vec::new();
+    for (ident, airway_legs) in legs_by_airway {
+        airways.push(Airway {
+            kind: airway_kind_for(&ident),
+            ident,
+        });
+        legs.extend(airway_legs.into_values());
+    }
+    (airways, legs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1148,5 +1238,68 @@ mod tests {
                 upper: 4000
             })
         );
+    }
+
+    #[test]
+    fn extracts_a_real_airway_leg_record() {
+        // A real FAACIFP18 line: airway A342's PINSO leg (Alaska), used
+        // to lock in the 'ER' column offsets verified against the
+        // arinc424 reference parser's enroute_airways.py field table.
+        let line = "SCANER       A342        0120PINSOP EA0E   PO                         07551739     18000     60000                         031252605";
+        let record = classify_line(line).unwrap();
+        assert_eq!(record.category, RecordCategory::Airway);
+
+        let row = extract_airway_leg_row(&record).unwrap();
+        assert_eq!(row.route_ident, "A342");
+        assert_eq!(row.seq, 120);
+        assert_eq!(row.fix_ident, "PINSO");
+        assert_eq!(row.min_altitude_ft, Some(18000));
+        assert_eq!(row.max_altitude_ft, Some(60000));
+    }
+
+    #[test]
+    fn extract_airway_leg_row_rejects_continuation_records() {
+        // Same record with continuation number '1' — continuation
+        // records reuse the altitude columns for other data and must be
+        // skipped, not parsed as a second copy of the leg.
+        let line = "SCANER       A342        0120PINSOP EA1E   PO                         07551739     18000     60000                         031252605";
+        let record = classify_line(line).unwrap();
+        assert_eq!(record.category, RecordCategory::Airway);
+        assert!(matches!(
+            extract_airway_leg_row(&record),
+            Err(CifpError::WrongCategory)
+        ));
+    }
+
+    #[test]
+    fn build_airways_groups_sorts_and_classifies() {
+        let row = |route: &str, seq: u32, fix: &str| AirwayLegRow {
+            route_ident: route.to_string(),
+            seq,
+            fix_ident: fix.to_string(),
+            min_altitude_ft: Some(18000),
+            max_altitude_ft: None,
+        };
+        let rows = vec![
+            row("V25", 20, "FIXB"),
+            row("V25", 10, "FIXA"),
+            row("A342", 10, "PINSO"),
+            // Duplicate (ident, seq): first occurrence wins.
+            row("V25", 10, "WRONG"),
+        ];
+        let (airways, legs) = build_airways(&rows);
+
+        assert_eq!(airways.len(), 2);
+        assert_eq!(airways[0].ident, "A342");
+        assert_eq!(airways[0].kind, AirwayKind::Other);
+        assert_eq!(airways[1].ident, "V25");
+        assert_eq!(airways[1].kind, AirwayKind::Victor);
+
+        let v25_legs: Vec<&AirwayLeg> = legs.iter().filter(|l| l.airway_ident == "V25").collect();
+        assert_eq!(v25_legs.len(), 2);
+        assert_eq!(v25_legs[0].seq, 10);
+        assert_eq!(v25_legs[0].fix_ident, "FIXA");
+        assert_eq!(v25_legs[1].seq, 20);
+        assert_eq!(v25_legs[1].fix_ident, "FIXB");
     }
 }

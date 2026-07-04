@@ -4,7 +4,16 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportsInBbox, fetchAirspaceInBbox, fetchCharts, fetchProcedureDetail } from "./data";
-import type { Airport, AirspaceVolume, GAirmet, ProcedureDetail, Runway, Sigmet, WindsAloftBulletin } from "./types";
+import type {
+  Airport,
+  AirspaceVolume,
+  GAirmet,
+  ProcedureDetail,
+  RouteWaypoint,
+  Runway,
+  Sigmet,
+  WindsAloftBulletin,
+} from "./types";
 import { fetchGairmets, fetchMetars, fetchSigmets, fetchWindsAloft } from "./weather";
 
 const AIRPORTS_SOURCE = "airports";
@@ -16,6 +25,7 @@ const SIGMET_SOURCE = "sigmets";
 const WINDS_ALOFT_SOURCE = "winds-aloft";
 const AIRSPACE_SOURCE = "airspace";
 const PLANNED_ROUTE_SOURCE = "planned-route";
+const PLANNED_ROUTE_FIXES_SOURCE = "planned-route-fixes";
 
 // Bay Area demo scope only has stations at this one altitude reliably —
 // see MapView's winds-aloft fetch for why this isn't user-selectable yet.
@@ -136,7 +146,7 @@ function airspaceGeoJson(volumes: AirspaceVolume[]): GeoJSON.FeatureCollection {
  * this one can see it) as a single straight-leg line — a planned route
  * is the great-circle legs `ff-planning` computes the nav log from, not
  * a flown path, so unlike the procedure line this isn't curved. */
-function plannedRouteGeoJson(route: Airport[]): GeoJSON.FeatureCollection {
+function plannedRouteGeoJson(route: RouteWaypoint[]): GeoJSON.FeatureCollection {
   if (route.length < 2) return EMPTY_COLLECTION;
   return {
     type: "FeatureCollection",
@@ -147,6 +157,19 @@ function plannedRouteGeoJson(route: Airport[]): GeoJSON.FeatureCollection {
         properties: {},
       },
     ],
+  };
+}
+
+/** One marker + ident label per planned-route point, so an inserted
+ * airway's constituent fixes are visible as more than just line bends. */
+function plannedRouteFixesGeoJson(route: RouteWaypoint[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: route.map((p) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+      properties: { label: p.ident },
+    })),
   };
 }
 
@@ -572,8 +595,9 @@ export function MapView({
    * container was `display: none`, so this drives an explicit
    * `resize()` when the map becomes visible again. */
   visible: boolean;
-  /** The Flight Plan view's route (lifted to App.tsx) — drawn in cyan. */
-  route: Airport[];
+  /** The Flight Plan view's expanded route points (tokens are expanded
+   * in App.tsx — see planning/expandRoute.ts) — drawn in cyan. */
+  route: RouteWaypoint[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -672,6 +696,31 @@ export function MapView({
         type: "line",
         source: PLANNED_ROUTE_SOURCE,
         paint: { "line-color": "#22d3ee", "line-width": 3 },
+      });
+      map.addSource(PLANNED_ROUTE_FIXES_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "planned-route-fix-circle",
+        type: "circle",
+        source: PLANNED_ROUTE_FIXES_SOURCE,
+        paint: {
+          "circle-radius": 4,
+          "circle-color": "#22d3ee",
+          "circle-stroke-color": "#0b1220",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "planned-route-fix-label",
+        type: "symbol",
+        source: PLANNED_ROUTE_FIXES_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+          "text-justify": "center",
+        },
+        paint: { "text-color": "#22d3ee", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
       });
 
       // One marker + label per fix the selected procedure's legs actually
@@ -912,6 +961,9 @@ export function MapView({
     if (!map || !loaded) return;
     (map.getSource(PLANNED_ROUTE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
       plannedRouteGeoJson(route),
+    );
+    (map.getSource(PLANNED_ROUTE_FIXES_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+      plannedRouteFixesGeoJson(route),
     );
   }, [route, loaded]);
 

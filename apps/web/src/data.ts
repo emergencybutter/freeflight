@@ -6,8 +6,10 @@ import type {
   Airport,
   AirportDetail,
   AirspaceVolume,
+  AirwayDetail,
   ChartCatalogEntry,
   CycleManifest,
+  IdentSearchRow,
   Procedure,
   ProcedureDetail,
 } from "./types";
@@ -37,6 +39,16 @@ export async function fetchAirportProcedures(icao: string): Promise<Procedure[]>
 
 export async function fetchProcedureDetail(id: string): Promise<ProcedureDetail> {
   return fetchJson<ProcedureDetail>(`/data/procedures/${encodeURIComponent(id)}`);
+}
+
+export async function fetchAirwayDetail(ident: string): Promise<AirwayDetail> {
+  return fetchJson<AirwayDetail>(`/data/airways/${encodeURIComponent(ident)}`);
+}
+
+/** Unified ident search (airports, waypoints, navaids, airways) for the
+ * route builder's single search box. */
+export async function searchIdents(q: string): Promise<IdentSearchRow[]> {
+  return fetchJson<IdentSearchRow[]>(`/data/search_idents?q=${encodeURIComponent(q)}`);
 }
 
 export async function fetchCharts(): Promise<ChartCatalogEntry[]> {

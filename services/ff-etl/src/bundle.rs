@@ -8,14 +8,14 @@
 //! unchanged rather than rewritten.
 use ff_charts::{geotiff_to_pmtiles, ChartCatalogEntry, ChartKind, GeoTiffSource};
 use ff_cifp::{
-    build_procedures, classify_line, extract_airport, extract_ndb_navaid,
-    extract_procedure_leg_row, extract_runway_end, extract_vhf_navaid, extract_waypoint,
-    pair_runway_ends, RecordCategory,
+    build_airways, build_procedures, classify_line, extract_airport, extract_airway_leg_row,
+    extract_ndb_navaid, extract_procedure_leg_row, extract_runway_end, extract_vhf_navaid,
+    extract_waypoint, pair_runway_ends, RecordCategory,
 };
 use ff_core::{
-    AirportType, AirspaceClass, AirspaceVolume, AltitudeConstraint, AltitudeLimit, Frequency,
-    FrequencyKind, Navaid, NavaidType, PathAndTerm, Polygon, ProcedureKind, Runway, RunwaySurface,
-    SpecialUseKind, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
+    AirportType, AirspaceClass, AirspaceVolume, AirwayKind, AltitudeConstraint, AltitudeLimit,
+    Frequency, FrequencyKind, Navaid, NavaidType, PathAndTerm, Polygon, ProcedureKind, Runway,
+    RunwaySurface, SpecialUseKind, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
 use ff_nasr::{
     frequencies_for_airport, parse_apt_base, parse_apt_runway, parse_apt_runway_end, parse_frq,
@@ -86,6 +86,8 @@ pub struct BundleStats {
     pub legs: usize,
     pub navaids: usize,
     pub waypoints: usize,
+    pub airways: usize,
+    pub airway_legs: usize,
     pub has_chart: bool,
 }
 
@@ -98,6 +100,7 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
     let mut airports = Vec::new();
     let mut runway_ends = Vec::new();
     let mut leg_rows = Vec::new();
+    let mut airway_leg_rows = Vec::new();
 
     for line in contents.lines() {
         let Some(record) = classify_line(line) else {
@@ -125,6 +128,15 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
                     }
                 }
             }
+            // Not scoped by `icaos`: airways aren't airport-local, and
+            // nationwide it's only ~19k rows. Continuation records fail
+            // extraction (by design) and are skipped here like any other
+            // malformed line.
+            RecordCategory::Airway => {
+                if let Ok(row) = extract_airway_leg_row(&record) {
+                    airway_leg_rows.push(row);
+                }
+            }
             _ => {}
         }
     }
@@ -144,18 +156,20 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
 
     let mut runways = pair_runway_ends(&runway_ends);
     let parsed = build_procedures(&leg_rows);
+    let (airways, airway_legs) = build_airways(&airway_leg_rows);
 
-    // Resolve procedure leg fixes to real coordinates: a second pass over
-    // the file (cheap — `contents` is already in memory) picking out just
-    // the VHF/NDB navaids and waypoints actually referenced by these
-    // airports' procedures, rather than every navaid/waypoint in the
+    // Resolve procedure and airway leg fixes to real coordinates: a
+    // second pass over the file (cheap — `contents` is already in
+    // memory) picking out just the VHF/NDB navaids and waypoints
+    // actually referenced, rather than every navaid/waypoint in the
     // country. Runway-threshold pseudo-fixes (e.g. "RW28L") won't match
     // anything here and are simply skipped by consumers.
-    let wanted_fixes: HashSet<String> = parsed
+    let mut wanted_fixes: HashSet<String> = parsed
         .legs
         .iter()
         .filter_map(|l| l.fix_ident.clone())
         .collect();
+    wanted_fixes.extend(airway_legs.iter().map(|l| l.fix_ident.clone()));
     let mut navaids: Vec<Navaid> = Vec::new();
     let mut waypoints: Vec<Waypoint> = Vec::new();
     let mut seen_navaid_idents = HashSet::new();
@@ -317,6 +331,32 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         )?;
     }
 
+    // airway_leg references airway by rowid FK, so remember each
+    // airway's assigned id as it's inserted; legs are already grouped
+    // and seq-sorted per airway by `build_airways`.
+    let mut airway_ids: HashMap<&str, i64> = HashMap::new();
+    for a in &airways {
+        conn.execute(
+            "INSERT INTO airway (ident, kind) VALUES (?1,?2)",
+            params![a.ident, airway_kind_str(a.kind)],
+        )?;
+        airway_ids.insert(a.ident.as_str(), conn.last_insert_rowid());
+    }
+    for l in &airway_legs {
+        let airway_id = airway_ids[l.airway_ident.as_str()];
+        conn.execute(
+            "INSERT INTO airway_leg (airway_id, seq, fix_ident, min_altitude_ft, max_altitude_ft)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![
+                airway_id,
+                l.seq,
+                l.fix_ident,
+                l.min_altitude_ft,
+                l.max_altitude_ft
+            ],
+        )?;
+    }
+
     conn.commit()?;
 
     if let Some(chart_source) = &source.chart {
@@ -332,6 +372,8 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
         legs: parsed.legs.len(),
         navaids: navaids.len(),
         waypoints: waypoints.len(),
+        airways: airways.len(),
+        airway_legs: airway_legs.len(),
         has_chart: source.chart.is_some(),
     })
 }
@@ -534,6 +576,16 @@ fn procedure_kind_str(k: ProcedureKind) -> &'static str {
         ProcedureKind::Sid => "SID",
         ProcedureKind::Star => "STAR",
         ProcedureKind::Approach => "APPROACH",
+    }
+}
+
+fn airway_kind_str(k: AirwayKind) -> &'static str {
+    match k {
+        AirwayKind::Victor => "VICTOR",
+        AirwayKind::Jet => "JET",
+        AirwayKind::RnavLow => "RNAV_LOW",
+        AirwayKind::RnavHigh => "RNAV_HIGH",
+        AirwayKind::Other => "OTHER",
     }
 }
 
