@@ -10,6 +10,7 @@ import { fetchGairmets, fetchMetars, fetchSigmets, fetchWindsAloft } from "./wea
 const AIRPORTS_SOURCE = "airports";
 const RUNWAYS_SOURCE = "runways";
 const PROCEDURE_SOURCE = "procedure-path";
+const PROCEDURE_FIXES_SOURCE = "procedure-fixes";
 const GAIRMET_SOURCE = "gairmets";
 const SIGMET_SOURCE = "sigmets";
 const WINDS_ALOFT_SOURCE = "winds-aloft";
@@ -204,6 +205,37 @@ function procedureGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features };
 }
 
+/** One marker per distinct resolvable fix the procedure's legs actually
+ * reference (waypoint, navaid, or a runway threshold resolved server-
+ * side — see ff-api's procedure_detail), labeled with its ident and,
+ * where CIFP encodes one, its altitude restriction. The same fix can
+ * appear in more than one transition (e.g. an IAF that's also the start
+ * of the common/missed segment) — first altitude constraint seen wins
+ * rather than stacking duplicate markers at the same coordinate. */
+function procedureFixesGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollection {
+  const seen = new Map<string, string | null>();
+  for (const t of detail.transitions) {
+    for (const leg of t.legs) {
+      if (!leg.fix_ident || !detail.fixes[leg.fix_ident]) continue;
+      if (!seen.has(leg.fix_ident)) {
+        seen.set(leg.fix_ident, leg.altitude_constraint);
+      } else if (!seen.get(leg.fix_ident) && leg.altitude_constraint) {
+        seen.set(leg.fix_ident, leg.altitude_constraint);
+      }
+    }
+  }
+  const features: GeoJSON.Feature[] = [];
+  for (const [ident, altitude] of seen) {
+    const fix = detail.fixes[ident];
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [fix.lon, fix.lat] },
+      properties: { label: altitude ? `${ident}\n${altitude}` : ident },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
 /** Below this zoom the map doesn't show airport markers at all — a
  * nationwide bundle has ~13k airports, and a CONUS-wide marker soup is
  * useless as well as slow. */
@@ -389,6 +421,36 @@ export function MapView({
         type: "line",
         source: PROCEDURE_SOURCE,
         paint: { "line-color": "#e254e0", "line-width": 4, "line-dasharray": [2, 1.5] },
+      });
+
+      // One marker + label per fix the selected procedure's legs actually
+      // reference (see procedureFixesGeoJson) — the label is ident alone,
+      // or ident + a second line with the CIFP altitude restriction when
+      // one exists for that leg.
+      map.addSource(PROCEDURE_FIXES_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "procedure-fix-circle",
+        type: "circle",
+        source: PROCEDURE_FIXES_SOURCE,
+        paint: {
+          "circle-radius": 4,
+          "circle-color": "#f2e6c9",
+          "circle-stroke-color": "#0b1220",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "procedure-fix-label",
+        type: "symbol",
+        source: PROCEDURE_FIXES_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+          "text-justify": "center",
+        },
+        paint: { "text-color": "#f2e6c9", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
       });
 
       // Chart imagery renders as the base layer, under the airport/runway/
@@ -614,16 +676,21 @@ export function MapView({
 
     const setPath = (data: GeoJSON.FeatureCollection) =>
       (map.getSource(PROCEDURE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(data);
+    const setFixes = (data: GeoJSON.FeatureCollection) =>
+      (map.getSource(PROCEDURE_FIXES_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(data);
 
     let cancelled = false;
     if (selectedProcedureId) {
       fetchProcedureDetail(selectedProcedureId)
         .then((detail) => {
-          if (!cancelled) setPath(procedureGeoJson(detail));
+          if (cancelled) return;
+          setPath(procedureGeoJson(detail));
+          setFixes(procedureFixesGeoJson(detail));
         })
         .catch((err: unknown) => console.warn("couldn't load the procedure path for the map", err));
     } else {
       setPath(EMPTY_COLLECTION);
+      setFixes(EMPTY_COLLECTION);
     }
     return () => {
       cancelled = true;
