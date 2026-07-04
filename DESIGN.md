@@ -664,7 +664,15 @@ document survive insertions/removals.
   is a connected-only companion for the same data. No planning or track
   recording yet.
 - **Phase 2 — Flight planning**: route builder, nav log, basic W&B,
-  aircraft profiles.
+  aircraft profiles. Web slice implemented: `ff-planning`'s math now
+  runs client-side via `ff-wasm` (previously built but not wired into
+  the web app — see `apps/web/README.md`), behind a route
+  builder/nav-log/W&B UI. Session-only (no persistence — the web client
+  still has no local database, §8); no winds-aloft correction yet
+  (`ff-planning::plan_route` already supports it, just not called with
+  wind data from this UI). Android's equivalent (`ff-uniffi` bindings,
+  persisted via the `aircraft_profile`/`route_plan`/`route_leg` tables)
+  is still unstarted.
 - **Phase 3 — Post-flight analysis**: GPS track recording (Android),
   GPX import (web), phase-of-flight detection, flight log export.
 - **Phase 4 — Accounts & sync** (optional): let a pilot's route plans,

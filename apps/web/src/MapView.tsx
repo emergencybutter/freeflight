@@ -187,6 +187,138 @@ function runwaysGeoJson(runways: Runway[]): GeoJSON.FeatureCollection {
 /** One line per transition — legs from different transitions (enroute vs.
  * approach vs. missed) aren't a continuous path, so they're never joined.
  * Fix coordinates come pre-resolved in the /data/procedures/:id response. */
+// Rounds the sharp vertex at each procedure-path turn into a circular
+// arc, at a fixed turn radius of 1 NM. This is a display simplification
+// (a real turn radius depends on groundspeed/bank angle), not a flight-
+// performance model — it just replaces angular vertices with something
+// that reads as a flown path rather than a surveyor's traverse.
+const EARTH_RADIUS_M = 6371000;
+const NM_TO_M = 1852;
+const TURN_RADIUS_M = 1 * NM_TO_M;
+// Turns tighter than this are left as sharp corners — not worth curving
+// a heading change you'd barely see on a chart.
+const MIN_FILLET_TURN_RAD = (1 * Math.PI) / 180;
+// Caps how much of either adjacent leg a fillet can consume, so two
+// consecutive tight turns on a short leg can't eat past each other.
+const FILLET_TANGENT_SAFETY_FRACTION = 0.45;
+
+type LocalPoint = [number, number];
+
+/** Local flat-earth (east, north) meters around `refLon,refLat` — only
+ * ever used within a couple of turn radii of the reference point, where
+ * the flat approximation's error is negligible for chart display. */
+function toLocalMeters(lon: number, lat: number, refLon: number, refLat: number): LocalPoint {
+  const refLatRad = (refLat * Math.PI) / 180;
+  const x = (((lon - refLon) * Math.PI) / 180) * Math.cos(refLatRad) * EARTH_RADIUS_M;
+  const y = (((lat - refLat) * Math.PI) / 180) * EARTH_RADIUS_M;
+  return [x, y];
+}
+
+function fromLocalMeters(x: number, y: number, refLon: number, refLat: number): [number, number] {
+  const refLatRad = (refLat * Math.PI) / 180;
+  const lon = refLon + (x / (EARTH_RADIUS_M * Math.cos(refLatRad))) * (180 / Math.PI);
+  const lat = refLat + (y / EARTH_RADIUS_M) * (180 / Math.PI);
+  return [lon, lat];
+}
+
+function vecSub(a: LocalPoint, b: LocalPoint): LocalPoint {
+  return [a[0] - b[0], a[1] - b[1]];
+}
+function vecLen(a: LocalPoint): number {
+  return Math.hypot(a[0], a[1]);
+}
+function vecNormalize(a: LocalPoint): LocalPoint {
+  const l = vecLen(a);
+  return l === 0 ? [0, 0] : [a[0] / l, a[1] / l];
+}
+
+/** The arc replacing the sharp corner at `curr`, tangent to both
+ * `prev->curr` and `curr->next`, at `TURN_RADIUS_M` (shrunk if either
+ * adjacent leg is too short to fit it). Empty if the turn is negligible
+ * or a leg is degenerate (zero-length). */
+function filletCorner(prev: [number, number], curr: [number, number], next: [number, number]): [number, number][] {
+  const [refLon, refLat] = curr;
+  const p = toLocalMeters(prev[0], prev[1], refLon, refLat);
+  const c: LocalPoint = [0, 0];
+  const n = toLocalMeters(next[0], next[1], refLon, refLat);
+
+  const lenBefore = vecLen(vecSub(c, p));
+  const lenAfter = vecLen(vecSub(n, c));
+  if (lenBefore < 1e-6 || lenAfter < 1e-6) return [];
+
+  const vIn = vecNormalize(vecSub(c, p));
+  const vOut = vecNormalize(vecSub(n, c));
+  const dot = Math.max(-1, Math.min(1, vIn[0] * vOut[0] + vIn[1] * vOut[1]));
+  const turnAngle = Math.acos(dot);
+  if (turnAngle < MIN_FILLET_TURN_RAD) return [];
+
+  const idealTangent = TURN_RADIUS_M * Math.tan(turnAngle / 2);
+  const maxTangent = Math.min(lenBefore, lenAfter) * FILLET_TANGENT_SAFETY_FRACTION;
+  const tangentDist = Math.min(idealTangent, maxTangent);
+  if (tangentDist < 1) return [];
+  const effectiveRadius = tangentDist / Math.tan(turnAngle / 2);
+
+  const t1: LocalPoint = [c[0] - vIn[0] * tangentDist, c[1] - vIn[1] * tangentDist];
+  const t2: LocalPoint = [c[0] + vOut[0] * tangentDist, c[1] + vOut[1] * tangentDist];
+
+  // Which side the turn bends toward, so the arc bulges the right way
+  // and sweeps in the right direction.
+  const cross = vIn[0] * vOut[1] - vIn[1] * vOut[0];
+  const turnSign = cross > 0 ? 1 : -1;
+  const perpIn: LocalPoint = turnSign > 0 ? [-vIn[1], vIn[0]] : [vIn[1], -vIn[0]];
+  const center: LocalPoint = [t1[0] + perpIn[0] * effectiveRadius, t1[1] + perpIn[1] * effectiveRadius];
+
+  const startAngle = Math.atan2(t1[1] - center[1], t1[0] - center[0]);
+  const endAngle = Math.atan2(t2[1] - center[1], t2[0] - center[0]);
+  let sweep = endAngle - startAngle;
+  if (turnSign > 0) {
+    while (sweep < 0) sweep += 2 * Math.PI;
+  } else {
+    while (sweep > 0) sweep -= 2 * Math.PI;
+  }
+
+  const steps = Math.max(4, Math.ceil(Math.abs(sweep) / (Math.PI / 16)));
+  const arc: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = startAngle + (sweep * i) / steps;
+    const x = center[0] + effectiveRadius * Math.cos(a);
+    const y = center[1] + effectiveRadius * Math.sin(a);
+    arc.push(fromLocalMeters(x, y, refLon, refLat));
+  }
+  return arc;
+}
+
+/** Replaces every interior vertex of a lon/lat path with a fillet arc
+ * (see `filletCorner`) — endpoints are left as-is, only turns in
+ * between are rounded. `vertexStart[i]` is the index into `coords`
+ * where input point `i`'s arc (or the point itself, if unfilleted)
+ * begins — callers that need to split the path at a particular input
+ * vertex (e.g. procedureGeoJson splitting solid/dashed at the runway)
+ * must split the *curved* output there, not at `i` itself: the runway
+ * vertex is exactly the kind of sharp turn this exists to round, and a
+ * naive split at the original vertex would cut the path exactly where
+ * fillet has already replaced it with several arc points, leaving the
+ * turn unrounded on whichever side lost them. */
+function filletPolyline(points: [number, number][]): { coords: [number, number][]; vertexStart: number[] } {
+  if (points.length < 3) {
+    return { coords: points, vertexStart: points.map((_, i) => i) };
+  }
+  const coords: [number, number][] = [points[0]];
+  const vertexStart: number[] = [0];
+  for (let i = 1; i < points.length - 1; i++) {
+    vertexStart.push(coords.length);
+    const arc = filletCorner(points[i - 1], points[i], points[i + 1]);
+    if (arc.length === 0) {
+      coords.push(points[i]);
+    } else {
+      coords.push(...arc);
+    }
+  }
+  vertexStart.push(coords.length);
+  coords.push(points[points.length - 1]);
+  return { coords, vertexStart };
+}
+
 /** Splits each transition's path at its runway-threshold leg (the
  * resolved "RW<ident>" pseudo-fix — see ff-api's procedure_detail) into
  * an "approach" segment (solid) and, if anything follows the runway fix,
@@ -212,22 +344,40 @@ function procedureGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollection {
         runwayIndex = points.length - 1;
       }
     }
-    const toCoords = (pts: typeof points) => pts.map((p) => [p.lon, p.lat]);
-    const approachPts = runwayIndex === null ? points : points.slice(0, runwayIndex + 1);
-    const missedPts = runwayIndex === null ? [] : points.slice(runwayIndex);
-    if (approachPts.length >= 2) {
+    if (points.length < 2) continue;
+    // Fillet the whole transition as one path — including across the
+    // runway/missed-approach boundary — so the turn *at* the runway
+    // (typically the sharpest one on the whole procedure) gets rounded
+    // too, then split the resulting curve rather than the straight
+    // input. Splitting the input first (as an earlier version of this
+    // did) made the runway vertex an endpoint of both halves, and
+    // endpoints never get filleted, so the turn onto the missed
+    // approach never rounded no matter what.
+    const { coords, vertexStart } = filletPolyline(points.map((p): [number, number] => [p.lon, p.lat]));
+    if (runwayIndex === null) {
       features.push({
         type: "Feature",
-        geometry: { type: "LineString", coordinates: toCoords(approachPts) },
+        geometry: { type: "LineString", coordinates: coords },
         properties: { transitionId: t.id, segment: "approach" },
       });
-    }
-    if (missedPts.length >= 2) {
-      features.push({
-        type: "Feature",
-        geometry: { type: "LineString", coordinates: toCoords(missedPts) },
-        properties: { transitionId: t.id, segment: "missed" },
-      });
+    } else {
+      const splitAt = vertexStart[runwayIndex];
+      const approachCoords = coords.slice(0, splitAt + 1);
+      const missedCoords = coords.slice(splitAt);
+      if (approachCoords.length >= 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: approachCoords },
+          properties: { transitionId: t.id, segment: "approach" },
+        });
+      }
+      if (missedCoords.length >= 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: missedCoords },
+          properties: { transitionId: t.id, segment: "missed" },
+        });
+      }
     }
   }
   return { type: "FeatureCollection", features };
@@ -283,6 +433,7 @@ async function refreshVisibleAirports(
   map: MlMap,
   visibleAirportsRef: { current: Airport[] },
   windsBulletinRef: { current: WindsAloftBulletin | null },
+  unmountedRef: { current: boolean },
 ) {
   const clear = () => {
     visibleAirportsRef.current = [];
@@ -302,6 +453,10 @@ async function refreshVisibleAirports(
     console.warn("couldn't load airports for the map view", err);
     return;
   }
+  // The view (MapView switched away from — see App.tsx's map/plan
+  // toggle) may have unmounted and torn down `map` while that fetch was
+  // in flight; touching a removed map throws.
+  if (unmountedRef.current) return;
   visibleAirportsRef.current = airports;
   (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
     airportsGeoJson(airports, new Map()),
@@ -314,6 +469,7 @@ async function refreshVisibleAirports(
 
   try {
     const metars = await fetchMetars(airports.slice(0, MAX_METAR_AIRPORTS).map((a) => a.icao));
+    if (unmountedRef.current) return;
     const flightCategories = new Map<string, string>();
     for (const m of metars) {
       if (m.fltCat) flightCategories.set(m.icaoId, m.fltCat);
@@ -335,11 +491,12 @@ async function refreshVisibleAirports(
  * SUA boundary is relevant situational awareness at any zoom, and a
  * bbox at a low zoom still only returns what's actually in view rather
  * than nationwide, so there's no marker-soup-style volume problem here. */
-async function refreshVisibleAirspace(map: MlMap) {
+async function refreshVisibleAirspace(map: MlMap, unmountedRef: { current: boolean }) {
   const bounds = map.getBounds();
   const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
   try {
     const volumes = await fetchAirspaceInBbox(bbox);
+    if (unmountedRef.current) return;
     (map.getSource(AIRSPACE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(airspaceGeoJson(volumes));
   } catch (err) {
     console.warn("couldn't load airspace boundaries for the map view", err);
@@ -349,9 +506,14 @@ async function refreshVisibleAirspace(map: MlMap) {
 /** Fetches the CONUS-wide hazard overlays and the winds-aloft bulletin
  * (cached in `windsBulletinRef` for reuse as the view moves). Each is
  * independent, so one failing doesn't block the others. */
-async function loadWeatherOverlays(map: MlMap, windsBulletinRef: { current: WindsAloftBulletin | null }) {
+async function loadWeatherOverlays(
+  map: MlMap,
+  windsBulletinRef: { current: WindsAloftBulletin | null },
+  unmountedRef: { current: boolean },
+) {
   try {
     const gairmets = await fetchGairmets();
+    if (unmountedRef.current) return;
     (map.getSource(GAIRMET_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(gairmetGeoJson(gairmets));
   } catch (err) {
     console.warn("couldn't load G-AIRMETs for the map", err);
@@ -359,6 +521,7 @@ async function loadWeatherOverlays(map: MlMap, windsBulletinRef: { current: Wind
 
   try {
     const sigmets = await fetchSigmets();
+    if (unmountedRef.current) return;
     (map.getSource(SIGMET_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(sigmetGeoJson(sigmets));
   } catch (err) {
     console.warn("couldn't load SIGMETs for the map", err);
@@ -384,6 +547,11 @@ export function MapView({
   const mapRef = useRef<MlMap | null>(null);
   const visibleAirportsRef = useRef<Airport[]>([]);
   const windsBulletinRef = useRef<WindsAloftBulletin | null>(null);
+  // Set in this effect's cleanup so in-flight fetches from the initial
+  // load (which don't run through a "cancelled" closure the way the
+  // other effects do) don't touch `map` after App.tsx's map/plan toggle
+  // has unmounted this component and removed it.
+  const unmountedRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -670,17 +838,20 @@ export function MapView({
       // whole. Weather overlays load once; the winds bulletin is cached
       // and re-applied to whatever airports are in view. Each fetch is
       // independent so one failing doesn't block the others.
-      void loadWeatherOverlays(map, windsBulletinRef).then(() => refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef));
-      void refreshVisibleAirspace(map);
+      void loadWeatherOverlays(map, windsBulletinRef, unmountedRef).then(
+        () => void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, unmountedRef),
+      );
+      void refreshVisibleAirspace(map, unmountedRef);
       map.on("moveend", () => {
-        void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef);
-        void refreshVisibleAirspace(map);
+        void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, unmountedRef);
+        void refreshVisibleAirspace(map, unmountedRef);
       });
 
       setLoaded(true);
     });
 
     return () => {
+      unmountedRef.current = true;
       map.remove();
       mapRef.current = null;
       setLoaded(false);

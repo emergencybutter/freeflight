@@ -7,6 +7,16 @@ pub struct AircraftProfile {
     pub name: String,
     pub cruise_tas_kt: f64,
     pub fuel_burn_gph: f64,
+    /// Weight & balance fields (see `crate::weight_balance`) — optional
+    /// since a profile with no W&B data can still plan a nav log.
+    /// Mirrors `ff-storage`'s `aircraft_profile` table columns of the
+    /// same names, which are nullable for the same reason.
+    #[serde(default)]
+    pub max_gross_weight_lb: Option<f64>,
+    #[serde(default)]
+    pub forward_cg_limit_in: Option<f64>,
+    #[serde(default)]
+    pub aft_cg_limit_in: Option<f64>,
 }
 
 /// A single point in a route: an airport, navaid, or plain waypoint,
@@ -117,6 +127,10 @@ mod tests {
             name: "C172".into(),
             cruise_tas_kt: 110.0,
             fuel_burn_gph: 8.5,
+            // Same envelope as weight_balance.rs's own tests.
+            max_gross_weight_lb: Some(2450.0),
+            forward_cg_limit_in: Some(35.0),
+            aft_cg_limit_in: Some(47.3),
         }
     }
 

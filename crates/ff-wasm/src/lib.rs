@@ -3,6 +3,7 @@
 //! needs from the shared Rust core; route/leg data crosses the JS/Rust
 //! boundary as JSON rather than hand-mapped `wasm-bindgen` structs, to
 //! keep this crate's surface small as `ff-planning` grows.
+use ff_planning::{check_weight_balance, WeightAtStation, WeightBalanceEnvelope};
 use ff_planning::{
     distance_nm as core_distance_nm, initial_bearing_deg as core_initial_bearing_deg,
 };
@@ -35,5 +36,21 @@ pub fn plan_route_json(points_json: &str, profile_json: &str) -> Result<String, 
         .map_err(|e| JsValue::from_str(&format!("invalid profile JSON: {e}")))?;
     let summary = plan_route(&points, &profile, None);
     serde_json::to_string(&summary)
+        .map_err(|e| JsValue::from_str(&format!("failed to serialize result: {e}")))
+}
+
+/// Check a loading against a weight & balance envelope from JSON:
+/// `items_json` is a JSON array of `{"weight_lb":.., "arm_in":..}`
+/// (empty weight, pax, fuel, baggage — one entry per station),
+/// `envelope_json` is a JSON `WeightBalanceEnvelope`. Returns a JSON
+/// `WeightBalanceResult`, or throws a JS exception on malformed input.
+#[wasm_bindgen]
+pub fn check_weight_balance_json(items_json: &str, envelope_json: &str) -> Result<String, JsValue> {
+    let items: Vec<WeightAtStation> = serde_json::from_str(items_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid items JSON: {e}")))?;
+    let envelope: WeightBalanceEnvelope = serde_json::from_str(envelope_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid envelope JSON: {e}")))?;
+    let result = check_weight_balance(&items, &envelope);
+    serde_json::to_string(&result)
         .map_err(|e| JsValue::from_str(&format!("failed to serialize result: {e}")))
 }

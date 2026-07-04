@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportProcedures, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
+import { FlightPlanning } from "./planning/FlightPlanning";
 import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, Taf } from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
@@ -11,6 +12,7 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedAirport, setSelectedAirport] = useState<Airport | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
+  const [view, setView] = useState<"map" | "plan">("map");
 
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
@@ -45,23 +47,37 @@ export default function App() {
     <div className="app-layout">
       <div className="sync-status">
         Cycle {cycleId} · live from ff-api at {API_BASE_URL}
+        <span className="view-toggle">
+          <button className={view === "map" ? "selected" : ""} onClick={() => setView("map")}>
+            Map
+          </button>
+          <button className={view === "plan" ? "selected" : ""} onClick={() => setView("plan")}>
+            Flight Plan
+          </button>
+        </span>
       </div>
-      <MapView
-        selectedAirport={selectedAirport}
-        onSelectAirport={selectAirport}
-        selectedProcedureId={selectedProcedureId}
-      />
-      <div className="layout">
-        <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
-        {selectedAirport && (
-          <AirportPanel
-            icao={selectedAirport.icao}
+      {view === "map" ? (
+        <>
+          <MapView
+            selectedAirport={selectedAirport}
+            onSelectAirport={selectAirport}
             selectedProcedureId={selectedProcedureId}
-            onSelectProcedure={setSelectedProcedureId}
           />
-        )}
-        {selectedProcedureId && <ProcedurePanel procedureId={selectedProcedureId} />}
-      </div>
+          <div className="layout">
+            <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
+            {selectedAirport && (
+              <AirportPanel
+                icao={selectedAirport.icao}
+                selectedProcedureId={selectedProcedureId}
+                onSelectProcedure={setSelectedProcedureId}
+              />
+            )}
+            {selectedProcedureId && <ProcedurePanel procedureId={selectedProcedureId} />}
+          </div>
+        </>
+      ) : (
+        <FlightPlanning />
+      )}
     </div>
   );
 }
