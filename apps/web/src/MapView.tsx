@@ -187,18 +187,46 @@ function runwaysGeoJson(runways: Runway[]): GeoJSON.FeatureCollection {
 /** One line per transition — legs from different transitions (enroute vs.
  * approach vs. missed) aren't a continuous path, so they're never joined.
  * Fix coordinates come pre-resolved in the /data/procedures/:id response. */
+/** Splits each transition's path at its runway-threshold leg (the
+ * resolved "RW<ident>" pseudo-fix — see ff-api's procedure_detail) into
+ * an "approach" segment (solid) and, if anything follows the runway fix,
+ * a "missed" segment (dashed). CIFP doesn't reliably put missed-approach
+ * legs in their own transition: the 'Z' route type ff-cifp's parser
+ * recognizes for that is real per the ARINC 424 spec, but confirmed
+ * against a real nationwide CIFP cycle that it never actually appears —
+ * missed-approach legs land in the same "common" transition as the
+ * final approach course, with no field the backend currently parses to
+ * mark the boundary. The runway leg is the one boundary that's always
+ * there and always resolvable, so it's what this splits on instead. */
 function procedureGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const t of detail.transitions) {
-    const coords = t.legs
-      .map((leg) => (leg.fix_ident ? detail.fixes[leg.fix_ident] : undefined))
-      .filter((fix): fix is { lat: number; lon: number } => fix !== undefined)
-      .map((fix) => [fix.lon, fix.lat]);
-    if (coords.length >= 2) {
+    const points: { lat: number; lon: number }[] = [];
+    let runwayIndex: number | null = null;
+    for (const leg of t.legs) {
+      if (!leg.fix_ident) continue;
+      const fix = detail.fixes[leg.fix_ident];
+      if (!fix) continue;
+      points.push(fix);
+      if (leg.fix_ident.startsWith("RW")) {
+        runwayIndex = points.length - 1;
+      }
+    }
+    const toCoords = (pts: typeof points) => pts.map((p) => [p.lon, p.lat]);
+    const approachPts = runwayIndex === null ? points : points.slice(0, runwayIndex + 1);
+    const missedPts = runwayIndex === null ? [] : points.slice(runwayIndex);
+    if (approachPts.length >= 2) {
       features.push({
         type: "Feature",
-        geometry: { type: "LineString", coordinates: coords },
-        properties: { transitionId: t.id },
+        geometry: { type: "LineString", coordinates: toCoords(approachPts) },
+        properties: { transitionId: t.id, segment: "approach" },
+      });
+    }
+    if (missedPts.length >= 2) {
+      features.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: toCoords(missedPts) },
+        properties: { transitionId: t.id, segment: "missed" },
       });
     }
   }
@@ -415,11 +443,24 @@ export function MapView({
         paint: { "line-color": "#ffb020", "line-width": 3 },
       });
 
+      // Two layers, not one data-driven one: MapLibre's line-dasharray
+      // isn't a supported data-driven (per-feature) property, so solid
+      // "approach" segments and dashed "missed" segments (see
+      // procedureGeoJson) need their own layers, filtered by the
+      // `segment` property, sharing one source.
       map.addSource(PROCEDURE_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
       map.addLayer({
         id: "procedure-line",
         type: "line",
         source: PROCEDURE_SOURCE,
+        filter: ["!=", ["get", "segment"], "missed"],
+        paint: { "line-color": "#e254e0", "line-width": 4 },
+      });
+      map.addLayer({
+        id: "procedure-line-missed",
+        type: "line",
+        source: PROCEDURE_SOURCE,
+        filter: ["==", ["get", "segment"], "missed"],
         paint: { "line-color": "#e254e0", "line-width": 4, "line-dasharray": [2, 1.5] },
       });
 
