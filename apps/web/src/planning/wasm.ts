@@ -5,7 +5,7 @@
 // balance math (DESIGN.md §5) as JSON-in/JSON-out functions; the types
 // below mirror the Rust structs on the other side of that boundary
 // one-to-one (see crates/ff-planning/src/route.rs, weight_balance.rs).
-import init, { check_weight_balance_json, plan_route_json } from "../wasm/ff_wasm.js";
+import init, { check_weight_balance_json, distance_nm, plan_route_json } from "../wasm/ff_wasm.js";
 
 let ready: Promise<unknown> | null = null;
 
@@ -29,6 +29,22 @@ export interface AircraftProfile {
   max_gross_weight_lb: number | null;
   forward_cg_limit_in: number | null;
   aft_cg_limit_in: number | null;
+  /** Client-side only — picks which winds-aloft altitude level applies
+   * per leg (see planning/windsAloft.ts); ff-planning's Rust
+   * AircraftProfile has no such field and silently ignores it (no
+   * `#[serde(deny_unknown_fields)]`), since it never affects the
+   * wind-triangle math itself, only which real wind gets fed into it. */
+  cruise_altitude_ft: number | null;
+}
+
+export interface PlanningWind {
+  direction_true_deg: number;
+  speed_kt: number;
+}
+
+export async function distanceNm(lat1: number, lon1: number, lat2: number, lon2: number): Promise<number> {
+  await ensureReady();
+  return distance_nm(lat1, lon1, lat2, lon2);
 }
 
 export interface RouteLegPlan {
@@ -47,9 +63,17 @@ export interface RoutePlanSummary {
   total_fuel_gal: number;
 }
 
-export async function planRoute(points: RoutePoint[], profile: AircraftProfile): Promise<RoutePlanSummary> {
+/** `winds` is one entry per leg (`points.length - 1`), `null` where no
+ * wind data applies (falls back to no-wind for that leg) — see
+ * planning/windsAloft.ts for how these get resolved from a real
+ * winds-aloft bulletin. */
+export async function planRoute(
+  points: RoutePoint[],
+  profile: AircraftProfile,
+  winds: (PlanningWind | null)[],
+): Promise<RoutePlanSummary> {
   await ensureReady();
-  const json = plan_route_json(JSON.stringify(points), JSON.stringify(profile));
+  const json = plan_route_json(JSON.stringify(points), JSON.stringify(profile), JSON.stringify(winds));
   return JSON.parse(json) as RoutePlanSummary;
 }
 

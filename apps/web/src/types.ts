@@ -327,6 +327,13 @@ export interface WindsAloftLevel {
 export interface StationWindsAloft {
   station_id: string;
   levels: WindsAloftLevel[];
+  /** Best-effort, resolved server-side against the current cycle bundle
+   * (airport/navaid/waypoint ident match) — `null` if nothing matched
+   * or no cycle is published yet. See planning/windsAloft.ts, the only
+   * consumer that needs a station's location rather than just its
+   * reported winds. */
+  lat: number | null;
+  lon: number | null;
 }
 
 export interface WindsAloftBulletin {

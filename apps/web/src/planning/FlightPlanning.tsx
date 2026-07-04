@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { fetchAirwayDetail, fetchProcedureDetail, searchAirports, searchIdents } from "../data";
+import { fetchWindsAloft } from "../weather";
 import { buildResolvedProcedure, fetchProcedureOptions, transitionOptions } from "./procedureLookup";
+import { windsForRoute } from "./windsAloft";
 import type {
   Airport,
   IdentSearchRow,
@@ -11,11 +13,13 @@ import type {
   RouteState,
   RouteToken,
   RouteWaypoint,
+  WindsAloftBulletin,
 } from "../types";
 import {
   checkWeightBalance,
   planRoute,
   type AircraftProfile,
+  type PlanningWind,
   type RoutePlanSummary,
   type WeightAtStation,
   type WeightBalanceResult,
@@ -23,7 +27,8 @@ import {
 
 /** A default profile shaped like a real Cessna 172 (same numbers used in
  * ff-planning's own tests) so the nav log/W&B sections have something
- * sensible to show before the user has typed anything in. */
+ * sensible to show before the user has typed anything in. No cruise
+ * altitude by default — wind correction only kicks in once one's set. */
 const DEFAULT_PROFILE: AircraftProfile = {
   name: "Cessna 172",
   cruise_tas_kt: 110,
@@ -31,7 +36,13 @@ const DEFAULT_PROFILE: AircraftProfile = {
   max_gross_weight_lb: 2450,
   forward_cg_limit_in: 35,
   aft_cg_limit_in: 47.3,
+  cruise_altitude_ft: null,
 };
+
+function formatWind(wind: PlanningWind | null): string {
+  if (!wind) return "—";
+  return `${wind.direction_true_deg.toFixed(0)}°/${wind.speed_kt.toFixed(0)}`;
+}
 
 interface WeightRow {
   label: string;
@@ -80,31 +91,50 @@ export function FlightPlanning({
   const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
   const [navLog, setNavLog] = useState<RoutePlanSummary | null>(null);
   const [navLogError, setNavLogError] = useState<string | null>(null);
+  const [legWinds, setLegWinds] = useState<(PlanningWind | null)[]>([]);
+  const [windsBulletin, setWindsBulletin] = useState<WindsAloftBulletin | null>(null);
+
+  // Fetched once — same "low" (3,000-39,000ft) product MapView already
+  // uses for its own overlay, now also the source for nav-log wind
+  // correction (see windsAloft.ts). A fetch failure just means no wind
+  // correction is available yet; it doesn't block the rest of planning.
+  useEffect(() => {
+    fetchWindsAloft("low").then(setWindsBulletin).catch(() => setWindsBulletin(null));
+  }, []);
 
   useEffect(() => {
     if (points.length < 2) {
       setNavLog(null);
       setNavLogError(null);
+      setLegWinds([]);
       return;
     }
     let cancelled = false;
-    planRoute(
-      points.map((p) => ({ lat: p.lat, lon: p.lon })),
-      profile,
-    )
-      .then((summary) => {
+    (async () => {
+      const winds =
+        profile.cruise_altitude_ft !== null && windsBulletin
+          ? await windsForRoute(points, profile.cruise_altitude_ft, windsBulletin)
+          : points.map(() => null).slice(1);
+      if (cancelled) return;
+      setLegWinds(winds);
+      try {
+        const summary = await planRoute(
+          points.map((p) => ({ lat: p.lat, lon: p.lon })),
+          profile,
+          winds,
+        );
         if (!cancelled) {
           setNavLog(summary);
           setNavLogError(null);
         }
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!cancelled) setNavLogError(err instanceof Error ? err.message : String(err));
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [points, profile]);
+  }, [points, profile, windsBulletin]);
 
   const hasWbEnvelope =
     profile.max_gross_weight_lb !== null &&
@@ -133,6 +163,7 @@ export function FlightPlanning({
                   <th>Leg</th>
                   <th>Dist (nm)</th>
                   <th>Course</th>
+                  <th>Wind</th>
                   <th>Heading</th>
                   <th>GS (kt)</th>
                   <th>ETE</th>
@@ -147,6 +178,7 @@ export function FlightPlanning({
                     </td>
                     <td>{leg.distance_nm.toFixed(1)}</td>
                     <td>{leg.true_course_deg.toFixed(0)}°</td>
+                    <td>{formatWind(legWinds[i] ?? null)}</td>
                     <td>{leg.true_heading_deg.toFixed(0)}°</td>
                     <td>{leg.ground_speed_kt.toFixed(0)}</td>
                     <td>{formatHours(leg.ete_hours)}</td>
@@ -165,6 +197,7 @@ export function FlightPlanning({
                   <td />
                   <td />
                   <td />
+                  <td />
                   <td>
                     <strong>{formatHours(navLog.total_ete_hours)}</strong>
                   </td>
@@ -174,7 +207,14 @@ export function FlightPlanning({
                 </tr>
               </tfoot>
             </table>
-            <p className="hint">No wind correction — headings equal course, groundspeed equals TAS (DESIGN.md §9.3).</p>
+            {profile.cruise_altitude_ft === null ? (
+              <p className="hint">No wind correction — headings equal course, groundspeed equals TAS (DESIGN.md §9.3).</p>
+            ) : (
+              <p className="hint">
+                Wind correction from the nearest winds-aloft station/altitude to each leg — a rough estimate, not a
+                certified forecast tool (DESIGN.md §9.3).
+              </p>
+            )}
           </>
         )}
       </div>
@@ -225,6 +265,11 @@ function AircraftProfileForm({
         Fuel burn (gal/hr)
         <input type="number" {...numberField("fuel_burn_gph")} />
       </label>
+      <label>
+        Cruise altitude (ft)
+        <input type="number" {...numberField("cruise_altitude_ft")} />
+      </label>
+      <p className="hint">Set an altitude to correct the nav log for real winds aloft (nearest station/level).</p>
       <h3>Weight &amp; Balance envelope (optional)</h3>
       <p className="hint">Fill these in to enable the W&amp;B check below.</p>
       <label>

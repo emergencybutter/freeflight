@@ -61,9 +61,10 @@ What you get with everything running:
   in between through a unified search box (an airway inserted between
   two of its fixes — `FIX1 V123 FIX2` — expands to the fixes between
   them, in that direction). Set an aircraft profile and get an
-  auto-computed nav log (no wind correction yet); fill in the profile's
-  weight & CG limits to also get a basic single-envelope weight &
-  balance check.
+  auto-computed nav log — set a cruise altitude too and each leg picks
+  up real wind correction from the nearest winds-aloft station/level;
+  fill in the profile's weight & CG limits to also get a basic
+  single-envelope weight & balance check.
   The route draws on the map in
   cyan with per-fix markers.
 

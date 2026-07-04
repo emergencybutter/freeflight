@@ -214,7 +214,7 @@ Implemented today:
 | `GET /weather/gairmet` | both clients | `Vec<GAirmet>` (all current CONUS) |
 | `GET /weather/sigmet` | both clients | `Vec<Sigmet>` |
 | `GET /weather/isigmet` | both clients | `Vec<IntlSigmet>` |
-| `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin` |
+| `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin`, each station's ident additionally resolved to a `lat`/`lon` against the current cycle bundle (best-effort — the raw NWS product only carries idents; used for the route builder's nearest-station wind lookup, §9.3) |
 | `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
 | `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256). `pmtiles_url`/`sha256` are always `None`: a nationwide cycle publishes one PMTiles file per sectional, which this single-chart shape can't represent (see `/data/charts` for the real list) — revisit once Android needs multi-chart offline sync |
 | `GET /bundles/:id/cycle.sqlite` | Android sync | raw SQLite bytes (static file service, Range-capable) |
@@ -523,8 +523,9 @@ Consequences:
   map in cyan with per-fix markers.
 - Per-leg: great-circle/rhumb distance & course from `ff-planning`, ETE
   and fuel burn from a user-defined aircraft profile (cruise TAS, fuel
-  burn GPH, optional simple winds-aloft correction using the fetched
-  winds data).
+  burn GPH, optional simple winds-aloft correction — implemented on web:
+  set a cruise altitude and each leg picks the nearest real station/level
+  from the fetched winds-aloft bulletin, see `windsAloft.ts`).
 - Output: a nav log table and a text briefing the pilot can screenshot or
   print. No filing integration in Phase 1 (see §1.2).
 - Weight & balance is **basic** in Phase 1: a single-envelope check
@@ -683,11 +684,15 @@ document survive insertions/removals.
   runs client-side via `ff-wasm` (previously built but not wired into
   the web app — see `apps/web/README.md`), behind a route
   builder/nav-log/W&B UI. Session-only (no persistence — the web client
-  still has no local database, §8); no winds-aloft correction yet
-  (`ff-planning::plan_route` already supports it, just not called with
-  wind data from this UI). Android's equivalent (`ff-uniffi` bindings,
-  persisted via the `aircraft_profile`/`route_plan`/`route_leg` tables)
-  is still unstarted.
+  still has no local database, §8). Winds-aloft correction is wired in:
+  setting a cruise altitude picks the nearest reporting station/level to
+  each leg from the same NOAA bulletin the map already fetches (`ff-api`
+  now resolves each station's ident to a coordinate against the current
+  cycle bundle — the raw NWS product only carries idents — so the web
+  client can do a nearest-station lookup at all; see
+  `apps/web/src/planning/windsAloft.ts`). Android's equivalent
+  (`ff-uniffi` bindings, persisted via the
+  `aircraft_profile`/`route_plan`/`route_leg` tables) is still unstarted.
 - **Phase 3 — Post-flight analysis**: GPS track recording (Android),
   GPX import (web), phase-of-flight detection, flight log export.
 - **Phase 4 — Accounts & sync** (optional): let a pilot's route plans,
