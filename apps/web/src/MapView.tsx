@@ -777,9 +777,20 @@ export function MapView({
         paint: { "text-color": "#f2e6c9", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
       });
 
-      // Chart imagery renders as the base layer, under the airport/runway/
-      // procedure overlays above -- inserted before "airports-circle"
-      // (already added) rather than appended, so it doesn't cover them.
+      // Chart imagery renders as the base layer, under the airspace/
+      // weather/airport overlays added below -- inserted before
+      // "airspace-fill" specifically, not just "airports-circle": this
+      // whole fetch runs async (fetchCharts() is a network round trip),
+      // so its .then() always fires as a microtask *after* the
+      // synchronous airspace/G-AIRMET/SIGMET layer-adding code further
+      // down in this same "load" handler has already run. addLayer(...,
+      // beforeId) inserts immediately before that anchor, so anchoring
+      // to "airports-circle" (added once, at the very top of the stack)
+      // would put charts *above* those already-inserted overlays —
+      // exactly the bug this caused (airspace polygons visually
+      // disappearing once sectionals painted in). Anchoring to
+      // "airspace-fill" instead keeps charts pinned below the whole
+      // overlay stack regardless of how the async timing falls out.
       // The catalog comes from ff-api (tile_url is an ff-api path like
       // /bundles/<cycle>/chart.pmtiles, fetched by the pmtiles protocol
       // via HTTP range requests); fetched async, layers added on arrival.
@@ -806,7 +817,7 @@ export function MapView({
                 source: sourceId,
                 layout: { visibility: chart.kind === "Sectional" ? "visible" : "none" },
               },
-              "airports-circle",
+              "airspace-fill",
             );
             const layerIds = layerIdsByKind.get(chart.kind) ?? [];
             layerIds.push(sourceId);
@@ -817,11 +828,12 @@ export function MapView({
         })
         .catch((err: unknown) => console.warn("couldn't load the chart catalog for the map", err));
 
-      // Airspace boundaries render above chart imagery but below weather
-      // hazards/airports, same insertion point (before "airports-circle")
-      // as the chart loop above and the G-AIRMET/SIGMET sources below.
-      // Filled lightly so overlapping shelves (a busy Class B/C stacks
-      // several) are still readable rather than opaque.
+      // Airspace boundaries render above chart imagery (which anchors
+      // itself below this layer specifically — see the chart loop above)
+      // but below weather hazards/airports, same insertion point (before
+      // "airports-circle") as the G-AIRMET/SIGMET sources below. Filled
+      // lightly so overlapping shelves (a busy Class B/C stacks several)
+      // are still readable rather than opaque.
       const airspaceColorExpr: maplibregl.ExpressionSpecification = [
         "match",
         ["get", "class"],
