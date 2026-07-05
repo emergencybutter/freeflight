@@ -98,6 +98,7 @@ fn main() {
                 cycle_id: "demo".to_string(),
                 name: "Demo Sectional Excerpt".to_string(),
                 tile_url,
+                kind: ff_charts::ChartKind::Sectional,
             })
         }
         (None, None) => None,

@@ -56,6 +56,7 @@ pub struct ChartSource {
     pub cycle_id: String,
     pub name: String,
     pub tile_url: String,
+    pub kind: ChartKind,
 }
 
 /// Everything needed to build one cycle bundle: a CIFP file, optionally a
@@ -388,14 +389,14 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
 pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleError> {
     let geotiff = GeoTiffSource {
         path: chart.geotiff_path.clone(),
-        kind: ChartKind::Sectional,
+        kind: chart.kind,
         cycle_id: chart.cycle_id.clone(),
     };
     let bbox = geotiff_to_pmtiles(&geotiff, &chart.pmtiles_out)?;
     let entry = ChartCatalogEntry {
         id: chart.id.clone(),
         name: chart.name.clone(),
-        kind: ChartKind::Sectional,
+        kind: chart.kind,
         cycle_id: chart.cycle_id.clone(),
         bbox,
         tile_url: chart.tile_url.clone(),

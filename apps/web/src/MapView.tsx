@@ -31,6 +31,15 @@ const PLANNED_ROUTE_FIXES_SOURCE = "planned-route-fixes";
 // see MapView's winds-aloft fetch for why this isn't user-selectable yet.
 const WINDS_ALOFT_ALTITUDE_FT = 9000;
 
+/** Friendly labels for `chart_catalog.kind` values (see `chart_kind_str`
+ * in services/ff-etl/src/bundle.rs) — falls back to the raw kind string
+ * for anything not listed here. */
+const CHART_KIND_LABELS: Record<string, string> = {
+  Sectional: "Sectional",
+  IfrEnrouteLow: "IFR Low",
+  IfrEnrouteHigh: "IFR High",
+};
+
 const FLIGHT_CATEGORY_COLORS: Record<string, string> = {
   VFR: "#3fa64a",
   MVFR: "#1f6fd1",
@@ -609,6 +618,15 @@ export function MapView({
   // has unmounted this component and removed it.
   const unmountedRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
+  // Which chart-catalog `kind`s exist (for rendering toggle buttons) and
+  // which layer ids belong to each (so a toggle click can flip every
+  // layer of that kind) — populated once the chart-loading effect below
+  // gets a response, read imperatively from the click handler rather
+  // than through React state since it never needs to trigger a re-render
+  // itself.
+  const chartLayerIdsByKindRef = useRef<Map<string, string[]>>(new Map());
+  const [chartKinds, setChartKinds] = useState<string[]>([]);
+  const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(new Set(["Sectional"]));
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -759,8 +777,15 @@ export function MapView({
       // The catalog comes from ff-api (tile_url is an ff-api path like
       // /bundles/<cycle>/chart.pmtiles, fetched by the pmtiles protocol
       // via HTTP range requests); fetched async, layers added on arrival.
+      // Grouped by `kind` (Sectional/IfrEnrouteLow/IfrEnrouteHigh/...) so
+      // the toggle control below can show/hide a whole chart series at
+      // once — only Sectional starts visible, matching pre-IFR-chart
+      // behavior for existing users; the others are opt-in since
+      // stacking every chart series at full opacity by default would
+      // just be visual noise.
       void fetchCharts()
         .then((charts) => {
+          const layerIdsByKind = new Map<string, string[]>();
           for (const chart of charts) {
             const sourceId = `chart-${chart.id}`;
             map.addSource(sourceId, {
@@ -768,8 +793,21 @@ export function MapView({
               url: `pmtiles://${API_BASE_URL}${chart.tile_url}`,
               tileSize: 256,
             });
-            map.addLayer({ id: sourceId, type: "raster", source: sourceId }, "airports-circle");
+            map.addLayer(
+              {
+                id: sourceId,
+                type: "raster",
+                source: sourceId,
+                layout: { visibility: chart.kind === "Sectional" ? "visible" : "none" },
+              },
+              "airports-circle",
+            );
+            const layerIds = layerIdsByKind.get(chart.kind) ?? [];
+            layerIds.push(sourceId);
+            layerIdsByKind.set(chart.kind, layerIds);
           }
+          chartLayerIdsByKindRef.current = layerIdsByKind;
+          setChartKinds([...layerIdsByKind.keys()].sort());
         })
         .catch((err: unknown) => console.warn("couldn't load the chart catalog for the map", err));
 
@@ -1044,5 +1082,37 @@ export function MapView({
     };
   }, [selectedProcedureId, loaded]);
 
-  return <div ref={containerRef} className="map-view" />;
+  const toggleChartKind = (kind: string) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setVisibleChartKinds((current) => {
+      const next = new Set(current);
+      const nowVisible = !next.has(kind);
+      if (nowVisible) next.add(kind);
+      else next.delete(kind);
+      for (const layerId of chartLayerIdsByKindRef.current.get(kind) ?? []) {
+        map.setLayoutProperty(layerId, "visibility", nowVisible ? "visible" : "none");
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="map-view">
+      <div ref={containerRef} className="map-view-canvas" />
+      {chartKinds.length > 1 && (
+        <div className="chart-kind-toggle">
+          {chartKinds.map((kind) => (
+            <button
+              key={kind}
+              className={visibleChartKinds.has(kind) ? "selected" : ""}
+              onClick={() => toggleChartKind(kind)}
+            >
+              {CHART_KIND_LABELS[kind] ?? kind}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

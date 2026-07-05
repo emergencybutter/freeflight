@@ -59,13 +59,47 @@ fn run_tool_capturing(
     Ok(output.stdout)
 }
 
+/// `true` if `source_tif`'s first band is palette-indexed (`gdalinfo`'s
+/// `colorInterpretation` reports `"Palette"`), as opposed to already
+/// being plain RGB. Confirmed against two real chart families this was
+/// built against: FAA sectionals are palette-indexed; IFR Enroute
+/// Low/High panels are already 3-band RGB. This distinction matters
+/// because `gdal_translate -expand rgb` isn't a harmless no-op on an
+/// already-RGB source the way its name might suggest — it errors
+/// (`"band 1 has no color table"`), confirmed live while validating the
+/// IFR enroute pipeline against a real downloaded panel.
+fn is_palette_indexed(source_tif: &Path) -> Result<bool, ChartPrepError> {
+    let stdout = run_tool_capturing(
+        "gdalinfo",
+        &["-json".as_ref(), "-nomd".as_ref(), source_tif.as_os_str()],
+    )?;
+    let info: serde_json::Value =
+        serde_json::from_slice(&stdout).map_err(|source| ChartPrepError::BadJson {
+            tool: "gdalinfo",
+            source,
+        })?;
+    let bands = info["bands"]
+        .as_array()
+        .expect("gdalinfo -json always includes a bands array");
+    Ok(bands
+        .first()
+        .and_then(|b| b["colorInterpretation"].as_str())
+        == Some("Palette"))
+}
+
 /// Expand `source_tif`'s indexed palette to RGB, writing the result into
-/// `workdir`. Returns the RGB GeoTIFF's path, at `source_tif`'s full
-/// native extent (nationwide chart coverage tiles each sectional whole,
-/// rather than cropping to a region — see pipeline.rs). Requires
-/// `gdal_translate` on `PATH` (same GDAL CLI dependency as
-/// `ff-charts::geotiff_to_pmtiles`, which runs downstream of this).
+/// `workdir` — a no-op that returns `source_tif` unchanged if it's
+/// already RGB (see [`is_palette_indexed`]). Returns the RGB GeoTIFF's
+/// path, at `source_tif`'s full native extent (nationwide chart coverage
+/// tiles each chart whole, rather than cropping to a region — see
+/// pipeline.rs). Requires `gdal_translate`/`gdalinfo` on `PATH` (same
+/// GDAL CLI dependency as `ff-charts::geotiff_to_pmtiles`, which runs
+/// downstream of this).
 pub fn expand_palette_to_rgb(source_tif: &Path, workdir: &Path) -> Result<PathBuf, ChartPrepError> {
+    if !is_palette_indexed(source_tif)? {
+        return Ok(source_tif.to_path_buf());
+    }
+
     let expanded_rgb = workdir.join("chart_rgb.tif");
 
     run_tool(

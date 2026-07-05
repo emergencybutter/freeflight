@@ -13,6 +13,8 @@ const NASR_URL_TEMPLATE: &str =
     "https://nfdc.faa.gov/webContent/28DaySub/28DaySubscription_Effective_";
 const VFR_CHARTS_PAGE_URL: &str =
     "https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/";
+const IFR_CHARTS_PAGE_URL: &str =
+    "https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/ifr/";
 
 #[derive(Debug, Error)]
 pub enum FetchError {
@@ -346,6 +348,160 @@ pub fn fetch_sectional_chart(
     Ok(results)
 }
 
+/// Discovered once per pipeline run, like [`ChartCycle`] — but unlike VFR
+/// sectionals (whose names live on a *separate* directory-listing page,
+/// requiring a second live request per candidate date), the FAA IFR
+/// digital-products page embeds direct panel-zip links inline, so both
+/// the candidate dates and the exact panel names come from one fetch.
+pub struct IfrEnrouteCycle {
+    pub dates: Vec<String>,
+    /// `"enr_l01"`..`"enr_l36"` as of writing — CONUS Low Altitude Enroute
+    /// panels. Caribbean/oceanic route charts aren't included; this
+    /// covers the CONUS low/high panels only.
+    pub low_panel_names: Vec<String>,
+    pub high_panel_names: Vec<String>,
+}
+
+/// Scans the FAA IFR charts page for `enroute/MM-DD-YYYY/` chart-cycle
+/// directory URLs — same shape/reasoning as [`chart_cycle_dates`], just a
+/// different literal prefix (`enroute/` vs `visual/`).
+fn enroute_cycle_dates(page_html: &str) -> Vec<String> {
+    let mut dates = Vec::new();
+    let mut rest = page_html;
+    while let Some(pos) = rest.find("enroute/") {
+        rest = &rest[pos + "enroute/".len()..];
+        if rest.len() >= 10 {
+            let candidate = &rest[..10];
+            let bytes = candidate.as_bytes();
+            let shaped = bytes[2] == b'-'
+                && bytes[5] == b'-'
+                && bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, b)| i == 2 || i == 5 || b.is_ascii_digit());
+            if shaped && !dates.contains(&candidate.to_string()) {
+                dates.push(candidate.to_string());
+            }
+        }
+    }
+    dates.sort_by_key(|d| std::cmp::Reverse(format!("{}-{}", &d[6..10], &d[0..5])));
+    dates
+}
+
+/// Scans the IFR charts page for `{prefix}NN.zip` panel names (e.g.
+/// `prefix="enr_l"` → `"enr_l01"`..`"enr_l36"`) — CONUS Low/High panels
+/// use these prefixes exclusively for their GEO-TIFF product (the PDF
+/// product lives under an unrelated `delusN`/`dehusN` naming scheme, so
+/// there's no GEO-TIFF/PDF disambiguation needed here, just the prefix).
+/// Each name appears once per cycle-date column on the real page, so
+/// this dedupes like [`sectional_names_from_listing`].
+fn ifr_panel_names_from_page(page_html: &str, prefix: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = page_html;
+    while let Some(pos) = rest.find(prefix) {
+        let candidate_start = &rest[pos..];
+        if let Some(end) = candidate_start.find(".zip") {
+            let candidate = &candidate_start[..end];
+            let digits = &candidate[prefix.len()..];
+            if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                names.push(candidate.to_string());
+            }
+        }
+        rest = &rest[pos + prefix.len()..];
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Discovers the current IFR enroute chart cycle's candidate dates and
+/// every CONUS Low/High Altitude panel name published under it — see
+/// [`IfrEnrouteCycle`].
+pub fn discover_ifr_enroute_cycle() -> Result<IfrEnrouteCycle, FetchError> {
+    let client = http_client();
+    let page = client
+        .get(IFR_CHARTS_PAGE_URL)
+        .send()?
+        .error_for_status()?
+        .text()?;
+    let dates = enroute_cycle_dates(&page);
+    if dates.is_empty() {
+        return Err(FetchError::NoChartCycleFound);
+    }
+    let low_panel_names = ifr_panel_names_from_page(&page, "enr_l");
+    let high_panel_names = ifr_panel_names_from_page(&page, "enr_h");
+    if low_panel_names.is_empty() && high_panel_names.is_empty() {
+        return Err(FetchError::NoChartCycleFound);
+    }
+    Ok(IfrEnrouteCycle {
+        dates,
+        low_panel_names,
+        high_panel_names,
+    })
+}
+
+/// Downloads the named IFR enroute panel (e.g. `"enr_l01"`) for whichever
+/// of `cycle`'s candidate dates (newest first) actually has it, and
+/// extracts every `.tif` inside — mirrors [`fetch_sectional_chart`]'s
+/// multi-tif robustness even though every panel sampled while building
+/// this (`enr_l01`, `enr_h01`) had exactly one; sectionals' own multi-tif
+/// surprise (Western Aleutian Islands East/West) was exactly this kind
+/// of untested assumption, so the same safety margin applies here.
+pub fn fetch_ifr_enroute_panel(
+    workdir: &Path,
+    panel_name: &str,
+    cycle: &IfrEnrouteCycle,
+) -> Result<Vec<SectionalTif>, FetchError> {
+    let client = http_client();
+
+    let mut zip_bytes = None;
+    for date in &cycle.dates {
+        let url = format!("https://aeronav.faa.gov/enroute/{date}/{panel_name}.zip");
+        let resp = client.get(&url).send()?;
+        if resp.status().is_success() {
+            tracing::info!(chart_cycle = %date, panel = %panel_name, "downloading IFR enroute chart panel");
+            zip_bytes = Some(resp.bytes()?);
+            break;
+        }
+        tracing::warn!(chart_cycle = %date, status = %resp.status(), "IFR enroute panel not available for this cycle, trying older");
+    }
+    let zip_bytes = zip_bytes.ok_or(FetchError::NoChartCycleFound)?;
+
+    let zip_path = workdir.join(format!("{panel_name}.zip"));
+    std::fs::write(&zip_path, &zip_bytes)?;
+
+    let zip_file = std::fs::File::open(&zip_path)?;
+    let mut archive = zip::ZipArchive::new(zip_file)?;
+    let tif_indices: Vec<usize> = (0..archive.len())
+        .filter(|&i| {
+            archive
+                .by_index(i)
+                .map(|entry| entry.name().ends_with(".tif"))
+                .unwrap_or(false)
+        })
+        .collect();
+    if tif_indices.is_empty() {
+        return Err(FetchError::NoChartTifFound);
+    }
+
+    let mut results = Vec::with_capacity(tif_indices.len());
+    for (n, index) in tif_indices.into_iter().enumerate() {
+        let mut entry = archive.by_index(index)?;
+        let label = Path::new(entry.name())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(panel_name)
+            .to_string();
+        let tif_path = workdir.join(format!("{panel_name}_{n}.tif"));
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)?;
+        std::fs::write(&tif_path, &buf)?;
+        results.push(SectionalTif { label, tif_path });
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +572,49 @@ mod tests {
     #[test]
     fn ignores_listing_pages_with_no_sectional_entries() {
         assert!(sectional_names_from_listing("<html><body>empty</body></html>").is_empty());
+    }
+
+    #[test]
+    fn finds_enroute_cycle_dates_newest_first() {
+        // Excerpt shape confirmed against the real FAA IFR digital-products
+        // page: each panel row lists both the current and next cycle dates
+        // in separate columns.
+        let html = r#"
+            <a href="https://aeronav.faa.gov/enroute/05-14-2026/enr_l01.zip">GEO-TIFF</a>
+            <a href="https://aeronav.faa.gov/enroute/07-09-2026/enr_l01.zip">GEO-TIFF</a>
+        "#;
+        assert_eq!(
+            enroute_cycle_dates(html),
+            vec!["07-09-2026".to_string(), "05-14-2026".to_string()]
+        );
+    }
+
+    #[test]
+    fn finds_ifr_panel_names_from_a_real_page_excerpt() {
+        // Excerpt confirmed against a live download of
+        // https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/ifr/ —
+        // each panel appears twice (once per cycle-date column), so this
+        // also exercises the dedup.
+        let html = r#"
+            <tr><td>ELUS1</td><td>May 14 2026<br><cfoutput><a href="https://aeronav.faa.gov/enroute/05-14-2026/enr_l01.zip">GEO-TIFF</a> <small>(Zip)</small></cfoutput><br><cfoutput><a href="https://aeronav.faa.gov/enroute/05-14-2026/delus1.zip">PDF</a> <small>(Zip)</small></cfoutput></td><td>Jul 09 2026<br><cfoutput><a href="https://aeronav.faa.gov/enroute/07-09-2026/enr_l01.zip">GEO-TIFF</a> <small>(Zip)</small></cfoutput><br><cfoutput><a href="https://aeronav.faa.gov/enroute/07-09-2026/delus1.zip">PDF</a> <small>(Zip)</small></cfoutput></td></tr>
+            <tr><td>ELUS2</td><td>May 14 2026<br><cfoutput><a href="https://aeronav.faa.gov/enroute/05-14-2026/enr_l02.zip">GEO-TIFF</a> <small>(Zip)</small></cfoutput></td><td>Jul 09 2026<br><cfoutput><a href="https://aeronav.faa.gov/enroute/07-09-2026/enr_l02.zip">GEO-TIFF</a> <small>(Zip)</small></cfoutput></td></tr>
+            <tr><td>EHUS1</td><td>May 14 2026<br><cfoutput><a href="https://aeronav.faa.gov/enroute/05-14-2026/enr_h01.zip">GEO-TIFF</a> <small>(Zip)</small></cfoutput></td><td>Jul 09 2026<br><cfoutput><a href="https://aeronav.faa.gov/enroute/07-09-2026/enr_h01.zip">GEO-TIFF</a> <small>(Zip)</small></cfoutput></td></tr>
+        "#;
+        assert_eq!(
+            ifr_panel_names_from_page(html, "enr_l"),
+            vec!["enr_l01".to_string(), "enr_l02".to_string()]
+        );
+        assert_eq!(
+            ifr_panel_names_from_page(html, "enr_h"),
+            vec!["enr_h01".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignores_pdf_links_when_scanning_for_geotiff_panel_names() {
+        // "delus1.zip" (PDF) must not be picked up when scanning for the
+        // "enr_l" GEO-TIFF prefix, and vice versa.
+        let html = r#"<a href="https://aeronav.faa.gov/enroute/07-09-2026/delus1.zip">PDF</a>"#;
+        assert!(ifr_panel_names_from_page(html, "enr_l").is_empty());
     }
 }

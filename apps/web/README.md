@@ -46,10 +46,13 @@ What you get with everything running:
   ident (ICAO/FAA/IATA) or name.
 - The map shows every airport in the current view (bbox-queried per
   pan/zoom, hidden when zoomed out past ~zoom 6), colored by live METAR
-  flight category, plus every current FAA sectional nationwide (tiled
-  by `ff-etl`, served by `ff-api`), runway centerlines, Class B/C/D +
-  Special Use Airspace boundaries, CONUS-wide G-AIRMET/SIGMET polygons,
-  and winds-aloft labels for in-view airports the NWS bulletin covers.
+  flight category, plus every current FAA sectional nationwide and every
+  IFR Enroute Low/High Altitude chart panel (all tiled by `ff-etl`,
+  served by `ff-api` — a small toggle in the map's corner switches chart
+  series; Sectional is on by default, IFR Low/High are opt-in), runway
+  centerlines, Class B/C/D + Special Use Airspace boundaries, CONUS-wide
+  G-AIRMET/SIGMET polygons, and winds-aloft labels for in-view airports
+  the NWS bulletin covers.
 - The detail panel shows live METAR/TAF plus runways, frequencies, and
   SID/STAR/approach procedures with full leg tables. Selecting a
   procedure draws its path on the map — solid for the approach, dashed

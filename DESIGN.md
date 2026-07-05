@@ -97,6 +97,7 @@ consumed today vs. designed-for; update it as sources come online.
 | Coded instrument flight procedures (SIDs, STARs, approaches, airways, navaids, waypoints) | FAA CIFP | ARINC 424 fixed-width records | 28-day AIRAC cycle | Implemented; validated against a real cycle file, airways included (~1.5k airways / ~19k legs nationwide) |
 | Airport/facility directory (runways, frequencies, remarks, services) | FAA NASR subscription | Fixed-width / CSV | 28-day AIRAC cycle | Implemented (runways, surfaces, frequencies); validated against a real subscription |
 | VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Sectionals implemented in the automated `ff-etl` loop, nationwide: discover the current chart cycle → download every FAA sectional (CONUS + Alaska + Hawaii + a few Canadian border charts) → expand palette to RGB → tile each to its own PMTiles archive, one `chart_catalog` row per sectional per cycle. TAC/Helicopter charts unstarted |
+| IFR Enroute Low/High Altitude charts | FAA digital raster charts | GeoTIFF | 56-day cycle | Implemented in the same `ff-etl` loop: FAA publishes these as real georeferenced GeoTIFFs too, at an analogous URL shape (`aeronav.faa.gov/enroute/<date>/enr_l##.zip`/`enr_h##.zip`), discovered from the FAA IFR digital-products page (which embeds the panel links directly — no separate directory-listing fetch needed, unlike sectionals). Unlike sectionals, these charts' *body* is mostly white background (line symbology, not colored terrain fill) and the GeoTIFFs are already 3-band RGB, not palette-indexed — confirmed against two real downloaded panels before building this, which is also why the existing legend-crop heuristic isn't applied to this chart type (it assumes "mostly white = legend," which inverts for these charts and was confirmed live to crop away 95% of a real panel) — panels tile with their legend column left in place instead |
 | IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
 | Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle | Unstarted |
 | Airspace boundaries (Class B/C/D, SUA, MOA) | FAA ArcGIS Hub feature services (`Class_Airspace`, `Special_Use_Airspace` — not the NASR CSV subscription, which only has per-airport Class B/C/D flags, no geometry) | GeoJSON via REST query | continuously current | Implemented in the automated `ff-etl` loop and validated against live data (~1286 Class B/C/D shelves + ~1533 Special Use Airspace areas) |
@@ -485,6 +486,9 @@ Consequences:
   Android, drawn from the local cycle SQLite (converted to GeoJSON on
   load). On web, drawn from GeoJSON `ff-api` returns for the current
   view (§8) — same overlay shape either way, different source.
+  Implemented on web: VFR sectional and IFR Low/High Altitude Enroute
+  chart layers, toggled independently (Sectional visible by default,
+  IFR opt-in) — see §3/§7 for the ingestion side. TAC unstarted.
 - Airport detail view: runways, frequencies, remarks, and a procedure
   list (SIDs/STARs/approaches) pulled from `procedure`/`procedure_leg`.
 - Selecting a procedure draws it on the map (leg-by-leg from
