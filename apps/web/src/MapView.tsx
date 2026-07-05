@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
+import maplibregl, { type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
@@ -27,9 +27,19 @@ const AIRSPACE_SOURCE = "airspace";
 const PLANNED_ROUTE_SOURCE = "planned-route";
 const PLANNED_ROUTE_FIXES_SOURCE = "planned-route-fixes";
 
-// Bay Area demo scope only has stations at this one altitude reliably —
-// see MapView's winds-aloft fetch for why this isn't user-selectable yet.
-const WINDS_ALOFT_ALTITUDE_FT = 9000;
+// The standard levels NOAA's "low" FD product reports per station (see
+// a real response: every CONUS station carries all nine) — used to
+// populate the altitude selector and to snap a preferred altitude (the
+// flight plan's cruise altitude, if set) to the nearest one that
+// actually has data.
+const WINDS_ALOFT_LEVELS_FT = [3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000];
+const DEFAULT_WINDS_ALOFT_ALTITUDE_FT = 9000;
+
+function nearestWindsAloftLevel(altitudeFt: number): number {
+  return WINDS_ALOFT_LEVELS_FT.reduce((closest, level) =>
+    Math.abs(level - altitudeFt) < Math.abs(closest - altitudeFt) ? level : closest,
+  );
+}
 
 /** Friendly labels for `chart_catalog.kind` values (see `chart_kind_str`
  * in services/ff-etl/src/bundle.rs) — falls back to the raw kind string
@@ -79,16 +89,18 @@ const DEFAULT_AIRSPACE_COLOR = "#8a8a8a";
 // (e.g. React StrictMode's double-invoke) is harmless but pointless.
 maplibregl.addProtocol("pmtiles", new PmtilesProtocol().tile);
 
-// No third-party basemap tiles: DESIGN.md's map is built on our own
-// charts.pmtiles (raster sectionals/TACs) as the base layer instead —
-// see the chart_catalog handling below, which renders one when the
-// loaded cycle bundle has one. A plain background keeps the map usable
-// when it doesn't and matches the app's dark theme.
-const BLANK_STYLE: StyleSpecification = {
-  version: 8,
-  sources: {},
-  layers: [{ id: "background", type: "background", paint: { "background-color": "#0b1220" } }],
-};
+// Real chart imagery (raster sectionals/IFR enroute) is still the
+// primary base layer — see the chart_catalog handling below — but it's
+// opt-in per DESIGN.md §9.1 and only exists once a cycle bundle has
+// published one, so relying on it alone left the map solid black
+// whenever charts were toggled off or hadn't loaded yet. OpenFreeMap
+// (openfreemap.org) fills that gap: free vector tiles, no API key, no
+// rate limits (sponsor-funded, actually built for this kind of use
+// rather than a free tier of a paid product). Our own layers get added
+// on top of this style's in the "load" handler below — chart raster
+// tiles are opaque, so they cover it naturally without any extra
+// show/hide logic once loaded and visible.
+const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
 const EMPTY_COLLECTION: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
@@ -184,10 +196,9 @@ function plannedRouteFixesGeoJson(route: RouteWaypoint[]): GeoJSON.FeatureCollec
 
 /** Winds-aloft station idents are 3-letter FAA identifiers (e.g. "SFO"),
  * not ICAO codes — strip the CONUS "K" prefix to match. Only stations
- * the bulletin actually covers get a feature (confirmed live: of this
- * demo's 5 airports, only KSFO/SFO is a winds-aloft reporting point —
- * small GA fields like KPAO generally aren't, and that's correct
- * behavior to show, not a bug to work around). */
+ * the bulletin actually covers get a feature (confirmed live: most
+ * towered/major airports report, small GA fields generally don't, and
+ * that's correct behavior to show, not a bug to work around). */
 function windsAloftGeoJson(bulletin: WindsAloftBulletin, airports: Airport[], altitudeFt: number): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const airport of airports) {
@@ -489,6 +500,7 @@ async function refreshVisibleAirports(
   visibleAirportsRef: { current: Airport[] },
   windsBulletinRef: { current: WindsAloftBulletin | null },
   flightCategoriesRef: { current: Map<string, string> },
+  selectedAltitudeFtRef: { current: number },
   unmountedRef: { current: boolean },
 ) {
   const clear = () => {
@@ -522,7 +534,7 @@ async function refreshVisibleAirports(
   );
   if (windsBulletinRef.current) {
     (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
-      windsAloftGeoJson(windsBulletinRef.current, airports, WINDS_ALOFT_ALTITUDE_FT),
+      windsAloftGeoJson(windsBulletinRef.current, airports, selectedAltitudeFtRef.current),
     );
   }
 
@@ -598,6 +610,7 @@ export function MapView({
   selectedProcedureId,
   visible,
   route,
+  preferredAltitudeFt,
 }: {
   selectedAirport: Airport | null;
   onSelectAirport: (airport: Airport) => void;
@@ -614,11 +627,40 @@ export function MapView({
   /** The Flight Plan view's expanded route points (tokens are expanded
    * in App.tsx — see planning/expandRoute.ts) — drawn in cyan. */
   route: RouteWaypoint[];
+  /** The flight plan's aircraft profile cruise altitude, if one's been
+   * set — snaps the winds-aloft altitude selector to the nearest level
+   * that actually has data the first time it becomes available (see the
+   * effect below), rather than fighting a later manual pick on the map
+   * every time this changes. */
+  preferredAltitudeFt: number | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const visibleAirportsRef = useRef<Airport[]>([]);
   const windsBulletinRef = useRef<WindsAloftBulletin | null>(null);
+  const [selectedAltitudeFt, setSelectedAltitudeFt] = useState(DEFAULT_WINDS_ALOFT_ALTITUDE_FT);
+  // refreshVisibleAirports is called from event handlers (moveend) set
+  // up once on mount, so it needs a ref to read whatever the current
+  // selection is rather than closing over a stale value from mount time.
+  const selectedAltitudeFtRef = useRef(DEFAULT_WINDS_ALOFT_ALTITUDE_FT);
+  // Snaps the altitude selector to the flight plan's cruise altitude
+  // exactly once, the first time it becomes available — after that the
+  // user has full manual control via the dropdown, so setting a cruise
+  // altitude later doesn't yank the map's selection out from under them.
+  const hasSyncedAltitudeRef = useRef(false);
+  useEffect(() => {
+    if (preferredAltitudeFt === null || hasSyncedAltitudeRef.current) return;
+    hasSyncedAltitudeRef.current = true;
+    const nearest = nearestWindsAloftLevel(preferredAltitudeFt);
+    setSelectedAltitudeFt(nearest);
+    selectedAltitudeFtRef.current = nearest;
+    const map = mapRef.current;
+    if (map && windsBulletinRef.current) {
+      (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+        windsAloftGeoJson(windsBulletinRef.current, visibleAirportsRef.current, nearest),
+      );
+    }
+  }, [preferredAltitudeFt]);
   // Accumulates flight categories across every refreshVisibleAirports
   // call (never reset) so a station keeps its last-known color the
   // instant the view changes again, rather than flashing back to the
@@ -651,7 +693,7 @@ export function MapView({
     unmountedRef.current = false;
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: BLANK_STYLE,
+      style: BASEMAP_STYLE_URL,
       center: [-98, 39],
       zoom: 3,
     });
@@ -1011,11 +1053,25 @@ export function MapView({
       // independent so one failing doesn't block the others.
       void loadWeatherOverlays(map, windsBulletinRef, unmountedRef).then(
         () =>
-          void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, flightCategoriesRef, unmountedRef),
+          void refreshVisibleAirports(
+            map,
+            visibleAirportsRef,
+            windsBulletinRef,
+            flightCategoriesRef,
+            selectedAltitudeFtRef,
+            unmountedRef,
+          ),
       );
       void refreshVisibleAirspace(map, unmountedRef);
       map.on("moveend", () => {
-        void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, flightCategoriesRef, unmountedRef);
+        void refreshVisibleAirports(
+          map,
+          visibleAirportsRef,
+          windsBulletinRef,
+          flightCategoriesRef,
+          selectedAltitudeFtRef,
+          unmountedRef,
+        );
         void refreshVisibleAirspace(map, unmountedRef);
       });
 
@@ -1140,22 +1196,46 @@ export function MapView({
     });
   };
 
+  const changeWindsAloftAltitude = (altitudeFt: number) => {
+    setSelectedAltitudeFt(altitudeFt);
+    selectedAltitudeFtRef.current = altitudeFt;
+    const map = mapRef.current;
+    if (map && windsBulletinRef.current) {
+      (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+        windsAloftGeoJson(windsBulletinRef.current, visibleAirportsRef.current, altitudeFt),
+      );
+    }
+  };
+
   return (
     <div className="map-view">
       <div ref={containerRef} className="map-view-canvas" />
-      {chartKinds.length > 1 && (
-        <div className="chart-kind-toggle">
-          {chartKinds.map((kind) => (
-            <button
-              key={kind}
-              className={visibleChartKinds.has(kind) ? "selected" : ""}
-              onClick={() => toggleChartKind(kind)}
-            >
-              {CHART_KIND_LABELS[kind] ?? kind}
-            </button>
+      <div className="chart-kind-toggle">
+        {chartKinds.map((kind) => (
+          <button
+            key={kind}
+            className={visibleChartKinds.has(kind) ? "selected" : ""}
+            onClick={() => toggleChartKind(kind)}
+          >
+            {CHART_KIND_LABELS[kind] ?? kind}
+          </button>
+        ))}
+        {/* Independent of chart-kind loading — winds-aloft is fetched
+            eagerly on mount regardless of the chart catalog, so this
+            shouldn't wait on chartKinds the way the toggle buttons do. */}
+        <select
+          className="winds-aloft-altitude-select"
+          value={selectedAltitudeFt}
+          onChange={(e) => changeWindsAloftAltitude(Number(e.target.value))}
+          aria-label="Winds-aloft altitude"
+        >
+          {WINDS_ALOFT_LEVELS_FT.map((altitudeFt) => (
+            <option key={altitudeFt} value={altitudeFt}>
+              {altitudeFt.toLocaleString()} ft winds
+            </option>
           ))}
-        </div>
-      )}
+        </select>
+      </div>
     </div>
   );
 }

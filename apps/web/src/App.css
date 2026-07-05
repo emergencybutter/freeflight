@@ -51,6 +51,16 @@
   background: rgba(19, 26, 42, 0.9);
 }
 
+.winds-aloft-altitude-select {
+  width: auto;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  background: rgba(19, 26, 42, 0.9);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 260px 1fr 1fr;

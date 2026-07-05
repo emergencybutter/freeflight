@@ -488,7 +488,11 @@ Consequences:
   view (§8) — same overlay shape either way, different source.
   Implemented on web: VFR sectional and IFR Low/High Altitude Enroute
   chart layers, toggled independently (Sectional visible by default,
-  IFR opt-in) — see §3/§7 for the ingestion side. TAC unstarted.
+  IFR opt-in) — see §3/§7 for the ingestion side. TAC unstarted. Web's
+  base layer, under all of this, is an OpenFreeMap vector basemap (free,
+  no API key/rate limits) rather than a blank background, so the map
+  stays usable whenever chart imagery is toggled off or hasn't loaded
+  yet — opaque chart raster tiles cover it naturally once visible.
 - Airport detail view: runways, frequencies, remarks, and a procedure
   list (SIDs/STARs/approaches) pulled from `procedure`/`procedure_leg`.
 - Selecting a procedure draws it on the map (leg-by-leg from

@@ -29,8 +29,11 @@ import {
 /** A default profile shaped like a real Cessna 172 (same numbers used in
  * ff-planning's own tests) so the nav log/W&B sections have something
  * sensible to show before the user has typed anything in. No cruise
- * altitude by default — wind correction only kicks in once one's set. */
-const DEFAULT_PROFILE: AircraftProfile = {
+ * altitude by default — wind correction only kicks in once one's set.
+ * Exported since App.tsx now owns this state (lifted so MapView can
+ * default its own winds-aloft altitude selector to it — see
+ * App.tsx/MapView.tsx). */
+export const DEFAULT_PROFILE: AircraftProfile = {
   name: "Cessna 172",
   cruise_tas_kt: 110,
   fuel_burn_gph: 8.5,
@@ -74,24 +77,29 @@ function formatHours(hours: number): string {
  * not through ff-api — DESIGN.md §5 scopes planning logic to ff-wasm
  * for exactly this reason.
  *
- * Route state and its expansion into flat points are lifted up to
- * App.tsx so MapView can draw the planned route too — see
- * `expandRoute.ts` for the FOO V123 BAR airway semantics and
- * `procedureLookup.ts` for how a chosen SID/STAR resolves. */
+ * Route state and its expansion into flat points, and the aircraft
+ * profile, are lifted up to App.tsx so MapView can draw the planned
+ * route and default its winds-aloft altitude selector to the same
+ * cruise altitude — see `expandRoute.ts` for the FOO V123 BAR airway
+ * semantics and `procedureLookup.ts` for how a chosen SID/STAR
+ * resolves. */
 export function FlightPlanning({
   route,
   onRouteChange,
   points,
   warnings,
   airspaceCrossings,
+  profile,
+  onProfileChange,
 }: {
   route: RouteState;
   onRouteChange: (route: RouteState) => void;
   points: RouteWaypoint[];
   warnings: string[];
   airspaceCrossings: AirspaceVolume[];
+  profile: AircraftProfile;
+  onProfileChange: (profile: AircraftProfile) => void;
 }) {
-  const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
   const [navLog, setNavLog] = useState<RoutePlanSummary | null>(null);
   const [navLogError, setNavLogError] = useState<string | null>(null);
   const [legWinds, setLegWinds] = useState<(PlanningWind | null)[]>([]);
@@ -152,7 +160,7 @@ export function FlightPlanning({
 
   return (
     <div className="planning-layout">
-      <AircraftProfileForm profile={profile} onChange={setProfile} />
+      <AircraftProfileForm profile={profile} onChange={onProfileChange} />
       <div className="flight-rules-toggle">
         <button className={flightRules === "VFR" ? "selected" : ""} onClick={() => setFlightRules("VFR")}>
           VFR

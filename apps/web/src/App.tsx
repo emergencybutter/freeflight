@@ -4,7 +4,8 @@ import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchC
 import { MapView } from "./MapView";
 import { findCrossedAirspace } from "./planning/airspaceCrossing";
 import { expandRoute } from "./planning/expandRoute";
-import { FlightPlanning } from "./planning/FlightPlanning";
+import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
+import type { AircraftProfile } from "./planning/wasm";
 import type { Airport, AirportDetail as AirportDetailData, AirspaceVolume, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteState, RouteWaypoint, Taf } from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
@@ -23,6 +24,10 @@ export default function App() {
   // builder) rather than positions in a flat token list — see
   // RouteState's doc comment in types.ts.
   const [route, setRoute] = useState<RouteState>(EMPTY_ROUTE);
+  // Lifted out of FlightPlanning the same way route was — MapView reads
+  // profile.cruise_altitude_ft to default its own winds-aloft altitude
+  // selector to whatever the flight plan is actually using.
+  const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
   const expandedMiddle = useMemo(() => {
     const before = (route.sid && route.sid.points[route.sid.points.length - 1]) ?? route.departure;
     const after = route.star?.points[0] ?? route.arrival;
@@ -121,6 +126,7 @@ export default function App() {
           selectedProcedureId={selectedProcedureId}
           visible={view === "map"}
           route={routePoints}
+          preferredAltitudeFt={profile.cruise_altitude_ft}
         />
         <div className="layout">
           <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
@@ -141,6 +147,8 @@ export default function App() {
           points={routePoints}
           warnings={expandedMiddle.warnings}
           airspaceCrossings={airspaceCrossings}
+          profile={profile}
+          onProfileChange={setProfile}
         />
       </div>
     </div>
