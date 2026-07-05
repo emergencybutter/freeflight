@@ -630,6 +630,12 @@ export function MapView({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // React StrictMode double-invokes this effect in dev (mount, cleanup,
+    // mount again) on the same component instance — the cleanup below
+    // sets this to true, and since useRef's initial value only applies
+    // once ever (not per-mount), it has to be reset here or every async
+    // callback on the real second mount permanently thinks it's stale.
+    unmountedRef.current = false;
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: BLANK_STYLE,
