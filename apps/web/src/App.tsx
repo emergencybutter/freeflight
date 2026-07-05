@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "./api";
-import { fetchAirportDetail, fetchAirportProcedures, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
+import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
+import { findCrossedAirspace } from "./planning/airspaceCrossing";
 import { expandRoute } from "./planning/expandRoute";
 import { FlightPlanning } from "./planning/FlightPlanning";
-import type { Airport, AirportDetail as AirportDetailData, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteState, RouteWaypoint, Taf } from "./types";
+import type { Airport, AirportDetail as AirportDetailData, AirspaceVolume, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteState, RouteWaypoint, Taf } from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
@@ -37,6 +38,32 @@ export default function App() {
     ],
     [route.departure, route.sid, expandedMiddle, route.star, route.arrival],
   );
+
+  // Which real Class B/C/D + Special Use Airspace volumes the route's
+  // legs actually pass through — computed here (rather than inside
+  // FlightPlanning) since it needs the same bbox-filtered fetch MapView
+  // already relies on for the airspace overlay. Always computed
+  // regardless of VFR/IFR (cheap, and FlightPlanning decides whether to
+  // show it) so flipping that toggle doesn't need a refetch.
+  const [airspaceCrossings, setAirspaceCrossings] = useState<AirspaceVolume[]>([]);
+  useEffect(() => {
+    if (routePoints.length < 2) {
+      setAirspaceCrossings([]);
+      return;
+    }
+    let cancelled = false;
+    const lats = routePoints.map((p) => p.lat);
+    const lons = routePoints.map((p) => p.lon);
+    const bbox = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)].join(",");
+    fetchAirspaceInBbox(bbox)
+      .then((volumes) => {
+        if (!cancelled) setAirspaceCrossings(findCrossedAirspace(routePoints, volumes));
+      })
+      .catch((err: unknown) => console.warn("couldn't check the route against airspace boundaries", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [routePoints]);
 
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
@@ -113,6 +140,7 @@ export default function App() {
           onRouteChange={setRoute}
           points={routePoints}
           warnings={expandedMiddle.warnings}
+          airspaceCrossings={airspaceCrossings}
         />
       </div>
     </div>

@@ -5,6 +5,7 @@ import { buildResolvedProcedure, fetchProcedureOptions, transitionOptions } from
 import { windsForRoute } from "./windsAloft";
 import type {
   Airport,
+  AirspaceVolume,
   IdentSearchRow,
   Procedure,
   ProcedureDetail,
@@ -82,17 +83,25 @@ export function FlightPlanning({
   onRouteChange,
   points,
   warnings,
+  airspaceCrossings,
 }: {
   route: RouteState;
   onRouteChange: (route: RouteState) => void;
   points: RouteWaypoint[];
   warnings: string[];
+  airspaceCrossings: AirspaceVolume[];
 }) {
   const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
   const [navLog, setNavLog] = useState<RoutePlanSummary | null>(null);
   const [navLogError, setNavLogError] = useState<string | null>(null);
   const [legWinds, setLegWinds] = useState<(PlanningWind | null)[]>([]);
   const [windsBulletin, setWindsBulletin] = useState<WindsAloftBulletin | null>(null);
+  // Gates whether airspaceCrossings gets shown, not whether it's computed
+  // (App.tsx always computes it) — an IFR flight is already on an ATC
+  // clearance through controlled airspace, so a "you're entering Class B"
+  // heads-up isn't the same kind of actionable warning it is for VFR.
+  // Defaults to VFR since this is a GA-first tool.
+  const [flightRules, setFlightRules] = useState<"VFR" | "IFR">("VFR");
 
   // Fetched once — same "low" (3,000-39,000ft) product MapView already
   // uses for its own overlay, now also the source for nav-log wind
@@ -144,6 +153,14 @@ export function FlightPlanning({
   return (
     <div className="planning-layout">
       <AircraftProfileForm profile={profile} onChange={setProfile} />
+      <div className="flight-rules-toggle">
+        <button className={flightRules === "VFR" ? "selected" : ""} onClick={() => setFlightRules("VFR")}>
+          VFR
+        </button>
+        <button className={flightRules === "IFR" ? "selected" : ""} onClick={() => setFlightRules("IFR")}>
+          IFR
+        </button>
+      </div>
       <RouteBuilder route={route} onChange={onRouteChange} warnings={warnings} />
       <div className="panel nav-log">
         <h2>Nav Log</h2>
@@ -217,6 +234,13 @@ export function FlightPlanning({
             )}
           </>
         )}
+        {flightRules === "VFR" &&
+          airspaceCrossings.map((volume) => (
+            <p key={volume.id} className="hint route-warning">
+              ⚠ {volume.class === "B" || volume.class === "C" || volume.class === "D" ? `Class ${volume.class}` : volume.class}
+              : {volume.name} ({volume.floor}–{volume.ceiling})
+            </p>
+          ))}
       </div>
       {hasWbEnvelope && (
         <WeightBalancePanel

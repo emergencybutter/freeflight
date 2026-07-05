@@ -193,6 +193,18 @@ th {
   font-size: 0.75rem;
 }
 
+.flight-rules-toggle {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.flight-rules-toggle button {
+  display: inline-block;
+  width: auto;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+}
+
 .planning-layout {
   flex: 1;
   min-height: 0;
