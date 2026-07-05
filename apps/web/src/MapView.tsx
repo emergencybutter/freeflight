@@ -951,7 +951,14 @@ export function MapView({
           "text-rotate": ["get", "arrowRotation"],
           "text-rotation-alignment": "map",
           "text-allow-overlap": true,
-          "text-offset": [1.6, -1.2],
+          // No offset: `text-offset` is applied in the glyph's own
+          // rotated frame when combined with `text-rotate` (confirmed
+          // live — a non-zero offset here rotated along with the wind
+          // direction, while the label's offset below doesn't rotate,
+          // so the two drifted apart depending on which way the wind
+          // happened to be blowing at each station). Anchoring at [0,0]
+          // means rotating in place around the airport's own point —
+          // no drift regardless of direction.
         },
         paint: { "text-color": "#ffe066", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
       });
@@ -962,7 +969,11 @@ export function MapView({
         layout: {
           "text-field": ["get", "label"],
           "text-size": 10,
-          "text-offset": [1.6, -2.3],
+          // Not rotated, so unlike the arrow above this offset is stable
+          // in screen space — placed just above-right of the (now
+          // point-centered) arrow, clear of the airport's own ICAO
+          // label which sits below the point instead.
+          "text-offset": [1.1, -1.5],
           "text-allow-overlap": true,
         },
         paint: { "text-color": "#ffe066", "text-halo-color": "#0b1220", "text-halo-width": 1 },
