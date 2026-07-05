@@ -477,13 +477,18 @@ const MAX_METAR_AIRPORTS = 60;
 
 /** Fetches the airports for the map's current view (bbox query, §4.1)
  * and refreshes the marker/winds-aloft sources; colors markers by METAR
- * flight category for up to MAX_METAR_AIRPORTS of them. Keeps the
- * fetched list in `visibleAirportsRef` so the click handler can hand a
- * full Airport object to the app. */
+ * flight category for up to MAX_METAR_AIRPORTS of them, read from/merged
+ * into `flightCategoriesRef` rather than a fresh map each call — this
+ * runs on every moveend, and a blank map would flash every marker back
+ * to the default color on every pan/zoom while that view's METARs
+ * re-fetch, even for stations whose category is already known. Keeps
+ * the fetched list in `visibleAirportsRef` so the click handler can hand
+ * a full Airport object to the app. */
 async function refreshVisibleAirports(
   map: MlMap,
   visibleAirportsRef: { current: Airport[] },
   windsBulletinRef: { current: WindsAloftBulletin | null },
+  flightCategoriesRef: { current: Map<string, string> },
   unmountedRef: { current: boolean },
 ) {
   const clear = () => {
@@ -509,8 +514,11 @@ async function refreshVisibleAirports(
   // in flight; touching a removed map throws.
   if (unmountedRef.current) return;
   visibleAirportsRef.current = airports;
+  // Uses whatever's already cached (from earlier calls, possibly for a
+  // different view) rather than blanking every marker to the default
+  // color while this view's own METARs are still in flight.
   (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
-    airportsGeoJson(airports, new Map()),
+    airportsGeoJson(airports, flightCategoriesRef.current),
   );
   if (windsBulletinRef.current) {
     (map.getSource(WINDS_ALOFT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
@@ -521,15 +529,14 @@ async function refreshVisibleAirports(
   try {
     const metars = await fetchMetars(airports.slice(0, MAX_METAR_AIRPORTS).map((a) => a.icao));
     if (unmountedRef.current) return;
-    const flightCategories = new Map<string, string>();
     for (const m of metars) {
-      if (m.fltCat) flightCategories.set(m.icaoId, m.fltCat);
+      if (m.fltCat) flightCategoriesRef.current.set(m.icaoId, m.fltCat);
     }
     // The view may have moved on while the METARs were in flight — only
     // apply if these airports are still the current set.
     if (visibleAirportsRef.current === airports) {
       (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
-        airportsGeoJson(airports, flightCategories),
+        airportsGeoJson(airports, flightCategoriesRef.current),
       );
     }
   } catch (err) {
@@ -612,6 +619,12 @@ export function MapView({
   const mapRef = useRef<MlMap | null>(null);
   const visibleAirportsRef = useRef<Airport[]>([]);
   const windsBulletinRef = useRef<WindsAloftBulletin | null>(null);
+  // Accumulates flight categories across every refreshVisibleAirports
+  // call (never reset) so a station keeps its last-known color the
+  // instant the view changes again, rather than flashing back to the
+  // default blue on every moveend while its METAR re-fetches — see
+  // refreshVisibleAirports for where this gets read/merged.
+  const flightCategoriesRef = useRef<Map<string, string>>(new Map());
   // Set in this effect's cleanup so in-flight fetches from the initial
   // load (which don't run through a "cancelled" closure the way the
   // other effects do) don't touch `map` after App.tsx's map/plan toggle
@@ -997,11 +1010,12 @@ export function MapView({
       // and re-applied to whatever airports are in view. Each fetch is
       // independent so one failing doesn't block the others.
       void loadWeatherOverlays(map, windsBulletinRef, unmountedRef).then(
-        () => void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, unmountedRef),
+        () =>
+          void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, flightCategoriesRef, unmountedRef),
       );
       void refreshVisibleAirspace(map, unmountedRef);
       map.on("moveend", () => {
-        void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, unmountedRef);
+        void refreshVisibleAirports(map, visibleAirportsRef, windsBulletinRef, flightCategoriesRef, unmountedRef);
         void refreshVisibleAirspace(map, unmountedRef);
       });
 
