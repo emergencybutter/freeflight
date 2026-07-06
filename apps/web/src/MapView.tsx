@@ -7,6 +7,7 @@ import { fetchAirportDetail, fetchAirportsInBbox, fetchAirspaceInBbox, fetchChar
 import type {
   Airport,
   AirspaceVolume,
+  ChartCatalogEntry,
   Cwa,
   GAirmet,
   Pirep,
@@ -847,16 +848,49 @@ export function MapView({
   // than through React state since it never needs to trigger a re-render
   // itself.
   const chartLayerIdsByKindRef = useRef<Map<string, string[]>>(new Map());
+  // Raw catalog entries grouped by kind, from the fetchCharts() response —
+  // *not* yet added as map sources/layers. Materialized lazily (see
+  // materializeChartKind) so switching kinds is the only thing that ever
+  // triggers loading a given series' PMTiles files.
+  const chartsByKindRef = useRef<Map<string, ChartCatalogEntry[]>>(new Map());
+  const materializedChartKindsRef = useRef<Set<string>>(new Set());
   const [chartKinds, setChartKinds] = useState<string[]>([]);
   const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(new Set(["Sectional"]));
   // Independent on/off toggles (unlike the chart-kind group above, these
-  // aren't mutually exclusive — airspace, weather hazards, and airports
-  // are separate concerns a pilot might want any combination of). All
-  // default on since that's the map's existing behavior; these just add
-  // manual control on top of it.
+  // aren't mutually exclusive — airspace, weather hazards, airports, and
+  // PIREPs are separate concerns a pilot might want any combination of).
+  // All default on since that's the map's existing behavior; these just
+  // add manual control on top of it.
   const [visibleAirspace, setVisibleAirspace] = useState(true);
   const [visibleWeatherHazards, setVisibleWeatherHazards] = useState(true);
   const [visibleAirports, setVisibleAirports] = useState(true);
+  const [visiblePireps, setVisiblePireps] = useState(true);
+
+  // Adds map sources/layers for one chart kind's catalog entries, if it
+  // hasn't happened already — a no-op on repeat calls (e.g. re-selecting
+  // a kind that was already shown once and then hidden). Always starts
+  // hidden; the caller is responsible for the actual visibility flip
+  // right after, so there's one place (not two) that decides what ends
+  // up shown.
+  function materializeChartKind(map: maplibregl.Map, kind: string) {
+    if (materializedChartKindsRef.current.has(kind)) return;
+    materializedChartKindsRef.current.add(kind);
+    const layerIds: string[] = [];
+    for (const chart of chartsByKindRef.current.get(kind) ?? []) {
+      const sourceId = `chart-${chart.id}`;
+      map.addSource(sourceId, {
+        type: "raster",
+        url: `pmtiles://${API_BASE_URL}${chart.tile_url}`,
+        tileSize: 256,
+      });
+      map.addLayer(
+        { id: sourceId, type: "raster", source: sourceId, layout: { visibility: "none" } },
+        "airspace-fill",
+      );
+      layerIds.push(sourceId);
+    }
+    chartLayerIdsByKindRef.current.set(kind, layerIds);
+  }
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1023,38 +1057,41 @@ export function MapView({
       // overlay stack regardless of how the async timing falls out.
       // The catalog comes from ff-api (tile_url is an ff-api path like
       // /bundles/<cycle>/chart.pmtiles, fetched by the pmtiles protocol
-      // via HTTP range requests); fetched async, layers added on arrival.
-      // Grouped by `kind` (Sectional/IfrEnrouteLow/IfrEnrouteHigh/...) so
-      // the toggle control below can show/hide a whole chart series at
-      // once — only Sectional starts visible, matching pre-IFR-chart
-      // behavior for existing users; the others are opt-in since
-      // stacking every chart series at full opacity by default would
-      // just be visual noise.
+      // via HTTP range requests). Grouped by `kind` (Sectional/
+      // IfrEnrouteLow/IfrEnrouteHigh/...) so the toggle control below can
+      // show/hide a whole chart series at once.
+      //
+      // Sources/layers are materialized lazily, one kind at a time (see
+      // materializeChartKind below), not for the whole catalog up front.
+      // Adding a PMTiles source fetches that file's header immediately
+      // regardless of layer visibility, so eagerly adding all ~108
+      // charts (57 sectionals + IFR Low/High) fired ~108 requests on
+      // every page load, most for chart kinds nobody had asked to see
+      // yet — measured 6-10s of that competing with the actually-visible
+      // charts for the browser's limited concurrent-connection pool.
+      // Since chart kinds are mutually exclusive now, there's never a
+      // reason to have more than one kind's sources loaded at a time.
       void fetchCharts()
         .then((charts) => {
-          const layerIdsByKind = new Map<string, string[]>();
+          const byKind = new Map<string, ChartCatalogEntry[]>();
           for (const chart of charts) {
-            const sourceId = `chart-${chart.id}`;
-            map.addSource(sourceId, {
-              type: "raster",
-              url: `pmtiles://${API_BASE_URL}${chart.tile_url}`,
-              tileSize: 256,
-            });
-            map.addLayer(
-              {
-                id: sourceId,
-                type: "raster",
-                source: sourceId,
-                layout: { visibility: chart.kind === "Sectional" ? "visible" : "none" },
-              },
-              "airspace-fill",
-            );
-            const layerIds = layerIdsByKind.get(chart.kind) ?? [];
-            layerIds.push(sourceId);
-            layerIdsByKind.set(chart.kind, layerIds);
+            const list = byKind.get(chart.kind) ?? [];
+            list.push(chart);
+            byKind.set(chart.kind, list);
           }
-          chartLayerIdsByKindRef.current = layerIdsByKind;
-          setChartKinds([...layerIdsByKind.keys()].sort());
+          chartsByKindRef.current = byKind;
+          setChartKinds([...byKind.keys()].sort());
+          // visibleChartKinds here is frozen at its initial-render value
+          // (this effect has a [] dep array, mount-only) — always just
+          // the default Set(["Sectional"]), which is exactly what should
+          // materialize (and show) on first load regardless of how long
+          // the fetch took.
+          for (const kind of visibleChartKinds) {
+            materializeChartKind(map, kind);
+            for (const layerId of chartLayerIdsByKindRef.current.get(kind) ?? []) {
+              map.setLayoutProperty(layerId, "visibility", "visible");
+            }
+          }
         })
         .catch((err: unknown) => console.warn("couldn't load the chart catalog for the map", err));
 
@@ -1549,6 +1586,10 @@ export function MapView({
     if (!map) return;
     setVisibleChartKinds((current) => {
       const next: Set<string> = current.has(kind) ? new Set() : new Set([kind]);
+      // First time this kind is selected, its sources/layers haven't
+      // been added yet (see materializeChartKind) — do that now so the
+      // visibility loop below has layer ids to flip.
+      if (next.has(kind)) materializeChartKind(map, kind);
       for (const [k, layerIds] of chartLayerIdsByKindRef.current) {
         const nowVisible = next.has(k);
         for (const layerId of layerIds) {
@@ -1592,6 +1633,11 @@ export function MapView({
       setLayersVisibility(["airports-circle", "airports-label"], !prev);
       return !prev;
     });
+  const togglePirepsVisibility = () =>
+    setVisiblePireps((prev) => {
+      setLayersVisibility(["pirep-circle"], !prev);
+      return !prev;
+    });
 
   return (
     <div className="map-view">
@@ -1621,10 +1667,10 @@ export function MapView({
             </option>
           ))}
         </select>
-        {/* Unlike the chart-kind group above, these three are
-            independent on/off switches, not mutually exclusive — any
-            combination of airspace/weather hazards/airports can be
-            showing at once. */}
+        {/* Unlike the chart-kind group above, these are independent
+            on/off switches, not mutually exclusive — any combination of
+            airspace/weather hazards/airports/PIREPs can be showing at
+            once. */}
         <div className="chart-kind-toggle-divider" />
         <button className={visibleAirspace ? "selected" : ""} onClick={toggleAirspaceVisibility}>
           Airspace
@@ -1634,6 +1680,9 @@ export function MapView({
         </button>
         <button className={visibleAirports ? "selected" : ""} onClick={toggleAirportsVisibility}>
           Airports
+        </button>
+        <button className={visiblePireps ? "selected" : ""} onClick={togglePirepsVisibility}>
+          PIREPs
         </button>
       </div>
     </div>
