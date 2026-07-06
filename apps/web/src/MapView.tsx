@@ -7,14 +7,16 @@ import { fetchAirportDetail, fetchAirportsInBbox, fetchAirspaceInBbox, fetchChar
 import type {
   Airport,
   AirspaceVolume,
+  Cwa,
   GAirmet,
+  Pirep,
   ProcedureDetail,
   RouteWaypoint,
   Runway,
   Sigmet,
   WindsAloftBulletin,
 } from "./types";
-import { fetchGairmets, fetchMetars, fetchSigmets, fetchWindsAloft } from "./weather";
+import { fetchCwas, fetchGairmets, fetchMetars, fetchPireps, fetchSigmets, fetchWindsAloft } from "./weather";
 
 const AIRPORTS_SOURCE = "airports";
 const RUNWAYS_SOURCE = "runways";
@@ -22,6 +24,8 @@ const PROCEDURE_SOURCE = "procedure-path";
 const PROCEDURE_FIXES_SOURCE = "procedure-fixes";
 const GAIRMET_SOURCE = "gairmets";
 const SIGMET_SOURCE = "sigmets";
+const CWA_SOURCE = "cwas";
+const PIREP_SOURCE = "pireps";
 const WINDS_ALOFT_SOURCE = "winds-aloft";
 const AIRSPACE_SOURCE = "airspace";
 const PLANNED_ROUTE_SOURCE = "planned-route";
@@ -67,6 +71,16 @@ const GAIRMET_HAZARD_COLORS: Record<string, string> = {
   SFC_WND: "#e0c341",
 };
 const DEFAULT_GAIRMET_COLOR = "#ffb020";
+
+// PIREP severity is derived (see pirepSeverity) from the worst icing/
+// turbulence intensity text reported, not a field the API gives us
+// directly.
+const PIREP_SEVERITY_COLORS: Record<string, string> = {
+  SEVERE: "#e5484d",
+  MODERATE: "#e0973f",
+  LIGHT: "#e0c341",
+  NONE: "#7fa8d9",
+};
 
 // Roughly follows real sectional-chart convention (blue = Class B/D,
 // magenta = Class C, red/orange = the military-flavored special-use
@@ -127,7 +141,16 @@ function gairmetGeoJson(records: GAirmet[]): GeoJSON.FeatureCollection {
     return {
       type: "Feature",
       geometry,
-      properties: { hazard: r.hazard, tag: r.tag },
+      properties: {
+        hazard: r.hazard,
+        tag: r.tag,
+        severity: r.severity,
+        base: r.base,
+        top: r.top,
+        fzlbase: r.fzlbase,
+        fzltop: r.fzltop,
+        validTime: r.validTime,
+      },
     };
   });
   return { type: "FeatureCollection", features };
@@ -144,7 +167,126 @@ function sigmetGeoJson(records: Sigmet[]): GeoJSON.FeatureCollection {
         type: "Polygon",
         coordinates: [r.coords.map((c) => [c.lon, c.lat])],
       },
-      properties: { hazard: r.hazard, seriesId: r.seriesId },
+      properties: {
+        hazard: r.hazard,
+        seriesId: r.seriesId,
+        altitudeLow1: r.altitudeLow1,
+        altitudeHi1: r.altitudeHi1,
+        rawAirSigmet: r.rawAirSigmet,
+      },
+    })),
+  };
+}
+
+/** Center Weather Advisories — always a closed-ring Polygon on live data
+ * (only ever seen `geom: "AREA"`, no multi-area case like IntlSigmet
+ * has); coords use the same string-lat/lon shape as GAirmetCoord. */
+function cwaGeoJson(records: Cwa[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: records.map((r) => ({
+      type: "Feature",
+      geometry: {
+        type: "Polygon",
+        coordinates: [r.coords.map((c) => [parseFloat(c.lon), parseFloat(c.lat)])],
+      },
+      properties: { hazard: r.hazard, cwsu: r.cwsu, rawText: r.rawText },
+    })),
+  };
+}
+
+/** Popup body for a G-AIRMET feature — no raw bulletin text like
+ * SIGMET/PIREP have, so this is built from the structured fields
+ * instead. FZLVL (freezing level) reports fzlbase/fzltop rather than
+ * base/top (confirmed live: FZLVL records have null base/top). */
+function gairmetPopupHtml(props: Record<string, unknown>): string {
+  const hazard = props.hazard as string;
+  const severity = props.severity as string | null;
+  const base = props.base as string | null;
+  const top = props.top as string | null;
+  const fzlbase = props.fzlbase as string | null;
+  const fzltop = props.fzltop as string | null;
+  const validTime = props.validTime as string;
+  const altitude = hazard === "FZLVL" ? [fzlbase, fzltop].filter(Boolean).join("–") : [base, top].filter(Boolean).join("–");
+  const parts = [`<strong>G-AIRMET: ${escapeHtml(hazard)}${severity ? ` (${escapeHtml(severity)})` : ""}</strong>`];
+  if (altitude) parts.push(escapeHtml(altitude));
+  parts.push(`<span style="opacity: 0.7;">valid ${escapeHtml(validTime)}</span>`);
+  return parts.join("<br>");
+}
+
+function sigmetPopupHtml(props: Record<string, unknown>): string {
+  const hazard = props.hazard as string;
+  const low = props.altitudeLow1 as number | null;
+  const hi = props.altitudeHi1 as number | null;
+  const raw = props.rawAirSigmet as string;
+  const altitude = low !== null || hi !== null ? `${low ?? "SFC"}–${hi ?? "unlimited"} ft` : null;
+  const parts = [`<strong>SIGMET: ${escapeHtml(hazard)}</strong>`];
+  if (altitude) parts.push(escapeHtml(altitude));
+  parts.push(`<span style="font-family: monospace; font-size: 0.85em;">${escapeHtml(raw)}</span>`);
+  return parts.join("<br>");
+}
+
+function cwaPopupHtml(props: Record<string, unknown>): string {
+  const hazard = props.hazard as string;
+  const cwsu = props.cwsu as string;
+  const rawText = props.rawText as string;
+  return [
+    `<strong>CWA: ${escapeHtml(hazard)} (${escapeHtml(cwsu)} Center)</strong>`,
+    `<span style="font-family: monospace; font-size: 0.85em; white-space: pre-line;">${escapeHtml(rawText)}</span>`,
+  ].join("<br>");
+}
+
+/** Worst of the icing/turbulence intensity codes a PIREP reports,
+ * across both possible layers — the API gives free-text intensity
+ * codes (e.g. "LGT-MOD", "SEV", "NEG"), not a severity enum, so this
+ * classifies by substring match against the codes actually seen live.
+ * An Urgent PIREP is always at least "SEVERE" regardless of what the
+ * intensity text says, since the type itself signals a hazard serious
+ * enough to need immediate attention. */
+function pirepSeverity(r: Pirep): "SEVERE" | "MODERATE" | "LIGHT" | "NONE" {
+  if (r.pirepType === "Urgent PIREP") return "SEVERE";
+  const texts = [r.icgInt1, r.icgInt2, r.tbInt1, r.tbInt2].filter(Boolean).join(" ").toUpperCase();
+  if (texts.includes("SEV") || texts.includes("EXTM")) return "SEVERE";
+  if (texts.includes("MOD")) return "MODERATE";
+  if (texts.includes("LGT") || texts.includes("LIGHT")) return "LIGHT";
+  return "NONE";
+}
+
+/** Escapes text from aviationweather.gov before it goes into a Popup's
+ * `.setHTML()` — third-party data, so treat it like any other
+ * untrusted string rather than assuming it's safe to interpolate raw. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Short one-line summary for a PIREP's popup — the raw text (`rawOb`)
+ * is the authoritative source, this is just a quicker-to-scan header
+ * above it. */
+function pirepSummary(r: Pirep): string {
+  const parts = [r.acType, r.fltLvl !== null ? `FL${r.fltLvl}` : null];
+  const icing = [r.icgInt1, r.icgType1].filter(Boolean).join(" ");
+  const turb = [r.tbInt1, r.tbType1].filter(Boolean).join(" ");
+  if (icing) parts.push(`ICE ${icing}`);
+  if (turb) parts.push(`TURB ${turb}`);
+  return parts.filter(Boolean).join(" · ");
+}
+
+function pirepGeoJson(records: Pirep[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: records.map((r) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [r.lon, r.lat] },
+      properties: {
+        severity: pirepSeverity(r),
+        urgent: r.pirepType === "Urgent PIREP",
+        summary: pirepSummary(r),
+        rawOb: r.rawOb,
+      },
     })),
   };
 }
@@ -573,6 +715,23 @@ async function refreshVisibleAirspace(map: MlMap, unmountedRef: { current: boole
   }
 }
 
+/** PIREPs are view-driven the same way (bbox query per moveend) —
+ * unlike G-AIRMET/SIGMET/CWA, aviationweather.gov's `/pirep` requires a
+ * bbox to begin with (see ff-weather's fetch_pireps), so there's no
+ * "fetch once for all current records" option here even if we wanted
+ * one. */
+async function refreshVisiblePireps(map: MlMap, unmountedRef: { current: boolean }) {
+  const bounds = map.getBounds();
+  const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+  try {
+    const pireps = await fetchPireps(bbox);
+    if (unmountedRef.current) return;
+    (map.getSource(PIREP_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(pirepGeoJson(pireps));
+  } catch (err) {
+    console.warn("couldn't load PIREPs for the map view", err);
+  }
+}
+
 /** Fetches the CONUS-wide hazard overlays and the winds-aloft bulletin
  * (cached in `windsBulletinRef` for reuse as the view moves). Each is
  * independent, so one failing doesn't block the others. */
@@ -595,6 +754,14 @@ async function loadWeatherOverlays(
     (map.getSource(SIGMET_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(sigmetGeoJson(sigmets));
   } catch (err) {
     console.warn("couldn't load SIGMETs for the map", err);
+  }
+
+  try {
+    const cwas = await fetchCwas();
+    if (unmountedRef.current) return;
+    (map.getSource(CWA_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(cwaGeoJson(cwas));
+  } catch (err) {
+    console.warn("couldn't load Center Weather Advisories for the map", err);
   }
 
   try {
@@ -992,6 +1159,61 @@ export function MapView({
         "airports-circle",
       );
 
+      // CWAs get their own flat color (distinct from SIGMET's red and
+      // G-AIRMET's per-hazard palette) rather than a hazard-keyed match
+      // expression — real data has only ever shown "TS" so far, and a
+      // dedicated color keeps it visually distinct as its own category
+      // regardless of what hazard codes show up later.
+      map.addSource(CWA_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer(
+        {
+          id: "cwa-fill",
+          type: "fill",
+          source: CWA_SOURCE,
+          paint: { "fill-color": "#ff8c42", "fill-opacity": 0.15 },
+        },
+        "airports-circle",
+      );
+      map.addLayer(
+        {
+          id: "cwa-line",
+          type: "line",
+          source: CWA_SOURCE,
+          paint: { "line-color": "#ff8c42", "line-width": 1.5, "line-dasharray": [1, 1] },
+        },
+        "airports-circle",
+      );
+
+      // PIREPs render as point markers, colored by the worst reported
+      // icing/turbulence severity (see pirepSeverity) — inserted before
+      // "airports-circle" same as everything else here, so airport
+      // markers/labels still stay on top.
+      map.addSource(PIREP_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer(
+        {
+          id: "pirep-circle",
+          type: "circle",
+          source: PIREP_SOURCE,
+          paint: {
+            "circle-radius": ["case", ["get", "urgent"], 7, 4],
+            "circle-color": [
+              "match",
+              ["get", "severity"],
+              "SEVERE",
+              PIREP_SEVERITY_COLORS.SEVERE,
+              "MODERATE",
+              PIREP_SEVERITY_COLORS.MODERATE,
+              "LIGHT",
+              PIREP_SEVERITY_COLORS.LIGHT,
+              PIREP_SEVERITY_COLORS.NONE,
+            ],
+            "circle-stroke-color": "#0b1220",
+            "circle-stroke-width": 1.2,
+          },
+        },
+        "airports-circle",
+      );
+
       // Winds-aloft arrows render on top of everything (appended with no
       // beforeId) so they stay visible over airport markers/labels.
       map.addSource(WINDS_ALOFT_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
@@ -1046,6 +1268,131 @@ export function MapView({
         map.getCanvas().style.cursor = "";
       });
 
+      // Airspace fill/line otherwise gives no way to tell what a colored
+      // shape actually means beyond the class-color convention — same
+      // self-contained Popup treatment as PIREPs below. A click can land
+      // inside several stacked shelves at once (e.g. SFO's Class B
+      // tiers), so this lists every one rather than just the topmost;
+      // it's also deduped by id since a single large polygon can get
+      // reported more than once where it crosses this GeoJSON source's
+      // internal tile boundaries. Deliberately *not* skipped just
+      // because the click also hit an airport marker (tried that;
+      // reverted) — Class C/D shelves are small and centered on their
+      // own primary airport, so nearly every click near one also lands
+      // on that airport's marker, which suppressed the airspace popup
+      // almost every time for exactly the polygons a pilot most needs
+      // explained. The airport panel (app UI, below the map) and this
+      // popup (floating on the map itself) don't compete for the same
+      // space, so both can show at once without issue.
+      map.on("click", "airspace-fill", (e) => {
+        const seenIds = new Set<string>();
+        const rows = (e.features ?? [])
+          .filter((f) => {
+            const id = f.properties?.id as string;
+            if (seenIds.has(id)) return false;
+            seenIds.add(id);
+            return true;
+          })
+          .map((f) => {
+            const { name, class: cls, floor, ceiling } = f.properties as {
+              name: string;
+              class: string;
+              floor: string;
+              ceiling: string;
+            };
+            const label = cls === "B" || cls === "C" || cls === "D" ? `Class ${cls}` : cls;
+            return `<strong>${escapeHtml(label)}: ${escapeHtml(name)}</strong><br>${escapeHtml(floor)}–${escapeHtml(ceiling)}`;
+          });
+        if (rows.length === 0) return;
+        new maplibregl.Popup({ closeButton: true })
+          .setLngLat(e.lngLat)
+          .setHTML(rows.join('<hr style="margin: 4px 0; opacity: 0.3;">'))
+          .addTo(map);
+      });
+      map.on("mouseenter", "airspace-fill", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "airspace-fill", () => {
+        map.getCanvas().style.cursor = "";
+      });
+
+      // Same self-contained Popup treatment for the weather hazard
+      // overlays — same reasoning as airspace above: a colored shape
+      // alone doesn't say what it means. G-AIRMET's fill layer is
+      // filtered to Polygon geometry only (see its addLayer call), so
+      // its LINE records (e.g. freezing-level lines) need their own
+      // click binding on "gairmet-line" to be tappable at all.
+      const gairmetClick = (e: maplibregl.MapLayerMouseEvent) => {
+        const feature = e.features?.[0];
+        if (!feature) return;
+        new maplibregl.Popup({ closeButton: true })
+          .setLngLat(e.lngLat)
+          .setHTML(gairmetPopupHtml(feature.properties ?? {}))
+          .addTo(map);
+      };
+      map.on("click", "gairmet-fill", gairmetClick);
+      map.on("click", "gairmet-line", gairmetClick);
+      for (const layerId of ["gairmet-fill", "gairmet-line"]) {
+        map.on("mouseenter", layerId, () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", layerId, () => {
+          map.getCanvas().style.cursor = "";
+        });
+      }
+
+      map.on("click", "sigmet-fill", (e) => {
+        const feature = e.features?.[0];
+        if (!feature) return;
+        new maplibregl.Popup({ closeButton: true })
+          .setLngLat(e.lngLat)
+          .setHTML(sigmetPopupHtml(feature.properties ?? {}))
+          .addTo(map);
+      });
+      map.on("mouseenter", "sigmet-fill", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "sigmet-fill", () => {
+        map.getCanvas().style.cursor = "";
+      });
+
+      map.on("click", "cwa-fill", (e) => {
+        const feature = e.features?.[0];
+        if (!feature) return;
+        new maplibregl.Popup({ closeButton: true })
+          .setLngLat(e.lngLat)
+          .setHTML(cwaPopupHtml(feature.properties ?? {}))
+          .addTo(map);
+      });
+      map.on("mouseenter", "cwa-fill", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "cwa-fill", () => {
+        map.getCanvas().style.cursor = "";
+      });
+
+      // PIREPs don't have their own detail panel/app state the way
+      // selecting an airport does — a self-contained MapLibre Popup
+      // showing the summary + raw text is enough for a point report
+      // that's really just "here's what this pilot said."
+      map.on("click", "pirep-circle", (e) => {
+        const feature = e.features?.[0];
+        if (!feature || feature.geometry.type !== "Point") return;
+        const { summary, rawOb } = feature.properties as { summary: string; rawOb: string };
+        new maplibregl.Popup({ closeButton: true })
+          .setLngLat(feature.geometry.coordinates as [number, number])
+          .setHTML(
+            `<strong>${escapeHtml(summary) || "PIREP"}</strong><br><span style="font-family: monospace; font-size: 0.85em;">${escapeHtml(rawOb)}</span>`,
+          )
+          .addTo(map);
+      });
+      map.on("mouseenter", "pirep-circle", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "pirep-circle", () => {
+        map.getCanvas().style.cursor = "";
+      });
+
       // Airport markers are view-driven (bbox query per moveend, hidden
       // below AIRPORT_MIN_ZOOM) — a nationwide bundle is too big to draw
       // whole. Weather overlays load once; the winds bulletin is cached
@@ -1063,6 +1410,7 @@ export function MapView({
           ),
       );
       void refreshVisibleAirspace(map, unmountedRef);
+      void refreshVisiblePireps(map, unmountedRef);
       map.on("moveend", () => {
         void refreshVisibleAirports(
           map,
@@ -1073,6 +1421,7 @@ export function MapView({
           unmountedRef,
         );
         void refreshVisibleAirspace(map, unmountedRef);
+        void refreshVisiblePireps(map, unmountedRef);
       });
 
       setLoaded(true);

@@ -61,6 +61,32 @@
   border-radius: 4px;
 }
 
+/* MapLibre's Popup (airspace/G-AIRMET/SIGMET/CWA/PIREP click popups)
+   defaults to a white background — combined with `body`'s light text
+   color above, that left every popup nearly illegible. Restyled to
+   match the app's own dark theme instead of overriding text color in
+   every popup's HTML individually. */
+.maplibregl-popup-content {
+  background: #131a2a;
+  color: #e6edf3;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.maplibregl-popup-close-button {
+  color: #e6edf3;
+}
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: #131a2a;
+}
+.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+  border-bottom-color: #131a2a;
+}
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: #131a2a;
+}
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: #131a2a;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 260px 1fr 1fr;
