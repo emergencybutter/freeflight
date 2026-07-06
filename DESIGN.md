@@ -215,6 +215,8 @@ Implemented today:
 | `GET /weather/gairmet` | both clients | `Vec<GAirmet>` (all current CONUS) |
 | `GET /weather/sigmet` | both clients | `Vec<Sigmet>` |
 | `GET /weather/isigmet` | both clients | `Vec<IntlSigmet>` |
+| `GET /weather/cwa` | both clients | `Vec<Cwa>` (Center Weather Advisories, all current) |
+| `GET /weather/pirep?bbox=` | both clients | `Vec<Pirep>` — unlike the other weather routes this one requires a bbox (aviationweather.gov's own API does too); its lat/lon order differs from this app's other bbox routes, converted server-side rather than leaking that inconsistency to clients |
 | `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin`, each station's ident additionally resolved to a `lat`/`lon` against the current cycle bundle (best-effort — the raw NWS product only carries idents; used for the route builder's nearest-station wind lookup, §9.3) |
 | `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
 | `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256). `pmtiles_url`/`sha256` are always `None`: a nationwide cycle publishes one PMTiles file per sectional, which this single-chart shape can't represent (see `/data/charts` for the real list) — revisit once Android needs multi-chart offline sync |
@@ -226,6 +228,7 @@ Implemented today:
 | `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates |
 | `GET /data/charts?bbox=` | web | chart_catalog entries (optionally bbox-filtered) |
 | `GET /data/airspace?bbox=` | web | Class B/C/D + Special Use Airspace boundary polygons (optionally bbox-filtered) |
+| `GET /data/nearest_fix?lat=&lon=` | web | closest waypoint or navaid to a point — full scan over both tables (~49k waypoints + ~900 navaids nationwide), filtered/compared in Rust rather than SQL, same approach as the bbox routes above; backs the map's Waypoint tap tab (§9.1) |
 | `GET /data/search?q=` | web | airport ident/name search (prefix on ICAO/FAA/IATA, substring on name, capped at 20) — pulled forward from Phase 2 once bundles went nationwide and a fixed airport list stopped making sense |
 | `GET /data/airways/:ident` | web | one airway's seq-ordered legs + server-resolved fix coordinates (mirrors `/data/procedures/:id`'s `fixes` shape; ident lookup is case-insensitive) |
 | `GET /data/search_idents?q=` | web | unified ident search across airports/waypoints/navaids/airways for the §9.3 route builder's single search box — exact matches first, then airports before fixes, capped at 20 |
@@ -487,25 +490,67 @@ Consequences:
   load). On web, drawn from GeoJSON `ff-api` returns for the current
   view (§8) — same overlay shape either way, different source.
   Implemented on web: VFR sectional and IFR Low/High Altitude Enroute
-  chart layers, toggled independently (Sectional visible by default,
-  IFR opt-in) — see §3/§7 for the ingestion side. TAC unstarted. Web's
+  chart layers — see §3/§7 for the ingestion side. TAC unstarted. Web's
   base layer, under all of this, is an OpenFreeMap vector basemap (free,
   no API key/rate limits) rather than a blank background, so the map
   stays usable whenever chart imagery is toggled off or hasn't loaded
-  yet — opaque chart raster tiles cover it naturally once visible.
-- Airport detail view: runways, frequencies, remarks, and a procedure
-  list (SIDs/STARs/approaches) pulled from `procedure`/`procedure_leg`.
+  yet — opaque chart raster tiles cover it naturally once visible. Opens
+  centered on KLGA at zoom 6 rather than a full-CONUS default view.
+- Two independent groups of map toggle buttons. Chart kind (Sectional/
+  IFR Low/IFR High) is single-select — they're the same charts at
+  different altitude scopes meant to replace each other, not stack —
+  and materializes a kind's PMTiles sources lazily, the first time it's
+  actually selected: adding a PMTiles source fetches that file's header
+  immediately regardless of layer visibility, so eagerly adding every
+  chart in the catalog on load once fired ~108 requests (57 sectionals +
+  IFR Low/High) even though only one kind is ever shown at a time.
+  Airspace/AIRMET-SIGMET/Airports/PIREPs/CWA are independent on/off
+  switches (any combination can be showing at once), all on by default.
+  MapLibre's own zoom/compass/attribution controls are restyled to
+  match the app's dark theme instead of their white default.
+- Tapping the map selects whichever airport in the current view is
+  closest to the tap point, unconditionally (not gated on hitting the
+  airport's own marker), and populates a tab bar below the map: Airport/
+  Waypoint/Airspace/PIREPs/AIRMET/SIGMET/CWA. This replaced an earlier
+  per-layer MapLibre Popup on each overlay (airspace/G-AIRMET/SIGMET/
+  CWA/PIREP each opening their own) — a colored shape or point alone
+  doesn't say what it means, and stacking one Popup per layer clicked
+  didn't extend to "show me everything at this point across every
+  category." The Airspace/PIREPs/AIRMET/SIGMET/CWA tabs list whatever
+  features were actually under the tapped point (via
+  `queryRenderedFeatures`, padded a few pixels for small/thin targets
+  like PIREP circles and G-AIRMET's freezing-level lines); the Waypoint
+  tab shows the closest waypoint/navaid (`/data/nearest_fix`, §4.1,
+  since there's no client-side navaid/waypoint layer to query locally
+  the way the others are) with a button to drop it into the route
+  builder's middle fixes list.
+- The Airport tab holds the airport detail view: runways, frequencies,
+  remarks, and a procedure list (SIDs/STARs/approaches) pulled from
+  `procedure`/`procedure_leg`, plus an action bar above it showing the
+  selected airport (tap the label to search and change it) and buttons
+  to set it as the route builder's departure/arrival or add it as a
+  middle fix (§9.3) — the Set Departure/Arrival buttons highlight when
+  the selected airport already matches that slot.
 - Selecting a procedure draws it on the map (leg-by-leg from
   `procedure_leg`) and optionally overlays the FAA d-TPP plate image
   (PDF rendered client-side, e.g. `pdf.js` on web / `PdfRenderer` on
-  Android) for visual cross-check.
+  Android) for visual cross-check. A "+" next to the procedure's heading
+  adds it as the route builder's SID/STAR directly from this view,
+  without needing to browse for it again via §9.3's own picker —
+  resolves immediately if the procedure has a single enroute transition,
+  else shows the transition list to choose from (same "skip the picker
+  when there's only one real choice" behavior as the route builder's own
+  SID/STAR picker).
 
 ### 9.2 Weather & NOTAMs
 
-- Route/airport briefing screen: METAR (raw + decoded), TAF, applicable
-  AIRMET/SIGMET polygons drawn on the map, winds/temps aloft along the
-  route, and NOTAMs (filterable by relevance: runway/taxiway closures
-  first).
+- Route/airport briefing screen: METAR (raw + decoded), TAF, winds/temps
+  aloft along the route (with an altitude selector over whatever levels
+  the current bulletin actually has data for), and NOTAMs (filterable by
+  relevance: runway/taxiway closures first). AIRMET/SIGMET/CWA polygons
+  and PIREP points draw on the map (toggleable independently, §9.1) with
+  their detail available via the tap tab bar rather than a fixed
+  briefing-screen list.
 - Fully driven by `ff-weather`/`ff-notam` through the `ff-api` proxy;
   decoded METAR/TAF share the same Rust decoder on both clients (compiled
   into `ff-wasm`/`ff-uniffi`) so "what does this METAR mean" logic is
@@ -528,7 +573,20 @@ Consequences:
   (`FIX1 V123 FIX2` — an airway expands to the fixes strictly between
   its neighbors, in that direction; see `expandRoute.ts`). The full
   route (departure → SID → fixes/airways → STAR → arrival) draws on the
-  map in cyan with per-fix markers.
+  map in cyan with per-fix markers. Departure/arrival/middle fixes can
+  also be set from the map's Airport/Waypoint tap tabs (§9.1) instead of
+  this screen's own search fields — same route state either way.
+- VFR/IFR toggle (defaults VFR). Under VFR, the route is checked against
+  real Class B/C/D + Special Use Airspace boundaries (client-side
+  point-in-polygon/segment-intersection over whatever `/data/airspace`
+  bbox around the route returns, §9.1's data) and flags every volume a
+  leg actually enters, lateral crossing only — altitude isn't compared
+  against the volume's floor/ceiling (those are pre-formatted display
+  strings, not structured numbers, per `AirspaceVolume`'s shape); the
+  warning shows the floor/ceiling text so the pilot can judge relevance
+  themselves. Suppressed under IFR, since an IFR flight is already on a
+  clearance through controlled airspace and the same heads-up isn't the
+  same kind of actionable under IFR that it is under VFR.
 - Per-leg: great-circle/rhumb distance & course from `ff-planning`, ETE
   and fuel burn from a user-defined aircraft profile (cruise TAS, fuel
   burn GPH, optional simple winds-aloft correction — implemented on web:
