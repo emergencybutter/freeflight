@@ -1,4 +1,4 @@
-use crate::hazards::{GAirmet, IntlSigmet, Sigmet};
+use crate::hazards::{Cwa, GAirmet, IntlSigmet, Pirep, Sigmet};
 use crate::records::{Metar, Taf};
 use crate::winds_aloft::{parse_windtemp_bulletin, WindsAloftBulletin, WindsAloftError};
 use thiserror::Error;
@@ -114,6 +114,34 @@ impl WeatherClient {
     /// needed by anything else here).
     pub async fn fetch_intl_sigmets(&self) -> Result<Vec<IntlSigmet>, WeatherError> {
         self.fetch_hazard("isigmet").await
+    }
+
+    /// Current Center Weather Advisories — no station/region filter,
+    /// same all-current-records default as the other hazard endpoints.
+    pub async fn fetch_cwas(&self) -> Result<Vec<Cwa>, WeatherError> {
+        self.fetch_hazard("cwa").await
+    }
+
+    /// Pilot reports within `bbox` (`"lat_min,lon_min,lat_max,lon_max"`,
+    /// matching aviationweather.gov's own bbox order — confirmed live,
+    /// this is *not* the same corner order as this crate's other
+    /// bbox-taking callers use elsewhere in this project). Unlike the
+    /// other hazard endpoints, `/pirep` requires either a bbox or a
+    /// station id + radial (confirmed live: errors without one), so
+    /// this can't go through `fetch_hazard`.
+    pub async fn fetch_pireps(&self, bbox: &str) -> Result<Vec<Pirep>, WeatherError> {
+        let url = format!("{}/pirep", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("format", "json"), ("bbox", bbox)])
+            .send()
+            .await?
+            .error_for_status()?;
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Vec::new());
+        }
+        Ok(resp.json::<Vec<Pirep>>().await?)
     }
 
     async fn fetch_hazard<T: serde::de::DeserializeOwned>(

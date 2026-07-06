@@ -310,6 +310,71 @@ export interface Sigmet {
   coords: SigmetCoord[];
 }
 
+export interface Cwa {
+  cwsu: string;
+  name: string;
+  receiptTime: string;
+  validTimeFrom: number;
+  validTimeTo: number;
+  seriesId: string;
+  hazard: string;
+  qualifier: string | null;
+  base: number | null;
+  top: number | null;
+  geom: string;
+  // Same string-lat/lon shape as GAirmetCoord (confirmed live) — see
+  // hazards.rs.
+  coords: GAirmetCoord[];
+  rawText: string;
+}
+
+export interface PirepCloud {
+  cover: string;
+  base: number | null;
+  top: number | null;
+}
+
+// Mirrors ff-weather's Pirep — a point report, unlike the area/line
+// hazards above. icgBas2/icgTop2/tbBas2/tbTop2 etc. are a second
+// reported layer, present only when the pilot reported two distinct
+// layers.
+export interface Pirep {
+  receiptTime: string;
+  obsTime: number;
+  icaoId: string | null;
+  acType: string | null;
+  lat: number;
+  lon: number;
+  fltLvl: number | null;
+  clouds: PirepCloud[];
+  visib: unknown;
+  wxString: string | null;
+  temp: number | null;
+  icgBas1: number | null;
+  icgTop1: number | null;
+  icgInt1: string | null;
+  icgType1: string | null;
+  icgBas2: number | null;
+  icgTop2: number | null;
+  icgInt2: string | null;
+  icgType2: string | null;
+  tbBas1: number | null;
+  tbTop1: number | null;
+  tbInt1: string | null;
+  tbType1: string | null;
+  tbFreq1: string | null;
+  tbBas2: number | null;
+  tbTop2: number | null;
+  tbInt2: string | null;
+  tbType2: string | null;
+  tbFreq2: string | null;
+  // "PIREP" | "AIREP" | "Urgent PIREP" (confirmed live, all three) — an
+  // Urgent PIREP is a report severe enough to flag distinctly rather
+  // than blend in with routine ones.
+  pirepType: string;
+  rawOb: string;
+}
+
 // Mirror ff-weather's winds_aloft wire shape
 // (crates/ff-weather/src/winds_aloft.rs). `Wind` is a Rust enum with the
 // default serde external tagging: the unit variant serializes as the bare

@@ -7,6 +7,16 @@ use ff_weather::{StationWindsAloft, WindsAloftBulletin};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
+pub struct PirepQuery {
+    /// `minLon,minLat,maxLon,maxLat` — same convention as this server's
+    /// other bbox-taking routes (`/data/airports`, `/data/airspace`),
+    /// *not* aviationweather.gov's own `/pirep` bbox order
+    /// (`lat_min,lon_min,lat_max,lon_max`); converted below so clients
+    /// don't need to special-case this one endpoint.
+    pub bbox: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct StationQuery {
     /// Comma-separated ICAO station ids, e.g. "KSFO,KOAK".
     pub ids: String,
@@ -64,6 +74,43 @@ pub async fn get_sigmets(State(state): State<AppState>) -> Response {
 /// Proxies aviationweather.gov's international/oceanic SIGMET.
 pub async fn get_intl_sigmets(State(state): State<AppState>) -> Response {
     match state.weather.fetch_intl_sigmets().await {
+        Ok(records) => Json(records).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}
+
+/// Proxies aviationweather.gov's Center Weather Advisories — no
+/// station/region filter, same as upstream (all current records).
+pub async fn get_cwas(State(state): State<AppState>) -> Response {
+    match state.weather.fetch_cwas().await {
+        Ok(records) => Json(records).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}
+
+/// Proxies aviationweather.gov's PIREPs for a bounding box — unlike the
+/// other hazard endpoints, upstream requires one (see `PirepQuery`).
+pub async fn get_pireps(
+    State(state): State<AppState>,
+    Query(query): Query<PirepQuery>,
+) -> Response {
+    let parts: Vec<f64> = query
+        .bbox
+        .split(',')
+        .map_while(|p| p.trim().parse().ok())
+        .collect();
+    let [min_lon, min_lat, max_lon, max_lat] = match parts[..] {
+        [a, b, c, d] => [a, b, c, d],
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "bbox must be minLon,minLat,maxLon,maxLat",
+            )
+                .into_response()
+        }
+    };
+    let upstream_bbox = format!("{min_lat},{min_lon},{max_lat},{max_lon}");
+    match state.weather.fetch_pireps(&upstream_bbox).await {
         Ok(records) => Json(records).into_response(),
         Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
     }

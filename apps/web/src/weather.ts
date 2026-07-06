@@ -1,5 +1,5 @@
 import { fetchJson } from "./api";
-import type { GAirmet, Metar, Sigmet, Taf, WindsAloftBulletin } from "./types";
+import type { Cwa, GAirmet, Metar, Pirep, Sigmet, Taf, WindsAloftBulletin } from "./types";
 
 export { API_BASE_URL } from "./api";
 
@@ -27,6 +27,17 @@ export async function fetchGairmets(): Promise<GAirmet[]> {
 
 export async function fetchSigmets(): Promise<Sigmet[]> {
   return fetchJson<Sigmet[]>("/weather/sigmet");
+}
+
+export async function fetchCwas(): Promise<Cwa[]> {
+  return fetchJson<Cwa[]>("/weather/cwa");
+}
+
+/** `bbox` is `minLon,minLat,maxLon,maxLat` (same convention as
+ * fetchAirportsInBbox/fetchAirspaceInBbox) — ff-api reorders it to
+ * aviationweather.gov's own bbox convention before proxying. */
+export async function fetchPireps(bbox: string): Promise<Pirep[]> {
+  return fetchJson<Pirep[]>(`/weather/pirep?bbox=${encodeURIComponent(bbox)}`);
 }
 
 export async function fetchWindsAloft(
