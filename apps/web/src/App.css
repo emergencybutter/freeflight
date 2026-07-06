@@ -51,6 +51,11 @@
   background: rgba(19, 26, 42, 0.9);
 }
 
+.chart-kind-toggle-divider {
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  margin: 0.15rem 0;
+}
+
 .winds-aloft-altitude-select {
   width: auto;
   padding: 0.3rem 0.6rem;

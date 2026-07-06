@@ -849,6 +849,14 @@ export function MapView({
   const chartLayerIdsByKindRef = useRef<Map<string, string[]>>(new Map());
   const [chartKinds, setChartKinds] = useState<string[]>([]);
   const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(new Set(["Sectional"]));
+  // Independent on/off toggles (unlike the chart-kind group above, these
+  // aren't mutually exclusive — airspace, weather hazards, and airports
+  // are separate concerns a pilot might want any combination of). All
+  // default on since that's the map's existing behavior; these just add
+  // manual control on top of it.
+  const [visibleAirspace, setVisibleAirspace] = useState(true);
+  const [visibleWeatherHazards, setVisibleWeatherHazards] = useState(true);
+  const [visibleAirports, setVisibleAirports] = useState(true);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1530,16 +1538,22 @@ export function MapView({
     };
   }, [selectedProcedureId, loaded]);
 
+  // At most one chart kind at a time — Sectional/IFR Low/IFR High are
+  // meant to replace each other, not stack (they're the same charts at
+  // different altitude scopes, not independent overlays like airspace/
+  // weather/airports below). Clicking the already-selected one turns it
+  // off with nothing to replace it; clicking a different one swaps to
+  // just that one.
   const toggleChartKind = (kind: string) => {
     const map = mapRef.current;
     if (!map) return;
     setVisibleChartKinds((current) => {
-      const next = new Set(current);
-      const nowVisible = !next.has(kind);
-      if (nowVisible) next.add(kind);
-      else next.delete(kind);
-      for (const layerId of chartLayerIdsByKindRef.current.get(kind) ?? []) {
-        map.setLayoutProperty(layerId, "visibility", nowVisible ? "visible" : "none");
+      const next: Set<string> = current.has(kind) ? new Set() : new Set([kind]);
+      for (const [k, layerIds] of chartLayerIdsByKindRef.current) {
+        const nowVisible = next.has(k);
+        for (const layerId of layerIds) {
+          map.setLayoutProperty(layerId, "visibility", nowVisible ? "visible" : "none");
+        }
       }
       return next;
     });
@@ -1555,6 +1569,29 @@ export function MapView({
       );
     }
   };
+
+  const setLayersVisibility = (layerIds: string[], visible: boolean) => {
+    const map = mapRef.current;
+    if (!map) return;
+    for (const layerId of layerIds) {
+      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+    }
+  };
+  const toggleAirspaceVisibility = () =>
+    setVisibleAirspace((prev) => {
+      setLayersVisibility(["airspace-fill", "airspace-line"], !prev);
+      return !prev;
+    });
+  const toggleWeatherHazardsVisibility = () =>
+    setVisibleWeatherHazards((prev) => {
+      setLayersVisibility(["gairmet-fill", "gairmet-line", "sigmet-fill", "sigmet-line"], !prev);
+      return !prev;
+    });
+  const toggleAirportsVisibility = () =>
+    setVisibleAirports((prev) => {
+      setLayersVisibility(["airports-circle", "airports-label"], !prev);
+      return !prev;
+    });
 
   return (
     <div className="map-view">
@@ -1584,6 +1621,20 @@ export function MapView({
             </option>
           ))}
         </select>
+        {/* Unlike the chart-kind group above, these three are
+            independent on/off switches, not mutually exclusive — any
+            combination of airspace/weather hazards/airports can be
+            showing at once. */}
+        <div className="chart-kind-toggle-divider" />
+        <button className={visibleAirspace ? "selected" : ""} onClick={toggleAirspaceVisibility}>
+          Airspace
+        </button>
+        <button className={visibleWeatherHazards ? "selected" : ""} onClick={toggleWeatherHazardsVisibility}>
+          AIRMET/SIGMET
+        </button>
+        <button className={visibleAirports ? "selected" : ""} onClick={toggleAirportsVisibility}>
+          Airports
+        </button>
       </div>
     </div>
   );
