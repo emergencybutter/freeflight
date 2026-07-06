@@ -192,6 +192,34 @@ export interface AirspaceVolume {
   max_lon: number;
 }
 
+/** `GET /data/nearest_fix` — the closest waypoint or navaid to a tapped
+ * map point. `kind` is "WAYPOINT" for a plain enroute fix, else the
+ * navaid's own type (e.g. "VOR", "NDB"). */
+export interface NearestFix {
+  kind: string;
+  ident: string;
+  lat: number;
+  lon: number;
+}
+
+/** Everything a single map tap surfaces — airport selection happens
+ * separately (`onSelectAirport`, unconditional on every tap), this is
+ * the rest: the closest waypoint/navaid, plus whatever airspace/hazard
+ * features were actually under the tapped point. Each array holds raw
+ * GeoJSON feature properties (already deduped by id where relevant),
+ * one entry per feature found — App.tsx's tab panels format these via
+ * tapInfo.ts's *InfoHtml functions, same content the removed Popups
+ * used to show. */
+export interface MapTapResult {
+  lngLat: { lng: number; lat: number };
+  nearestFix: NearestFix | null;
+  airspace: Record<string, unknown>[];
+  gairmets: Record<string, unknown>[];
+  sigmets: Record<string, unknown>[];
+  cwas: Record<string, unknown>[];
+  pireps: Record<string, unknown>[];
+}
+
 /** `GET /cycles/latest` — mirrors ff-sync's CycleManifest. */
 export interface CycleManifest {
   cycle_id: string;

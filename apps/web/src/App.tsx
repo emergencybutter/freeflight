@@ -5,12 +5,37 @@ import { MapView } from "./MapView";
 import { findCrossedAirspace } from "./planning/airspaceCrossing";
 import { expandRoute } from "./planning/expandRoute";
 import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
+import { buildResolvedProcedure, transitionOptions } from "./planning/procedureLookup";
 import type { AircraftProfile } from "./planning/wasm";
-import type { Airport, AirportDetail as AirportDetailData, AirspaceVolume, Metar, Procedure, ProcedureDetail as ProcedureDetailData, RouteState, RouteWaypoint, Taf } from "./types";
+import { airspaceInfoHtml, cwaInfoHtml, gairmetInfoHtml, pirepInfoHtml, sigmetInfoHtml } from "./tapInfo";
+import type {
+  Airport,
+  AirportDetail as AirportDetailData,
+  AirspaceVolume,
+  MapTapResult,
+  Metar,
+  NearestFix,
+  Procedure,
+  ProcedureDetail as ProcedureDetailData,
+  RouteState,
+  RouteWaypoint,
+  Taf,
+} from "./types";
 import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
 const EMPTY_ROUTE: RouteState = { departure: null, arrival: null, sid: null, star: null, middleTokens: [] };
+
+type TapTabId = "airport" | "waypoint" | "airspace" | "pireps" | "airmet" | "sigmet" | "cwa";
+const TAP_TABS: { id: TapTabId; label: string }[] = [
+  { id: "airport", label: "Airport" },
+  { id: "waypoint", label: "Waypoint" },
+  { id: "airspace", label: "Airspace" },
+  { id: "pireps", label: "PIREPs" },
+  { id: "airmet", label: "AIRMET" },
+  { id: "sigmet", label: "SIGMET" },
+  { id: "cwa", label: "CWA" },
+];
 
 export default function App() {
   const [cycleId, setCycleId] = useState<string | null>(null);
@@ -18,6 +43,13 @@ export default function App() {
   const [selectedAirport, setSelectedAirport] = useState<Airport | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "plan">("map");
+  // Which of the map tap tabs is showing, and the data from the most
+  // recent tap (airspace/PIREP/AIRMET/SIGMET/CWA features at the point,
+  // plus the nearest waypoint/navaid) — airport selection itself is
+  // handled separately (selectedAirport below), since every tap selects
+  // the closest airport unconditionally regardless of the active tab.
+  const [activeTapTab, setActiveTapTab] = useState<TapTabId>("airport");
+  const [mapTap, setMapTap] = useState<MapTapResult | null>(null);
   // Lifted out of FlightPlanning (rather than its own local state) so
   // MapView can draw the planned route too. Departure/arrival/SID/STAR
   // are dedicated slots (picked explicitly via FlightPlanning's route
@@ -83,6 +115,31 @@ export default function App() {
     setSelectedProcedureId(null);
   };
 
+  // Same Airport -> RouteWaypoint shape AirportSlot/addResult already
+  // use in FlightPlanning.tsx (ident/name/lat/lon) — kept in sync with
+  // that rather than introducing a second conversion.
+  const airportToWaypoint = (airport: Airport): RouteWaypoint => ({
+    ident: airport.icao,
+    name: airport.name,
+    lat: airport.lat,
+    lon: airport.lon,
+  });
+  const setSelectedAirportAsDeparture = () => {
+    if (!selectedAirport) return;
+    setRoute({ ...route, departure: airportToWaypoint(selectedAirport), sid: null });
+  };
+  const setSelectedAirportAsArrival = () => {
+    if (!selectedAirport) return;
+    setRoute({ ...route, arrival: airportToWaypoint(selectedAirport), star: null });
+  };
+  const addSelectedAirportToFlightPlan = () => {
+    if (!selectedAirport) return;
+    setRoute({
+      ...route,
+      middleTokens: [...route.middleTokens, { kind: "point", point: airportToWaypoint(selectedAirport) }],
+    });
+  };
+
   if (loadError) {
     return (
       <div className="error">
@@ -102,7 +159,6 @@ export default function App() {
   return (
     <div className="app-layout">
       <div className="sync-status">
-        Cycle {cycleId} · live from ff-api at {API_BASE_URL}
         <span className="view-toggle">
           <button className={view === "map" ? "selected" : ""} onClick={() => setView("map")}>
             Map
@@ -123,22 +179,66 @@ export default function App() {
         <MapView
           selectedAirport={selectedAirport}
           onSelectAirport={selectAirport}
+          onMapTap={setMapTap}
           selectedProcedureId={selectedProcedureId}
           visible={view === "map"}
           route={routePoints}
           preferredAltitudeFt={profile.cruise_altitude_ft}
         />
-        <div className="layout">
-          <AirportSearch selectedIcao={selectedAirport?.icao ?? null} onSelect={selectAirport} />
-          {selectedAirport && (
-            <AirportPanel
-              icao={selectedAirport.icao}
-              selectedProcedureId={selectedProcedureId}
-              onSelectProcedure={setSelectedProcedureId}
-            />
-          )}
-          {selectedProcedureId && <ProcedurePanel procedureId={selectedProcedureId} />}
+        <div className="tap-tab-bar">
+          {TAP_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              className={activeTapTab === tab.id ? "selected" : ""}
+              onClick={() => setActiveTapTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
+        {activeTapTab === "airport" && (
+          <>
+            <AirportActionBar
+              selectedAirport={selectedAirport}
+              isDeparture={selectedAirport !== null && selectedAirport.icao === route.departure?.ident}
+              isArrival={selectedAirport !== null && selectedAirport.icao === route.arrival?.ident}
+              onSelectAirport={selectAirport}
+              onSetDeparture={setSelectedAirportAsDeparture}
+              onSetArrival={setSelectedAirportAsArrival}
+              onAddToFlightPlan={addSelectedAirportToFlightPlan}
+            />
+            <div className="layout">
+              {selectedAirport && (
+                <AirportPanel
+                  icao={selectedAirport.icao}
+                  selectedProcedureId={selectedProcedureId}
+                  onSelectProcedure={setSelectedProcedureId}
+                />
+              )}
+              {selectedProcedureId && (
+                <ProcedurePanel procedureId={selectedProcedureId} route={route} onRouteChange={setRoute} />
+              )}
+            </div>
+          </>
+        )}
+        {activeTapTab === "waypoint" && (
+          <WaypointTab nearestFix={mapTap?.nearestFix ?? null} route={route} onRouteChange={setRoute} />
+        )}
+        {activeTapTab === "airspace" && (
+          <TapInfoTab items={mapTap?.airspace ?? []} formatter={airspaceInfoHtml} emptyText="No airspace at the last tap." />
+        )}
+        {activeTapTab === "pireps" && (
+          <TapInfoTab items={mapTap?.pireps ?? []} formatter={pirepInfoHtml} emptyText="No PIREP at the last tap." />
+        )}
+        {activeTapTab === "airmet" && (
+          <TapInfoTab items={mapTap?.gairmets ?? []} formatter={gairmetInfoHtml} emptyText="No G-AIRMET at the last tap." />
+        )}
+        {activeTapTab === "sigmet" && (
+          <TapInfoTab items={mapTap?.sigmets ?? []} formatter={sigmetInfoHtml} emptyText="No SIGMET at the last tap." />
+        )}
+        {activeTapTab === "cwa" && (
+          <TapInfoTab items={mapTap?.cwas ?? []} formatter={cwaInfoHtml} emptyText="No CWA at the last tap." />
+        )}
       </div>
       <div style={{ display: view === "plan" ? "contents" : "none" }}>
         <FlightPlanning
@@ -151,23 +251,121 @@ export default function App() {
           onProfileChange={setProfile}
         />
       </div>
+      <div className="status-footer">
+        Cycle {cycleId} · live from ff-api at {API_BASE_URL}
+      </div>
     </div>
   );
 }
 
-function AirportSearch({
-  selectedIcao,
-  onSelect,
+/** The Waypoint tap tab: the nearest waypoint/navaid to the last map
+ * tap (fetched server-side — see MapView's tap handler), with a button
+ * to drop it into the route builder's middle fixes list, same shape
+ * AirportActionBar's "Add to Flight Plan" and the route builder's own
+ * ident search already build (`{ kind: "point", point: {...} }`). */
+function WaypointTab({
+  nearestFix,
+  route,
+  onRouteChange,
 }: {
-  selectedIcao: string | null;
-  onSelect: (airport: Airport) => void;
+  nearestFix: NearestFix | null;
+  route: RouteState;
+  onRouteChange: (route: RouteState) => void;
 }) {
+  const addToFlightPlan = () => {
+    if (!nearestFix) return;
+    onRouteChange({
+      ...route,
+      middleTokens: [
+        ...route.middleTokens,
+        { kind: "point", point: { ident: nearestFix.ident, name: null, lat: nearestFix.lat, lon: nearestFix.lon } },
+      ],
+    });
+  };
+
+  return (
+    <div className="tap-info-tab">
+      {nearestFix ? (
+        <>
+          <h2>
+            {nearestFix.kind === "WAYPOINT" ? "Waypoint" : nearestFix.kind}: {nearestFix.ident}
+            <button className="add-procedure-button" onClick={addToFlightPlan} aria-label="Add to Flight Plan">
+              +
+            </button>
+          </h2>
+          <p className="hint">
+            {nearestFix.lat.toFixed(4)}, {nearestFix.lon.toFixed(4)}
+          </p>
+        </>
+      ) : (
+        <p className="hint">Tap the map to find the nearest waypoint or navaid.</p>
+      )}
+    </div>
+  );
+}
+
+/** The Airspace/PIREPs/AIRMET/SIGMET/CWA tap tabs: one card per feature
+ * found at the last map tap, rendered from the same pre-escaped HTML
+ * fragments (tapInfo.ts) the removed MapLibre Popups used to show —
+ * reused as-is rather than re-deriving the formatting logic as JSX. */
+function TapInfoTab({
+  items,
+  formatter,
+  emptyText,
+}: {
+  items: Record<string, unknown>[];
+  formatter: (props: Record<string, unknown>) => string;
+  emptyText: string;
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="tap-info-tab">
+        <p className="hint">{emptyText}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="tap-info-tab">
+      {items.map((props, i) => (
+        // eslint-disable-next-line react/no-array-index-key -- these
+        // rows have no stable id of their own across taps; the tap
+        // itself (not this list) is the thing that changes over time.
+        <div key={i} className="tap-info-item" dangerouslySetInnerHTML={{ __html: formatter(props) }} />
+      ))}
+    </div>
+  );
+}
+
+/** The map tab's bottom bar: shows the selected airport and lets it be
+ * changed by tapping the label, replacing what used to be a separate
+ * always-visible search panel — tapping swaps the label for a search
+ * input (same debounced /data/search this replaces), and picking a
+ * result swaps back to label mode. The three route-builder actions
+ * stay visible either way, just disabled with nothing selected. */
+function AirportActionBar({
+  selectedAirport,
+  isDeparture,
+  isArrival,
+  onSelectAirport,
+  onSetDeparture,
+  onSetArrival,
+  onAddToFlightPlan,
+}: {
+  selectedAirport: Airport | null;
+  isDeparture: boolean;
+  isArrival: boolean;
+  onSelectAirport: (airport: Airport) => void;
+  onSetDeparture: () => void;
+  onSetArrival: () => void;
+  onAddToFlightPlan: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Airport[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Debounced search-as-you-type against /data/search.
   useEffect(() => {
+    if (!editing) return;
     const q = query.trim();
     if (q.length < 2) {
       setResults([]);
@@ -191,35 +389,60 @@ function AirportSearch({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, editing]);
+
+  const pick = (airport: Airport) => {
+    onSelectAirport(airport);
+    setEditing(false);
+    setQuery("");
+    setResults([]);
+  };
 
   return (
-    <div className="panel airport-list">
-      <h2>Airports</h2>
-      <input
-        className="airport-search"
-        type="search"
-        placeholder="Search ident or name (e.g. KSFO, O'Hare)…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        autoFocus
-      />
-      {error && <p className="hint">search failed: {error}</p>}
-      {!error && query.trim().length < 2 && (
-        <p className="hint">Nationwide cycle — search any US airport, or zoom the map in to see airports in view.</p>
+    <div className="airport-action-bar">
+      {editing ? (
+        <span className="airport-action-bar-search">
+          <input
+            className="airport-search"
+            type="search"
+            placeholder="Search ident or name (e.g. KSFO, O'Hare)…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            // A blur fired by clicking a result button would otherwise
+            // close the dropdown before that click's onClick ever runs
+            // — deferring the revert-to-label lets the click land first.
+            onBlur={() => setTimeout(() => setEditing(false), 150)}
+            autoFocus
+          />
+          {error && <p className="hint">search failed: {error}</p>}
+          {results.length > 0 && (
+            <ul className="airport-action-bar-results">
+              {results.map((a) => (
+                <li key={a.icao}>
+                  <button onClick={() => pick(a)}>
+                    <strong>{a.icao}</strong> {a.iata ? `(${a.iata})` : ""} — <span className="airport-name">{a.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </span>
+      ) : (
+        <button className="airport-action-bar-label" onClick={() => setEditing(true)}>
+          {selectedAirport ? `${selectedAirport.icao} — ${selectedAirport.name}` : "No airport selected — tap to search"}
+        </button>
       )}
-      {!error && query.trim().length >= 2 && results.length === 0 && <p className="hint">no matches</p>}
-      <ul>
-        {results.map((a) => (
-          <li key={a.icao}>
-            <button className={a.icao === selectedIcao ? "selected" : ""} onClick={() => onSelect(a)}>
-              <strong>{a.icao}</strong> {a.iata ? `(${a.iata})` : ""}
-              <br />
-              <span className="airport-name">{a.name}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <span className="view-toggle">
+        <button className={isDeparture ? "selected" : ""} disabled={!selectedAirport} onClick={onSetDeparture}>
+          Set as Departure
+        </button>
+        <button className={isArrival ? "selected" : ""} disabled={!selectedAirport} onClick={onSetArrival}>
+          Set as Arrival
+        </button>
+        <button disabled={!selectedAirport} onClick={onAddToFlightPlan} aria-label="Add to Flight Plan">
+          +
+        </button>
+      </span>
     </div>
   );
 }
@@ -428,14 +651,24 @@ function WeatherSection({ icao }: { icao: string }) {
   );
 }
 
-function ProcedurePanel({ procedureId }: { procedureId: string }) {
+function ProcedurePanel({
+  procedureId,
+  route,
+  onRouteChange,
+}: {
+  procedureId: string;
+  route: RouteState;
+  onRouteChange: (route: RouteState) => void;
+}) {
   const [detail, setDetail] = useState<ProcedureDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pickingTransition, setPickingTransition] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
     setError(null);
+    setPickingTransition(false);
     fetchProcedureDetail(procedureId)
       .then((d) => {
         if (!cancelled) setDetail(d);
@@ -463,11 +696,49 @@ function ProcedurePanel({ procedureId }: { procedureId: string }) {
     );
   }
 
+  // "SID"/"STAR" only in practice (Procedure.kind is a plain string
+  // since APPROACH procedures share the same shape, but this panel's
+  // caller — AirportPanel's procedure list — only ever links to SID/
+  // STAR entries). Same "skip the picker if there's only one real
+  // choice" behavior as FlightPlanning's own ProcedurePickerButton:
+  // resolves immediately when there's a single enroute transition (or
+  // none at all — falls back to COMMON for the rare procedure that's
+  // just runway/common legs with no named enroute segment), and only
+  // shows the transition list when there's an actual choice to make.
+  const resolveWith = (transitionId: string) => {
+    const kind = detail.kind as "SID" | "STAR";
+    const resolved = buildResolvedProcedure(detail.airport_icao, kind, detail, transitionId);
+    if (!resolved) return;
+    onRouteChange(kind === "SID" ? { ...route, sid: resolved } : { ...route, star: resolved });
+    setPickingTransition(false);
+  };
+  const addToFlightPlan = () => {
+    const enroute = transitionOptions(detail);
+    if (enroute.length > 1) {
+      setPickingTransition(true);
+      return;
+    }
+    const transitionId = enroute[0]?.id ?? detail.transitions.find((t) => t.kind === "COMMON")?.id;
+    if (transitionId) resolveWith(transitionId);
+  };
+
   return (
     <div className="panel procedure-detail">
       <h2>
         {detail.kind} {detail.ident}
+        <button className="add-procedure-button" onClick={addToFlightPlan} aria-label="Add to Flight Plan">
+          +
+        </button>
       </h2>
+      {pickingTransition && (
+        <ul className="procedure-list">
+          {transitionOptions(detail).map((t) => (
+            <li key={t.id}>
+              <button onClick={() => resolveWith(t.id)}>{t.ident}</button>
+            </li>
+          ))}
+        </ul>
+      )}
       {detail.runway_ident && <p className="hint">runway {detail.runway_ident}</p>}
       {detail.transitions.map((t) => (
         <div key={t.id} className="transition">

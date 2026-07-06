@@ -3,13 +3,21 @@ import maplibregl, { type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
-import { fetchAirportDetail, fetchAirportsInBbox, fetchAirspaceInBbox, fetchCharts, fetchProcedureDetail } from "./data";
+import {
+  fetchAirportDetail,
+  fetchAirportsInBbox,
+  fetchAirspaceInBbox,
+  fetchCharts,
+  fetchNearestFix,
+  fetchProcedureDetail,
+} from "./data";
 import type {
   Airport,
   AirspaceVolume,
   ChartCatalogEntry,
   Cwa,
   GAirmet,
+  MapTapResult,
   Pirep,
   ProcedureDetail,
   RouteWaypoint,
@@ -196,47 +204,6 @@ function cwaGeoJson(records: Cwa[]): GeoJSON.FeatureCollection {
   };
 }
 
-/** Popup body for a G-AIRMET feature — no raw bulletin text like
- * SIGMET/PIREP have, so this is built from the structured fields
- * instead. FZLVL (freezing level) reports fzlbase/fzltop rather than
- * base/top (confirmed live: FZLVL records have null base/top). */
-function gairmetPopupHtml(props: Record<string, unknown>): string {
-  const hazard = props.hazard as string;
-  const severity = props.severity as string | null;
-  const base = props.base as string | null;
-  const top = props.top as string | null;
-  const fzlbase = props.fzlbase as string | null;
-  const fzltop = props.fzltop as string | null;
-  const validTime = props.validTime as string;
-  const altitude = hazard === "FZLVL" ? [fzlbase, fzltop].filter(Boolean).join("–") : [base, top].filter(Boolean).join("–");
-  const parts = [`<strong>G-AIRMET: ${escapeHtml(hazard)}${severity ? ` (${escapeHtml(severity)})` : ""}</strong>`];
-  if (altitude) parts.push(escapeHtml(altitude));
-  parts.push(`<span style="opacity: 0.7;">valid ${escapeHtml(validTime)}</span>`);
-  return parts.join("<br>");
-}
-
-function sigmetPopupHtml(props: Record<string, unknown>): string {
-  const hazard = props.hazard as string;
-  const low = props.altitudeLow1 as number | null;
-  const hi = props.altitudeHi1 as number | null;
-  const raw = props.rawAirSigmet as string;
-  const altitude = low !== null || hi !== null ? `${low ?? "SFC"}–${hi ?? "unlimited"} ft` : null;
-  const parts = [`<strong>SIGMET: ${escapeHtml(hazard)}</strong>`];
-  if (altitude) parts.push(escapeHtml(altitude));
-  parts.push(`<span style="font-family: monospace; font-size: 0.85em;">${escapeHtml(raw)}</span>`);
-  return parts.join("<br>");
-}
-
-function cwaPopupHtml(props: Record<string, unknown>): string {
-  const hazard = props.hazard as string;
-  const cwsu = props.cwsu as string;
-  const rawText = props.rawText as string;
-  return [
-    `<strong>CWA: ${escapeHtml(hazard)} (${escapeHtml(cwsu)} Center)</strong>`,
-    `<span style="font-family: monospace; font-size: 0.85em; white-space: pre-line;">${escapeHtml(rawText)}</span>`,
-  ].join("<br>");
-}
-
 /** Worst of the icing/turbulence intensity codes a PIREP reports,
  * across both possible layers — the API gives free-text intensity
  * codes (e.g. "LGT-MOD", "SEV", "NEG"), not a severity enum, so this
@@ -251,17 +218,6 @@ function pirepSeverity(r: Pirep): "SEVERE" | "MODERATE" | "LIGHT" | "NONE" {
   if (texts.includes("MOD")) return "MODERATE";
   if (texts.includes("LGT") || texts.includes("LIGHT")) return "LIGHT";
   return "NONE";
-}
-
-/** Escapes text from aviationweather.gov before it goes into a Popup's
- * `.setHTML()` — third-party data, so treat it like any other
- * untrusted string rather than assuming it's safe to interpolate raw. */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 /** Short one-line summary for a PIREP's popup — the raw text (`rawOb`)
@@ -775,6 +731,7 @@ async function loadWeatherOverlays(
 export function MapView({
   selectedAirport,
   onSelectAirport,
+  onMapTap,
   selectedProcedureId,
   visible,
   route,
@@ -782,6 +739,10 @@ export function MapView({
 }: {
   selectedAirport: Airport | null;
   onSelectAirport: (airport: Airport) => void;
+  /** Everything about a tap besides airport selection (which is always
+   * unconditional — see the map's "click" handler) — feeds the tab bar
+   * below the map (Waypoint/Airspace/PIREPs/AIRMET/SIGMET/CWA). */
+  onMapTap: (result: MapTapResult) => void;
   selectedProcedureId: string | null;
   /** Whether this is the currently-shown view. App.tsx keeps MapView
    * mounted (rather than conditionally rendering it) even while the
@@ -857,14 +818,15 @@ export function MapView({
   const [chartKinds, setChartKinds] = useState<string[]>([]);
   const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(new Set(["Sectional"]));
   // Independent on/off toggles (unlike the chart-kind group above, these
-  // aren't mutually exclusive — airspace, weather hazards, airports, and
-  // PIREPs are separate concerns a pilot might want any combination of).
-  // All default on since that's the map's existing behavior; these just
-  // add manual control on top of it.
+  // aren't mutually exclusive — airspace, weather hazards, airports,
+  // PIREPs, and CWA are separate concerns a pilot might want any
+  // combination of). All default on since that's the map's existing
+  // behavior; these just add manual control on top of it.
   const [visibleAirspace, setVisibleAirspace] = useState(true);
   const [visibleWeatherHazards, setVisibleWeatherHazards] = useState(true);
   const [visibleAirports, setVisibleAirports] = useState(true);
   const [visiblePireps, setVisiblePireps] = useState(true);
+  const [visibleCwas, setVisibleCwas] = useState(true);
 
   // Adds map sources/layers for one chart kind's catalog entries, if it
   // hasn't happened already — a no-op on repeat calls (e.g. re-selecting
@@ -903,8 +865,8 @@ export function MapView({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: BASEMAP_STYLE_URL,
-      center: [-98, 39],
-      zoom: 3,
+      center: [-73.874, 40.7769], // KLGA
+      zoom: 6,
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -1301,141 +1263,72 @@ export function MapView({
         paint: { "text-color": "#ffe066", "text-halo-color": "#0b1220", "text-halo-width": 1 },
       });
 
-      map.on("click", "airports-circle", (e) => {
-        const icao = e.features?.[0]?.properties?.icao as string | undefined;
-        const airport = icao ? visibleAirportsRef.current.find((a) => a.icao === icao) : undefined;
-        if (airport) onSelectAirport(airport);
-      });
-      map.on("mouseenter", "airports-circle", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "airports-circle", () => {
-        map.getCanvas().style.cursor = "";
-      });
+      // Single unified tap handler, replacing the old per-layer Popups
+      // (airspace/G-AIRMET/SIGMET/CWA/PIREP each used to open their own
+      // MapLibre Popup on click). Every tap now does two things at
+      // once: selects whichever airport in the current view is closest
+      // to the tap (regardless of what's actually under the point —
+      // there's no dedicated "airports-circle" click binding anymore),
+      // and gathers everything else at the tapped point for the tab bar
+      // below the map to display (Airspace/PIREPs/AIRMET/SIGMET/CWA
+      // tabs) plus the nearest waypoint/navaid (Waypoint tab, needs its
+      // own network round trip since there's no client-side navaid/
+      // waypoint layer to query locally the way the others are).
+      map.on("click", (e) => {
+        const airports = visibleAirportsRef.current;
+        if (airports.length > 0) {
+          let nearest = airports[0];
+          let bestDistSq = (nearest.lat - e.lngLat.lat) ** 2 + (nearest.lon - e.lngLat.lng) ** 2;
+          for (const a of airports) {
+            const distSq = (a.lat - e.lngLat.lat) ** 2 + (a.lon - e.lngLat.lng) ** 2;
+            if (distSq < bestDistSq) {
+              bestDistSq = distSq;
+              nearest = a;
+            }
+          }
+          onSelectAirport(nearest);
+        }
 
-      // Airspace fill/line otherwise gives no way to tell what a colored
-      // shape actually means beyond the class-color convention — same
-      // self-contained Popup treatment as PIREPs below. A click can land
-      // inside several stacked shelves at once (e.g. SFO's Class B
-      // tiers), so this lists every one rather than just the topmost;
-      // it's also deduped by id since a single large polygon can get
-      // reported more than once where it crosses this GeoJSON source's
-      // internal tile boundaries. Deliberately *not* skipped just
-      // because the click also hit an airport marker (tried that;
-      // reverted) — Class C/D shelves are small and centered on their
-      // own primary airport, so nearly every click near one also lands
-      // on that airport's marker, which suppressed the airspace popup
-      // almost every time for exactly the polygons a pilot most needs
-      // explained. The airport panel (app UI, below the map) and this
-      // popup (floating on the map itself) don't compete for the same
-      // space, so both can show at once without issue.
-      map.on("click", "airspace-fill", (e) => {
-        const seenIds = new Set<string>();
-        const rows = (e.features ?? [])
-          .filter((f) => {
-            const id = f.properties?.id as string;
-            if (seenIds.has(id)) return false;
-            seenIds.add(id);
-            return true;
+        const dedupeById = (features: maplibregl.MapGeoJSONFeature[]): Record<string, unknown>[] => {
+          const seenIds = new Set<string>();
+          const out: Record<string, unknown>[] = [];
+          for (const f of features) {
+            const id = f.properties?.id as string | undefined;
+            if (id) {
+              if (seenIds.has(id)) continue;
+              seenIds.add(id);
+            }
+            out.push(f.properties ?? {});
+          }
+          return out;
+        };
+        // A small padded box around the tap point, not the exact pixel,
+        // for the small/thin targets (PIREP's point circles, G-AIRMET's
+        // freezing-level lines) — a real tap easily lands a few pixels
+        // off a 4px-radius circle or a 1px line, and the fill layers
+        // below (airspace/sigmet/cwa) are already large enough not to
+        // need this forgiveness.
+        const nearPoint: [maplibregl.PointLike, maplibregl.PointLike] = [
+          [e.point.x - 6, e.point.y - 6],
+          [e.point.x + 6, e.point.y + 6],
+        ];
+        const base = {
+          lngLat: { lng: e.lngLat.lng, lat: e.lngLat.lat },
+          airspace: dedupeById(map.queryRenderedFeatures(e.point, { layers: ["airspace-fill"] })),
+          gairmets: dedupeById(map.queryRenderedFeatures(nearPoint, { layers: ["gairmet-fill", "gairmet-line"] })),
+          sigmets: dedupeById(map.queryRenderedFeatures(e.point, { layers: ["sigmet-fill"] })),
+          cwas: dedupeById(map.queryRenderedFeatures(e.point, { layers: ["cwa-fill"] })),
+          pireps: dedupeById(map.queryRenderedFeatures(nearPoint, { layers: ["pirep-circle"] })),
+        };
+        fetchNearestFix(e.lngLat.lat, e.lngLat.lng)
+          .then((nearestFix) => {
+            if (unmountedRef.current) return;
+            onMapTap({ ...base, nearestFix });
           })
-          .map((f) => {
-            const { name, class: cls, floor, ceiling } = f.properties as {
-              name: string;
-              class: string;
-              floor: string;
-              ceiling: string;
-            };
-            const label = cls === "B" || cls === "C" || cls === "D" ? `Class ${cls}` : cls;
-            return `<strong>${escapeHtml(label)}: ${escapeHtml(name)}</strong><br>${escapeHtml(floor)}–${escapeHtml(ceiling)}`;
+          .catch(() => {
+            if (unmountedRef.current) return;
+            onMapTap({ ...base, nearestFix: null });
           });
-        if (rows.length === 0) return;
-        new maplibregl.Popup({ closeButton: true })
-          .setLngLat(e.lngLat)
-          .setHTML(rows.join('<hr style="margin: 4px 0; opacity: 0.3;">'))
-          .addTo(map);
-      });
-      map.on("mouseenter", "airspace-fill", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "airspace-fill", () => {
-        map.getCanvas().style.cursor = "";
-      });
-
-      // Same self-contained Popup treatment for the weather hazard
-      // overlays — same reasoning as airspace above: a colored shape
-      // alone doesn't say what it means. G-AIRMET's fill layer is
-      // filtered to Polygon geometry only (see its addLayer call), so
-      // its LINE records (e.g. freezing-level lines) need their own
-      // click binding on "gairmet-line" to be tappable at all.
-      const gairmetClick = (e: maplibregl.MapLayerMouseEvent) => {
-        const feature = e.features?.[0];
-        if (!feature) return;
-        new maplibregl.Popup({ closeButton: true })
-          .setLngLat(e.lngLat)
-          .setHTML(gairmetPopupHtml(feature.properties ?? {}))
-          .addTo(map);
-      };
-      map.on("click", "gairmet-fill", gairmetClick);
-      map.on("click", "gairmet-line", gairmetClick);
-      for (const layerId of ["gairmet-fill", "gairmet-line"]) {
-        map.on("mouseenter", layerId, () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", layerId, () => {
-          map.getCanvas().style.cursor = "";
-        });
-      }
-
-      map.on("click", "sigmet-fill", (e) => {
-        const feature = e.features?.[0];
-        if (!feature) return;
-        new maplibregl.Popup({ closeButton: true })
-          .setLngLat(e.lngLat)
-          .setHTML(sigmetPopupHtml(feature.properties ?? {}))
-          .addTo(map);
-      });
-      map.on("mouseenter", "sigmet-fill", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "sigmet-fill", () => {
-        map.getCanvas().style.cursor = "";
-      });
-
-      map.on("click", "cwa-fill", (e) => {
-        const feature = e.features?.[0];
-        if (!feature) return;
-        new maplibregl.Popup({ closeButton: true })
-          .setLngLat(e.lngLat)
-          .setHTML(cwaPopupHtml(feature.properties ?? {}))
-          .addTo(map);
-      });
-      map.on("mouseenter", "cwa-fill", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "cwa-fill", () => {
-        map.getCanvas().style.cursor = "";
-      });
-
-      // PIREPs don't have their own detail panel/app state the way
-      // selecting an airport does — a self-contained MapLibre Popup
-      // showing the summary + raw text is enough for a point report
-      // that's really just "here's what this pilot said."
-      map.on("click", "pirep-circle", (e) => {
-        const feature = e.features?.[0];
-        if (!feature || feature.geometry.type !== "Point") return;
-        const { summary, rawOb } = feature.properties as { summary: string; rawOb: string };
-        new maplibregl.Popup({ closeButton: true })
-          .setLngLat(feature.geometry.coordinates as [number, number])
-          .setHTML(
-            `<strong>${escapeHtml(summary) || "PIREP"}</strong><br><span style="font-family: monospace; font-size: 0.85em;">${escapeHtml(rawOb)}</span>`,
-          )
-          .addTo(map);
-      });
-      map.on("mouseenter", "pirep-circle", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "pirep-circle", () => {
-        map.getCanvas().style.cursor = "";
       });
 
       // Airport markers are view-driven (bbox query per moveend, hidden
@@ -1539,7 +1432,7 @@ export function MapView({
           if (!cancelled) setRunways(detail.runways);
         })
         .catch((err: unknown) => console.warn("couldn't load runways for the map", err));
-      map.flyTo({ center: [selectedAirport.lon, selectedAirport.lat], zoom: 12, duration: 800 });
+      map.flyTo({ center: [selectedAirport.lon, selectedAirport.lat], zoom: 9, duration: 800 });
     } else {
       setRunways([]);
     }
@@ -1638,6 +1531,11 @@ export function MapView({
       setLayersVisibility(["pirep-circle"], !prev);
       return !prev;
     });
+  const toggleCwaVisibility = () =>
+    setVisibleCwas((prev) => {
+      setLayersVisibility(["cwa-fill", "cwa-line"], !prev);
+      return !prev;
+    });
 
   return (
     <div className="map-view">
@@ -1669,8 +1567,8 @@ export function MapView({
         </select>
         {/* Unlike the chart-kind group above, these are independent
             on/off switches, not mutually exclusive — any combination of
-            airspace/weather hazards/airports/PIREPs can be showing at
-            once. */}
+            airspace/weather hazards/airports/PIREPs/CWA can be showing
+            at once. */}
         <div className="chart-kind-toggle-divider" />
         <button className={visibleAirspace ? "selected" : ""} onClick={toggleAirspaceVisibility}>
           Airspace
@@ -1683,6 +1581,9 @@ export function MapView({
         </button>
         <button className={visiblePireps ? "selected" : ""} onClick={togglePirepsVisibility}>
           PIREPs
+        </button>
+        <button className={visibleCwas ? "selected" : ""} onClick={toggleCwaVisibility}>
+          CWA
         </button>
       </div>
     </div>

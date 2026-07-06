@@ -10,6 +10,7 @@ import type {
   ChartCatalogEntry,
   CycleManifest,
   IdentSearchRow,
+  NearestFix,
   Procedure,
   ProcedureDetail,
 } from "./types";
@@ -61,4 +62,10 @@ export async function fetchCharts(): Promise<ChartCatalogEntry[]> {
  * asks for a bounding box rather than everything, same as airports. */
 export async function fetchAirspaceInBbox(bbox: string): Promise<AirspaceVolume[]> {
   return fetchJson<AirspaceVolume[]>(`/data/airspace?bbox=${encodeURIComponent(bbox)}`);
+}
+
+/** Closest waypoint/navaid to a tapped map point — backs the map's
+ * "Waypoint" tap tab. */
+export async function fetchNearestFix(lat: number, lon: number): Promise<NearestFix> {
+  return fetchJson<NearestFix>(`/data/nearest_fix?lat=${lat}&lon=${lon}`);
 }
