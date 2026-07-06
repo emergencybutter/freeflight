@@ -855,3 +855,105 @@ pub async fn airspace(State(state): State<AppState>, Query(query): Query<BboxQue
         Err(err) => err.into_response(),
     }
 }
+
+#[derive(Debug, Serialize)]
+pub struct NearestFixRow {
+    /// "WAYPOINT" for a plain enroute fix, else the navaid's own type
+    /// (e.g. "VOR", "VORTAC", "NDB") — there's no single ident-scoped
+    /// "kind" column spanning both tables, so this is populated from
+    /// whichever table the result actually came from.
+    pub kind: String,
+    pub ident: String,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PointQuery {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// Nearest waypoint or navaid to a tapped map point — used by the map's
+/// "Waypoint" tap tab. Straight full-table scan over both `waypoint`
+/// (~49k rows) and `navaid` (~900 rows nationwide) computing planar
+/// distance-squared in Rust, same "load it all, filter/compare in Rust"
+/// approach `airports`/`airspace` above already use for bbox queries —
+/// at this row count a single scan is low-single-digit milliseconds, so
+/// a spatial index isn't worth the complexity yet.
+pub async fn nearest_fix(
+    State(state): State<AppState>,
+    Query(query): Query<PointQuery>,
+) -> Response {
+    let (lat, lon) = (query.lat, query.lon);
+    let result = with_bundle(&state, move |conn| {
+        let mut best: Option<(f64, NearestFixRow)> = None;
+
+        let mut wpt_stmt = conn.prepare("SELECT ident, lat, lon FROM waypoint")?;
+        let wpt_rows = wpt_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?;
+        for row in wpt_rows {
+            let (ident, wlat, wlon) = row?;
+            let dist_sq = (wlat - lat).powi(2) + (wlon - lon).powi(2);
+            if best
+                .as_ref()
+                .is_none_or(|(best_dist, _)| dist_sq < *best_dist)
+            {
+                best = Some((
+                    dist_sq,
+                    NearestFixRow {
+                        kind: "WAYPOINT".to_string(),
+                        ident,
+                        lat: wlat,
+                        lon: wlon,
+                    },
+                ));
+            }
+        }
+
+        let mut navaid_stmt = conn.prepare("SELECT ident, navaid_type, lat, lon FROM navaid")?;
+        let navaid_rows = navaid_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+        for row in navaid_rows {
+            let (ident, navaid_type, nlat, nlon) = row?;
+            let dist_sq = (nlat - lat).powi(2) + (nlon - lon).powi(2);
+            if best
+                .as_ref()
+                .is_none_or(|(best_dist, _)| dist_sq < *best_dist)
+            {
+                best = Some((
+                    dist_sq,
+                    NearestFixRow {
+                        kind: navaid_type,
+                        ident,
+                        lat: nlat,
+                        lon: nlon,
+                    },
+                ));
+            }
+        }
+
+        Ok(best.map(|(_, row)| row))
+    })
+    .await;
+    match result {
+        Ok(Some(row)) => Json(row).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "no waypoints or navaids in this cycle",
+        )
+            .into_response(),
+        Err(err) => err.into_response(),
+    }
+}

@@ -41,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/data/search_idents", get(data::search_idents))
         .route("/data/charts", get(data::charts))
         .route("/data/airspace", get(data::airspace))
+        .route("/data/nearest_fix", get(data::nearest_fix))
         .route("/notams", get(notams::get_notams))
         .nest_service("/bundles", bundles)
         .with_state(state)
