@@ -82,6 +82,12 @@ export interface FixCoord {
 export interface ProcedureDetail extends Procedure {
   transitions: ProcedureTransitionDetail[];
   fixes: Record<string, FixCoord>;
+  /** The FAA d-TPP plate chart for this procedure, if ff-etl's
+   * best-effort ident matching found one — null doesn't mean there's no
+   * real chart, just that it couldn't be confidently matched (common for
+   * some approach types). */
+  chart_name: string | null;
+  chart_url: string | null;
 }
 
 export interface AirwayLegRow {

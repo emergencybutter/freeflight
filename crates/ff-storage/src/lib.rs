@@ -13,6 +13,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("migrations/0001_init.sql")),
     (2, include_str!("migrations/0002_airspace_bbox.sql")),
     (3, include_str!("migrations/0003_airway_ident_index.sql")),
+    (4, include_str!("migrations/0004_dtpp_chart.sql")),
 ];
 
 #[derive(Debug, Error)]

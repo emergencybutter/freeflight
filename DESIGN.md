@@ -99,7 +99,7 @@ consumed today vs. designed-for; update it as sources come online.
 | VFR charts (Sectional, TAC, Helicopter) | FAA digital raster charts | GeoTIFF | 56-day cycle | Sectionals implemented in the automated `ff-etl` loop, nationwide: discover the current chart cycle → download every FAA sectional (CONUS + Alaska + Hawaii + a few Canadian border charts) → expand palette to RGB → tile each to its own PMTiles archive, one `chart_catalog` row per sectional per cycle. TAC/Helicopter charts unstarted |
 | IFR Enroute Low/High Altitude charts | FAA digital raster charts | GeoTIFF | 56-day cycle | Implemented in the same `ff-etl` loop: FAA publishes these as real georeferenced GeoTIFFs too, at an analogous URL shape (`aeronav.faa.gov/enroute/<date>/enr_l##.zip`/`enr_h##.zip`), discovered from the FAA IFR digital-products page (which embeds the panel links directly — no separate directory-listing fetch needed, unlike sectionals). Unlike sectionals, these charts' *body* is mostly white background (line symbology, not colored terrain fill) and the GeoTIFFs are already 3-band RGB, not palette-indexed — confirmed against two real downloaded panels before building this, which is also why the existing legend-crop heuristic isn't applied to this chart type (it assumes "mostly white = legend," which inverts for these charts and was confirmed live to crop away 95% of a real panel) — panels tile with their legend column left in place instead |
 | IFR charts (Enroute Low/High, Area) | FAA digital raster charts | GeoTIFF | 56-day cycle | Unstarted (same pipeline as VFR should apply) |
-| Approach plates (visual reference) | FAA d-TPP | PDF, geo-referenced | 28-day cycle | Unstarted |
+| SID/STAR/Approach plate charts (visual reference) | FAA d-TPP | PDF (not geo-referenced — a scanned/typeset plate image, unlike the raster charts above) | 28-day cycle | Implemented for web: `ff-etl`'s `dtpp` module fetches the current cycle's metadata XML (~16MB, one per cycle) and matches its chart entries against this bundle's own procedure idents — exact match via the metafile's `faanfd18` field for SIDs/STARs (confirmed live: formatted `{ident}.{transition}` for departures, `{transition}.{ident}` for arrivals), a best-effort ARINC-424 type-code/runway/suffix heuristic for approaches (no equivalent field exists for those; ~95% match rate measured against real data, verified empirically rather than assumed). The PDF itself isn't re-hosted — only the constructed `https://aeronav.faa.gov/d-tpp/<cycle>/<pdf_name>` URL is stored, since the file is already public and stable enough per-cycle |
 | Airspace boundaries (Class B/C/D, SUA, MOA) | FAA ArcGIS Hub feature services (`Class_Airspace`, `Special_Use_Airspace` — not the NASR CSV subscription, which only has per-airport Class B/C/D flags, no geometry) | GeoJSON via REST query | continuously current | Implemented in the automated `ff-etl` loop and validated against live data (~1286 Class B/C/D shelves + ~1533 Special Use Airspace areas) |
 | Obstacles | FAA Digital Obstacle File (DOF) | Fixed-width | 56-day cycle | Unstarted |
 | METAR / TAF / PIREP | aviationweather.gov Data API | JSON/XML | real-time | METAR/TAF implemented + validated live; PIREP unstarted |
@@ -225,7 +225,7 @@ Implemented today:
 | `GET /data/airports?bbox=` | web | airports (optionally filtered to a bounding box) |
 | `GET /data/airports/:icao` | web | one airport + runways + frequencies |
 | `GET /data/airports/:icao/procedures` | web | procedure list |
-| `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates |
+| `GET /data/procedures/:id` | web | transitions + legs + server-resolved fix coordinates, plus a matched d-TPP plate chart name/URL if `ff-etl` found one (§9.1) |
 | `GET /data/charts?bbox=` | web | chart_catalog entries (optionally bbox-filtered) |
 | `GET /data/airspace?bbox=` | web | Class B/C/D + Special Use Airspace boundary polygons (optionally bbox-filtered) |
 | `GET /data/nearest_fix?lat=&lon=` | web | closest waypoint or navaid to a point — full scan over both tables (~49k waypoints + ~900 navaids nationwide), filtered/compared in Rust rather than SQL, same approach as the bbox routes above; backs the map's Waypoint tap tab (§9.1) |
@@ -532,12 +532,17 @@ Consequences:
   middle fix (§9.3) — the Set Departure/Arrival buttons highlight when
   the selected airport already matches that slot.
 - Selecting a procedure draws it on the map (leg-by-leg from
-  `procedure_leg`) and optionally overlays the FAA d-TPP plate image
-  (PDF rendered client-side, e.g. `pdf.js` on web / `PdfRenderer` on
-  Android) for visual cross-check. A "+" next to the procedure's heading
-  adds it as the route builder's SID/STAR directly from this view,
-  without needing to browse for it again via §9.3's own picker —
-  resolves immediately if the procedure has a single enroute transition,
+  `procedure_leg`) and, when `ff-etl`'s d-TPP matching found one, shows
+  the real FAA plate chart inline for visual cross-check — implemented
+  on web as a plain `<iframe>` pointing straight at the FAA-hosted PDF
+  (browsers render PDFs natively; no `pdf.js` or other client-side
+  rendering dependency needed, simpler than originally envisioned here).
+  Android's equivalent still needs its own approach (a `WebView`-based
+  iframe wouldn't get the same free ride — see `[dtpp-render]`, §12).
+  A "+" next to the procedure's heading adds it as the route builder's
+  SID/STAR directly from this view, without needing to browse for it
+  again via §9.3's own picker — resolves immediately if the procedure
+  has a single enroute transition,
   else shows the transition list to choose from (same "skip the picker
   when there's only one real choice" behavior as the route builder's own
   SID/STAR picker).
@@ -703,9 +708,14 @@ document survive insertions/removals.
   does it deploy, who notices when it's down, and what's the trigger for
   adding rate limiting/CORS restrictions (proposal: before any non-local
   deployment, not after the first incident).
-- **[dtpp-render] d-TPP plate rendering**: FAA plates are PDF, not
-  vector — rendering quality/perf on low-end Android devices needs a
-  spike before committing to in-app PDF rendering vs. "open externally."
+- **[dtpp-render] d-TPP plate rendering — web resolved, Android open**:
+  web links/displays the real FAA plate inline via a plain `<iframe>`
+  (§9.1) — browsers render PDFs natively, so this needed no rendering
+  library at all, simpler than the PDF.js/native-renderer approach
+  originally envisioned here. Android still needs its own spike: no
+  equivalent "just point an iframe at it" trick, so it's a choice
+  between an in-app PDF rendering library (perf/quality on low-end
+  devices unverified) and "open externally" (simpler, worse UX).
 - **[leg-types] ARINC 424 leg coding completeness**: implementing the
   full leg-type state machine (RF legs, vectors-to-final, holding
   patterns) is nontrivial; Phase 1 should scope down to the common leg

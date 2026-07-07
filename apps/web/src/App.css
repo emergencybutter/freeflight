@@ -347,6 +347,16 @@ th {
   margin-bottom: 1.25rem;
 }
 
+.dtpp-chart-frame {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  margin: 0.5rem 0 1rem;
+  border: 1px solid #1c2333;
+  border-radius: 6px;
+  background: #fff;
+}
+
 .weather-report {
   margin: 0 0 0.6rem;
 }

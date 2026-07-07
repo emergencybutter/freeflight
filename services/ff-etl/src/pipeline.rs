@@ -1,6 +1,9 @@
 use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
-use crate::bundle::{add_airspace, add_chart, build_bundle, BundleSource, ChartSource};
+use crate::bundle::{
+    add_airspace, add_chart, add_dtpp_charts, build_bundle, BundleSource, ChartSource,
+};
 use crate::chart_prep::{crop_legend_and_collar, expand_palette_to_rgb};
+use crate::dtpp::{discover_dtpp_cycle, fetch_and_match_dtpp_charts};
 use crate::fetch::{
     discover_chart_cycle, discover_ifr_enroute_cycle, fetch_cifp, fetch_ifr_enroute_panel,
     fetch_nasr, fetch_sectional_chart, ChartCycle, IfrEnrouteCycle,
@@ -21,6 +24,8 @@ pub enum EtlError {
     ChartPrep(#[from] crate::chart_prep::ChartPrepError),
     #[error(transparent)]
     Airspace(#[from] crate::airspace::AirspaceError),
+    #[error(transparent)]
+    Dtpp(#[from] crate::dtpp::DtppError),
     #[error(transparent)]
     Validate(#[from] crate::validate::ValidateError),
     #[error(transparent)]
@@ -79,6 +84,22 @@ pub fn run() -> Result<(), EtlError> {
     airspace_volumes.extend(fetch_special_use_airspace()?);
     add_airspace(&bundle_path, &airspace_volumes)?;
     tracing::info!(count = airspace_volumes.len(), "added airspace boundaries");
+
+    // d-TPP SID/STAR/Approach chart links — best-effort, matching every
+    // procedure that could be, not something the whole cycle publish
+    // should fail over: a hiccup fetching/matching FAA's ~16MB metafile
+    // (or its ~95% approach-match rate simply missing a few) still
+    // leaves every other feature (procedures, airspace, charts) intact.
+    match discover_dtpp_cycle().and_then(|cycle| {
+        tracing::info!(cycle = %cycle, "fetching current d-TPP chart metadata");
+        fetch_and_match_dtpp_charts(&bundle_path, &cycle)
+    }) {
+        Ok(dtpp_charts) => {
+            add_dtpp_charts(&bundle_path, &dtpp_charts)?;
+            tracing::info!(count = dtpp_charts.len(), "added d-TPP chart links");
+        }
+        Err(err) => tracing::warn!(error = %err, "couldn't add d-TPP chart links this cycle"),
+    }
 
     let chart_cycle: ChartCycle = discover_chart_cycle()?;
     tracing::info!(

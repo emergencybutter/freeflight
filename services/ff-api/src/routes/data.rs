@@ -113,6 +113,12 @@ pub struct ProcedureDetail {
     /// Resolved server-side so the client doesn't need its own
     /// navaid/waypoint queries just to draw a procedure line.
     pub fixes: HashMap<String, FixCoord>,
+    /// The FAA d-TPP plate chart for this procedure, if `ff-etl`'s
+    /// best-effort ident matching (see `ff-etl::dtpp`) found one —
+    /// `None` doesn't mean there's no real chart, just that this app
+    /// couldn't confidently match it (common for some approach types).
+    pub chart_name: Option<String>,
+    pub chart_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -534,10 +540,28 @@ pub async fn procedure_detail(
             }
         }
 
+        // At most one row expected per (airport, ident) in practice, but
+        // a chart_name/chart_type variant (e.g. a CAT II minima page)
+        // can independently match the same procedure ident — take
+        // whichever was inserted first rather than surfacing more than
+        // one link from a single-chart field.
+        let (chart_name, chart_url) = conn
+            .query_row(
+                "SELECT chart_name, pdf_url FROM dtpp_chart
+                 WHERE airport_icao = ?1 AND procedure_ident = ?2
+                 ORDER BY id LIMIT 1",
+                rusqlite::params![procedure.airport_icao, procedure.ident],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map(|(name, url)| (Some(name), Some(url)))
+            .unwrap_or((None, None));
+
         Ok(ProcedureDetail {
             procedure,
             transitions,
             fixes,
+            chart_name,
+            chart_url,
         })
     })
     .await;

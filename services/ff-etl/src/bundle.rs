@@ -452,6 +452,32 @@ pub fn add_airspace(bundle_path: &Path, volumes: &[AirspaceVolume]) -> Result<()
     Ok(())
 }
 
+/// Adds one row per FAA d-TPP chart confidently matched to a procedure
+/// already in this bundle (`crate::dtpp::fetch_and_match_dtpp_charts`) —
+/// same shape as `add_airspace` above.
+pub fn add_dtpp_charts(
+    bundle_path: &Path,
+    charts: &[crate::dtpp::MatchedDtppChart],
+) -> Result<(), BundleError> {
+    let mut conn = rusqlite::Connection::open(bundle_path)?;
+    let tx = conn.transaction()?;
+    for c in charts {
+        tx.execute(
+            "INSERT INTO dtpp_chart (airport_icao, procedure_ident, chart_name, pdf_url, cycle)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![
+                c.airport_icao,
+                c.procedure_ident,
+                c.chart_name,
+                c.pdf_url,
+                c.cycle
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Parses the NASR extract at `dir` and returns real runway surfaces
 /// (keyed by `(airport_icao, runway_ident)`) and communication
 /// frequencies for just the requested `icaos`, merging on top of what

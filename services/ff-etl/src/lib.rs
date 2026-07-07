@@ -4,6 +4,7 @@
 pub mod airspace;
 pub mod bundle;
 pub mod chart_prep;
+pub mod dtpp;
 pub mod fetch;
 pub mod pipeline;
 pub mod publish;

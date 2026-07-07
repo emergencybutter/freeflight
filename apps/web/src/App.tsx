@@ -740,6 +740,15 @@ function ProcedurePanel({
         </ul>
       )}
       {detail.runway_ident && <p className="hint">runway {detail.runway_ident}</p>}
+      {detail.chart_url ? (
+        <iframe
+          src={detail.chart_url}
+          title={detail.chart_name ?? `${detail.kind} ${detail.ident} plate`}
+          className="dtpp-chart-frame"
+        />
+      ) : (
+        <p className="hint">No FAA plate chart matched for this procedure.</p>
+      )}
       {detail.transitions.map((t) => (
         <div key={t.id} className="transition">
           <h3>
