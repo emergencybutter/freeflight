@@ -91,6 +91,7 @@
 .tap-tab-bar {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
   padding: 0.4rem 0.75rem;
   background: #0e1626;
@@ -355,6 +356,36 @@ th {
   border: 1px solid #1c2333;
   border-radius: 6px;
   background: #fff;
+}
+
+.dtpp-chart-frame-expanded {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  z-index: 1000;
+}
+
+.dtpp-chart-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.dtpp-chart-toolbar button {
+  width: auto;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.dtpp-chart-toolbar-expanded {
+  position: fixed;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 1001;
 }
 
 .weather-report {

@@ -663,12 +663,14 @@ function ProcedurePanel({
   const [detail, setDetail] = useState<ProcedureDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pickingTransition, setPickingTransition] = useState(false);
+  const [chartExpanded, setChartExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
     setError(null);
     setPickingTransition(false);
+    setChartExpanded(false);
     fetchProcedureDetail(procedureId)
       .then((d) => {
         if (!cancelled) setDetail(d);
@@ -741,11 +743,18 @@ function ProcedurePanel({
       )}
       {detail.runway_ident && <p className="hint">runway {detail.runway_ident}</p>}
       {detail.chart_url ? (
-        <iframe
-          src={detail.chart_url}
-          title={detail.chart_name ?? `${detail.kind} ${detail.ident} plate`}
-          className="dtpp-chart-frame"
-        />
+        <>
+          <div className={chartExpanded ? "dtpp-chart-toolbar dtpp-chart-toolbar-expanded" : "dtpp-chart-toolbar"}>
+            <button onClick={() => setChartExpanded((prev) => !prev)}>
+              {chartExpanded ? "Reduce" : "Full Page"}
+            </button>
+          </div>
+          <iframe
+            src={detail.chart_url}
+            title={detail.chart_name ?? `${detail.kind} ${detail.ident} plate`}
+            className={chartExpanded ? "dtpp-chart-frame dtpp-chart-frame-expanded" : "dtpp-chart-frame"}
+          />
+        </>
       ) : (
         <p className="hint">No FAA plate chart matched for this procedure.</p>
       )}
