@@ -649,10 +649,18 @@ Consequences:
 - **Data freshness is explicit, never silent**: UI always shows the AIRAC
   cycle date in use and the age of the last weather briefing. Never let a
   pilot mistake stale data for current.
-- **Performance**: full CONUS CIFP+NASR cycle bundle should be tens of
-  MB, not hundreds — favor compact binary encodings over verbose
-  JSON/text for anything embedded in the SQLite bundle. Chart tiles are
-  downloaded per-region-of-interest, not the whole country at once.
+- **Performance**: full CONUS CIFP+NASR cycle bundle should stay in the
+  hundreds-of-MB range, not gigabytes — favor compact binary encodings
+  over verbose JSON/text for anything embedded in the SQLite bundle.
+  Chart tiles are downloaded per-region-of-interest, not the whole
+  country at once. Real current bundle is ~145MB as of the 2026-07-09
+  cycle (§13, Phase 0) — comfortably within this. (Revised from an
+  earlier tens-of-MB target, set back when the bundle only held
+  airports/procedures; nationwide waypoints/navaids/airways and the
+  d-TPP chart-link table pushed it past that, and hundreds of MB was
+  judged an acceptable cost for what those add.) Doesn't affect web
+  either way (queries `ff-api` server-side, never downloads the whole
+  file, §8) — this bears on Android's on-device copy once it syncs.
 - **Testability**: `ff-cifp`/`ff-nasr` parsers get golden-file tests
   against real (public) FAA cycle excerpts; `ff-planning`/`ff-postflight`
   get unit tests with synthetic tracks/routes; `ff-api` gets integration
@@ -741,20 +749,33 @@ document survive insertions/removals.
   types, `ff-storage` schema/migrations, `ff-cifp`/`ff-nasr` parsers with
   fixture tests (and validated against real cycle files), and `ff-etl`
   producing a first cycle bundle end to end: fetches the current
-  CIFP/NASR cycle live from FAA, builds an `ff-storage`-schema bundle
-  (nationwide: every airport/procedure in the CIFP file, ~13k
-  airports/~14k procedures, ~31MB — within §11's tens-of-MB target),
-  fetches/tiles every current FAA sectional chart (nationwide, one
-  PMTiles archive each), validates against the previously published
-  cycle, and publishes all artifacts for `ff-api` to serve (§4.1).
-  `publish_bundle`'s object storage is still a local directory, not a
-  bucket — the remaining Phase 0 follow-up.
+  CIFP/NASR cycle live from FAA, builds an `ff-storage`-schema bundle,
+  fetches/tiles every current FAA sectional and IFR Enroute Low/High
+  chart, fetches Class B/C/D + Special Use Airspace boundaries and
+  matches FAA d-TPP plate charts against procedures (§9.1), validates
+  against the previously published cycle, and publishes all artifacts
+  for `ff-api` to serve (§4.1). Real current bundle (2026-07-09 cycle):
+  13,321 airports / 14,316 procedures / 48,731 waypoints / 890 navaids /
+  1,466 airways / 2,819 airspace volumes / 108 chart_catalog rows /
+  12,388 matched d-TPP chart links, ~145MB — within §11's
+  hundreds-of-MB target. `publish_bundle`'s object storage is still a
+  local directory, not a bucket — the remaining Phase 0 follow-up.
 - **Phase 1 — MVP (read-only)**: web + Android chart/procedure/airport
   viewer, weather/NOTAM briefing. Offline cycle sync is Android-only
   (§8) — the milestone this phase is really chasing is "can I look
   things up offline on the device that's actually in the cockpit"; web
-  is a connected-only companion for the same data. No planning or track
-  recording yet.
+  is a connected-only companion for the same data. **Web is essentially
+  done**: sectional + IFR Low/High chart layers (mutually-exclusive
+  toggle, lazily loaded per kind), independent airspace/AIRMET-SIGMET/
+  airports/PIREPs/CWA overlay toggles, a tap-driven Airport/Waypoint/
+  Airspace/PIREPs/AIRMET/SIGMET/CWA tab bar replacing per-layer popups
+  (§9.1), full METAR/TAF/AIRMET/SIGMET/CWA/PIREP/winds-aloft weather
+  (§9.2), and inline FAA plate charts for SID/STAR/Approach procedures.
+  NOTAM proxy exists but its record shape is still unvalidated pending
+  credentials (`[notam-api]`, §12). **Android hasn't been started at
+  all** — every item above is web-only; Android is the actual gap this
+  phase is named for (offline-in-the-cockpit), not a parallel-track
+  detail.
 - **Phase 2 — Flight planning**: route builder, nav log, basic W&B,
   aircraft profiles. Web slice implemented: `ff-planning`'s math now
   runs client-side via `ff-wasm` (previously built but not wired into
@@ -766,7 +787,10 @@ document survive insertions/removals.
   now resolves each station's ident to a coordinate against the current
   cycle bundle — the raw NWS product only carries idents — so the web
   client can do a nearest-station lookup at all; see
-  `apps/web/src/planning/windsAloft.ts`). Android's equivalent
+  `apps/web/src/planning/windsAloft.ts`). Departure/arrival/middle fixes
+  can also be set straight from the map's Airport/Waypoint tap tabs
+  (§9.1/§9.3), and a VFR-only warning flags real Class B/C/D/Special Use
+  Airspace the route actually crosses (§9.3). Android's equivalent
   (`ff-uniffi` bindings, persisted via the
   `aircraft_profile`/`route_plan`/`route_leg` tables) is still unstarted.
 - **Phase 3 — Post-flight analysis**: GPS track recording (Android),
