@@ -18,6 +18,7 @@ import type {
   Cwa,
   GAirmet,
   MapTapResult,
+  NearestFix,
   Pirep,
   ProcedureDetail,
   RouteWaypoint,
@@ -39,6 +40,8 @@ const WINDS_ALOFT_SOURCE = "winds-aloft";
 const AIRSPACE_SOURCE = "airspace";
 const PLANNED_ROUTE_SOURCE = "planned-route";
 const PLANNED_ROUTE_FIXES_SOURCE = "planned-route-fixes";
+const SELECTED_AIRPORT_SOURCE = "selected-airport";
+const TAP_POINTS_SOURCE = "tap-points";
 
 // The standard levels NOAA's "low" FD product reports per station (see
 // a real response: every CONUS station carries all nine) — used to
@@ -325,6 +328,39 @@ function windsAloftGeoJson(bulletin: WindsAloftBulletin, airports: Airport[], al
       },
     });
   }
+  return { type: "FeatureCollection", features };
+}
+
+/** A single highlight ring around the currently-selected airport, so the
+ * airport a tap picks stands out from the field of same-colored markers. */
+function selectedAirportGeoJson(airport: Airport | null): GeoJSON.FeatureCollection {
+  if (!airport) return EMPTY_COLLECTION;
+  return {
+    type: "FeatureCollection",
+    features: [{ type: "Feature", geometry: { type: "Point", coordinates: [airport.lon, airport.lat] }, properties: {} }],
+  };
+}
+
+/** The two waypoints a tap proposes (see App's Waypoint tab), marked on
+ * the map so the picks are visible where they sit: the nearest real fix/
+ * navaid, and the tapped point itself as a lat/lon "user" waypoint. */
+function tapPointsGeoJson(
+  lngLat: { lng: number; lat: number },
+  nearestFix: NearestFix | null,
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  if (nearestFix) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [nearestFix.lon, nearestFix.lat] },
+      properties: { role: "waypoint", label: nearestFix.ident },
+    });
+  }
+  features.push({
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [lngLat.lng, lngLat.lat] },
+    properties: { role: "user", label: "USER" },
+  });
   return { type: "FeatureCollection", features };
 }
 
@@ -1263,6 +1299,48 @@ export function MapView({
         paint: { "text-color": "#ffe066", "text-halo-color": "#0b1220", "text-halo-width": 1 },
       });
 
+      // Tap highlights, added last so they sit on top of every overlay:
+      // a hollow ring around the selected airport (driven by the
+      // selectedAirport effect below), plus point markers for the two
+      // waypoints a tap proposes — the nearest fix/navaid and the tapped
+      // "user" point (both set from the click handler below).
+      map.addSource(SELECTED_AIRPORT_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "selected-airport-ring",
+        type: "circle",
+        source: SELECTED_AIRPORT_SOURCE,
+        paint: {
+          "circle-radius": 11,
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 3,
+        },
+      });
+      map.addSource(TAP_POINTS_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "tap-points-circle",
+        type: "circle",
+        source: TAP_POINTS_SOURCE,
+        paint: {
+          "circle-radius": 6,
+          "circle-color": ["match", ["get", "role"], "waypoint", "#ff9f43", "user", "#7ee787", "#ffffff"],
+          "circle-stroke-color": "#0b1220",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "tap-points-label",
+        type: "symbol",
+        source: TAP_POINTS_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+        },
+        paint: { "text-color": "#e6edf3", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
+      });
+
       // Single unified tap handler, replacing the old per-layer Popups
       // (airspace/G-AIRMET/SIGMET/CWA/PIREP each used to open their own
       // MapLibre Popup on click). Every tap now does two things at
@@ -1320,14 +1398,20 @@ export function MapView({
           cwas: dedupeById(map.queryRenderedFeatures(e.point, { layers: ["cwa-fill"] })),
           pireps: dedupeById(map.queryRenderedFeatures(nearPoint, { layers: ["pirep-circle"] })),
         };
+        const setTapPoints = (nearestFix: NearestFix | null) =>
+          (map.getSource(TAP_POINTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+            tapPointsGeoJson(e.lngLat, nearestFix),
+          );
         fetchNearestFix(e.lngLat.lat, e.lngLat.lng)
           .then((nearestFix) => {
             if (unmountedRef.current) return;
             onMapTap({ ...base, nearestFix });
+            setTapPoints(nearestFix);
           })
           .catch(() => {
             if (unmountedRef.current) return;
             onMapTap({ ...base, nearestFix: null });
+            setTapPoints(null);
           });
       });
 
@@ -1424,6 +1508,9 @@ export function MapView({
 
     const setRunways = (runways: Runway[]) =>
       (map.getSource(RUNWAYS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(runwaysGeoJson(runways));
+    (map.getSource(SELECTED_AIRPORT_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+      selectedAirportGeoJson(selectedAirport),
+    );
 
     let cancelled = false;
     if (selectedAirport) {

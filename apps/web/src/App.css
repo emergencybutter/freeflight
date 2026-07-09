@@ -536,6 +536,25 @@ th {
   width: 12rem;
 }
 
+.user-waypoint-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.user-waypoint-name input {
+  width: 8rem;
+  box-sizing: border-box;
+  padding: 0.3rem 0.5rem;
+  background: #131a2a;
+  border: 1px solid #232c40;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+}
+
 .route-list {
   list-style: none;
   margin: 0.75rem 0 0;

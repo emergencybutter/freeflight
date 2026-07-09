@@ -14,7 +14,6 @@ import type {
   AirspaceVolume,
   MapTapResult,
   Metar,
-  NearestFix,
   Procedure,
   ProcedureDetail as ProcedureDetailData,
   RouteState,
@@ -55,6 +54,11 @@ export default function App() {
   // the closest airport unconditionally regardless of the active tab.
   const [activeTapTab, setActiveTapTab] = useState<TapTabId>("airport");
   const [mapTap, setMapTap] = useState<MapTapResult | null>(null);
+  // How many user waypoints have been added this session — drives the
+  // incrementing default name (USER1, USER2, …). Lives here rather than
+  // in WaypointTab since that tab unmounts whenever another tap tab is
+  // shown, which would otherwise reset the count.
+  const [userWaypointCount, setUserWaypointCount] = useState(0);
   // Lifted out of FlightPlanning (rather than its own local state) so
   // MapView can draw the planned route too. Departure/arrival/SID/STAR
   // are dedicated slots (picked explicitly via FlightPlanning's route
@@ -244,7 +248,13 @@ export default function App() {
           </>
         )}
         {activeTapTab === "waypoint" && (
-          <WaypointTab nearestFix={mapTap?.nearestFix ?? null} route={route} onRouteChange={setRoute} />
+          <WaypointTab
+            mapTap={mapTap}
+            route={route}
+            onRouteChange={setRoute}
+            userWaypointCount={userWaypointCount}
+            onAddUserWaypoint={() => setUserWaypointCount((n) => n + 1)}
+          />
         )}
         {activeTapTab === "airspace" && (
           <TapInfoTab items={mapTap?.airspace ?? []} formatter={airspaceInfoHtml} emptyText="No airspace at the last tap." />
@@ -280,48 +290,92 @@ export default function App() {
   );
 }
 
-/** The Waypoint tap tab: the nearest waypoint/navaid to the last map
- * tap (fetched server-side — see MapView's tap handler), with a button
- * to drop it into the route builder's middle fixes list, same shape
- * AirportActionBar's "Add to Flight Plan" and the route builder's own
- * ident search already build (`{ kind: "point", point: {...} }`). */
+/** The Waypoint tap tab: a tap proposes two waypoints to drop into the
+ * route builder's middle fixes list — the nearest real waypoint/navaid
+ * (fetched server-side — see MapView's tap handler), and the tapped
+ * point itself as a lat/lon "user" waypoint (named freely, defaulting to
+ * USER). Both add the same `{ kind: "point", point: {...} }` shape
+ * AirportActionBar's "Add to Flight Plan" and the route builder's ident
+ * search already build. */
 function WaypointTab({
-  nearestFix,
+  mapTap,
   route,
   onRouteChange,
+  userWaypointCount,
+  onAddUserWaypoint,
 }: {
-  nearestFix: NearestFix | null;
+  mapTap: MapTapResult | null;
   route: RouteState;
   onRouteChange: (route: RouteState) => void;
+  userWaypointCount: number;
+  onAddUserWaypoint: () => void;
 }) {
-  const addToFlightPlan = () => {
-    if (!nearestFix) return;
-    onRouteChange({
-      ...route,
-      middleTokens: [
-        ...route.middleTokens,
-        { kind: "point", point: { ident: nearestFix.ident, name: null, lat: nearestFix.lat, lon: nearestFix.lon } },
-      ],
-    });
-  };
+  const nearestFix = mapTap?.nearestFix ?? null;
+  const lngLat = mapTap?.lngLat ?? null;
+  const defaultUserIdent = `USER${userWaypointCount + 1}`;
+  const [userIdent, setUserIdent] = useState(defaultUserIdent);
+  // Reset to the next default (USER1, USER2, …) whenever a fresh point is
+  // tapped or the count changes after an add — rather than carrying over
+  // whatever was typed for the previous one.
+  useEffect(() => {
+    setUserIdent(defaultUserIdent);
+  }, [lngLat?.lat, lngLat?.lng, defaultUserIdent]);
+
+  const addPoint = (point: RouteWaypoint) =>
+    onRouteChange({ ...route, middleTokens: [...route.middleTokens, { kind: "point", point }] });
+
+  if (!mapTap || !lngLat) {
+    return (
+      <div className="tap-info-tab">
+        <p className="hint">Tap the map to propose the nearest waypoint or a user waypoint at that point.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="tap-info-tab">
       {nearestFix ? (
-        <>
+        <div className="tap-info-item">
           <h2>
             {nearestFix.kind === "WAYPOINT" ? "Waypoint" : nearestFix.kind}: {nearestFix.ident}
-            <button className="add-procedure-button" onClick={addToFlightPlan} aria-label="Add to Flight Plan">
+            <button
+              className="add-procedure-button"
+              onClick={() => addPoint({ ident: nearestFix.ident, name: null, lat: nearestFix.lat, lon: nearestFix.lon })}
+              aria-label={`Add ${nearestFix.ident} to Flight Plan`}
+            >
               +
             </button>
           </h2>
           <p className="hint">
-            {nearestFix.lat.toFixed(4)}, {nearestFix.lon.toFixed(4)}
+            Nearest · {nearestFix.lat.toFixed(4)}, {nearestFix.lon.toFixed(4)}
           </p>
-        </>
+        </div>
       ) : (
-        <p className="hint">Tap the map to find the nearest waypoint or navaid.</p>
+        <p className="hint">No waypoint or navaid near the last tap.</p>
       )}
+
+      <div className="tap-info-item">
+        <h2>
+          User waypoint
+          <button
+            className="add-procedure-button"
+            onClick={() => {
+              addPoint({ ident: userIdent.trim() || defaultUserIdent, name: null, lat: lngLat.lat, lon: lngLat.lng });
+              onAddUserWaypoint();
+            }}
+            aria-label="Add user waypoint to Flight Plan"
+          >
+            +
+          </button>
+        </h2>
+        <p className="hint">
+          {lngLat.lat.toFixed(4)}, {lngLat.lng.toFixed(4)}
+        </p>
+        <label className="user-waypoint-name">
+          Name
+          <input type="text" value={userIdent} onChange={(e) => setUserIdent(e.target.value)} />
+        </label>
+      </div>
     </div>
   );
 }
