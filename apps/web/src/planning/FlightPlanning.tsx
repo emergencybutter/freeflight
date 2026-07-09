@@ -160,7 +160,6 @@ export function FlightPlanning({
 
   return (
     <div className="planning-layout">
-      <AircraftProfileForm profile={profile} onChange={onProfileChange} />
       <div className="flight-rules-toggle">
         <button className={flightRules === "VFR" ? "selected" : ""} onClick={() => setFlightRules("VFR")}>
           VFR
@@ -250,6 +249,7 @@ export function FlightPlanning({
             </p>
           ))}
       </div>
+      <AircraftProfileForm profile={profile} onChange={onProfileChange} />
       {hasWbEnvelope && (
         <WeightBalancePanel
           envelope={{
