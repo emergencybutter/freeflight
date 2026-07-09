@@ -533,6 +533,25 @@ function AirportPanel({
 
       <WeatherSection icao={icao} />
 
+      {(["SID", "STAR", "APPROACH"] as const).map((kind) => (
+        <div key={kind}>
+          <h3>{kind === "APPROACH" ? "Approaches" : kind + "s"}</h3>
+          {byKind(kind).length === 0 && <p className="hint">none in this cycle</p>}
+          <ul className="procedure-list">
+            {byKind(kind).map((p) => (
+              <li key={p.id}>
+                <button
+                  className={p.id === selectedProcedureId ? "selected" : ""}
+                  onClick={() => onSelectProcedure(p.id)}
+                >
+                  {p.ident}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+
       <h3>Runways</h3>
       <table>
         <thead>
@@ -581,25 +600,6 @@ function AirportPanel({
           </tbody>
         </table>
       )}
-
-      {(["SID", "STAR", "APPROACH"] as const).map((kind) => (
-        <div key={kind}>
-          <h3>{kind === "APPROACH" ? "Approaches" : kind + "s"}</h3>
-          {byKind(kind).length === 0 && <p className="hint">none in this cycle</p>}
-          <ul className="procedure-list">
-            {byKind(kind).map((p) => (
-              <li key={p.id}>
-                <button
-                  className={p.id === selectedProcedureId ? "selected" : ""}
-                  onClick={() => onSelectProcedure(p.id)}
-                >
-                  {p.ident}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
     </div>
   );
 }
