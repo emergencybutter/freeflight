@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
+import { loadPlan, savePlan } from "./persistence";
 import { findCrossedAirspace } from "./planning/airspaceCrossing";
 import { expandRoute } from "./planning/expandRoute";
 import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
@@ -43,6 +44,9 @@ const TAP_TABS: { id: TapTabId; label: string }[] = [
 ];
 
 export default function App() {
+  // Restore the last flight plan once on mount (see persistence.ts) — the
+  // route, aircraft profile, and user-waypoint counter survive a refresh.
+  const [persisted] = useState(loadPlan);
   const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // The startup manifest fetch is a single quick request, so there's no
@@ -64,7 +68,7 @@ export default function App() {
   // incrementing default name (USER1, USER2, …). Lives here rather than
   // in WaypointTab since that tab unmounts whenever another tap tab is
   // shown, which would otherwise reset the count.
-  const [userWaypointCount, setUserWaypointCount] = useState(0);
+  const [userWaypointCount, setUserWaypointCount] = useState(persisted.userWaypointCount ?? 0);
 
   // Responsive layout: wide = map is the left column, info/flight-plan on
   // the right; narrow = the original stacked layout (map on top).
@@ -115,11 +119,16 @@ export default function App() {
   // are dedicated slots (picked explicitly via FlightPlanning's route
   // builder) rather than positions in a flat token list — see
   // RouteState's doc comment in types.ts.
-  const [route, setRoute] = useState<RouteState>(EMPTY_ROUTE);
+  const [route, setRoute] = useState<RouteState>(persisted.route ?? EMPTY_ROUTE);
   // Lifted out of FlightPlanning the same way route was — MapView reads
   // profile.cruise_altitude_ft to default its own winds-aloft altitude
   // selector to whatever the flight plan is actually using.
-  const [profile, setProfile] = useState<AircraftProfile>(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<AircraftProfile>(persisted.profile ?? DEFAULT_PROFILE);
+  // Persist the plan whenever it changes so a refresh restores it. Cheap
+  // (one small JSON blob) and best-effort — see persistence.ts.
+  useEffect(() => {
+    savePlan({ route, profile, userWaypointCount });
+  }, [route, profile, userWaypointCount]);
   const expandedMiddle = useMemo(() => {
     const before = (route.sid && route.sid.points[route.sid.points.length - 1]) ?? route.departure;
     const after = route.star?.points[0] ?? route.arrival;
