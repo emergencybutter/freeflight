@@ -1,5 +1,5 @@
 import { fetchJson } from "./api";
-import type { Cwa, GAirmet, Metar, Pirep, Sigmet, Taf, WindsAloftBulletin } from "./types";
+import type { Cwa, Datis, GAirmet, Metar, Pirep, Sigmet, Taf, WindsAloftBulletin } from "./types";
 
 export { API_BASE_URL } from "./api";
 
@@ -11,6 +11,12 @@ export async function fetchMetar(icao: string): Promise<Metar | null> {
 export async function fetchTaf(icao: string): Promise<Taf | null> {
   const tafs = await fetchJson<Taf[]>(`/weather/taf?ids=${encodeURIComponent(icao)}`);
   return tafs[0] ?? null;
+}
+
+/** D-ATIS for one airport — usually one "combined" entry, or a "dep"/
+ * "arr" pair, or empty when the airport has no Digital ATIS. */
+export async function fetchDatis(icao: string): Promise<Datis[]> {
+  return fetchJson<Datis[]>(`/weather/atis?ids=${encodeURIComponent(icao)}`);
 }
 
 /** METAR for multiple stations in one request — used to color airport

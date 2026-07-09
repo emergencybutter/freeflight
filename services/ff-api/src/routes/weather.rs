@@ -54,6 +54,24 @@ pub async fn get_tafs(
     }
 }
 
+/// Proxies datis.clowd.io D-ATIS for a single airport (the first of
+/// `ids`). Airports without Digital ATIS just return an empty array — see
+/// `WeatherClient::fetch_datis` — so the caller treats absence as "no
+/// ATIS", not an error.
+pub async fn get_datis(
+    State(state): State<AppState>,
+    Query(query): Query<StationQuery>,
+) -> Response {
+    let ids = parse_ids(&query.ids);
+    let Some(id) = ids.first() else {
+        return (StatusCode::BAD_REQUEST, "no station id provided").into_response();
+    };
+    match state.weather.fetch_datis(id).await {
+        Ok(datis) => Json(datis).into_response(),
+        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    }
+}
+
 /// Proxies aviationweather.gov's Graphical AIRMET — no station filter,
 /// same as upstream (all current CONUS records).
 pub async fn get_gairmets(State(state): State<AppState>) -> Response {

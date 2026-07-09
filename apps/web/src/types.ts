@@ -285,6 +285,17 @@ export interface Taf {
   fcsts: TafForecastPeriod[];
 }
 
+/** `GET /weather/atis` — datis.clowd.io D-ATIS for one airport. `type` is
+ * "combined", or "dep"/"arr" where the ATIS is split; `code` is the info
+ * letter; `datis` is the full broadcast text. Empty when the airport has
+ * no Digital ATIS (most non-major fields). Mirrors ff-weather's Datis. */
+export interface Datis {
+  airport: string;
+  type: string;
+  code: string;
+  datis: string;
+}
+
 // Mirror ff-weather's GAirmet/Sigmet wire shape (crates/ff-weather/src/hazards.rs).
 
 export interface GAirmetCoord {

@@ -9,6 +9,20 @@ pub struct CloudLayer {
     pub base: Option<i32>,
 }
 
+/// One D-ATIS broadcast from datis.clowd.io (`/api/{icao}`) — not an
+/// aviationweather.gov product. `kind` is `"combined"`, or `"dep"`/`"arr"`
+/// at airports that split departure and arrival ATIS; `code` is the phonetic
+/// info letter (e.g. `"Q"`); `datis` is the full broadcast text. Only the
+/// ~100+ major US airports with Digital ATIS return anything.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Datis {
+    pub airport: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub code: String,
+    pub datis: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metar {
     #[serde(rename = "icaoId")]

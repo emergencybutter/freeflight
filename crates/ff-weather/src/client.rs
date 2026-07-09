@@ -1,9 +1,14 @@
 use crate::hazards::{Cwa, GAirmet, IntlSigmet, Pirep, Sigmet};
-use crate::records::{Metar, Taf};
+use crate::records::{Datis, Metar, Taf};
 use crate::winds_aloft::{parse_windtemp_bulletin, WindsAloftBulletin, WindsAloftError};
 use thiserror::Error;
 
 pub const DEFAULT_BASE_URL: &str = "https://aviationweather.gov/api/data";
+
+/// D-ATIS isn't an aviationweather.gov product — it comes from the free,
+/// unauthenticated D-ATIS API (formerly datis.clowd.io, which now 302s
+/// here), so it has its own base URL rather than sharing `base_url`.
+pub const DATIS_BASE_URL: &str = "https://atis.info/api";
 
 #[derive(Debug, Error)]
 pub enum WeatherError {
@@ -142,6 +147,24 @@ impl WeatherClient {
             return Ok(Vec::new());
         }
         Ok(resp.json::<Vec<Pirep>>().await?)
+    }
+
+    /// Current D-ATIS for a single airport from datis.clowd.io — one
+    /// entry (`"combined"`) at most airports, or two (`"dep"`/`"arr"`)
+    /// where the ATIS is split. Airports without Digital ATIS (most
+    /// non-major fields) return a 404 + `{"error": …}` object rather than
+    /// an array, which this treats as "no ATIS" (empty) rather than an
+    /// error, since it's an optional overlay and absence is the norm.
+    pub async fn fetch_datis(&self, station_id: &str) -> Result<Vec<Datis>, WeatherError> {
+        let url = format!("{DATIS_BASE_URL}/{station_id}");
+        let resp = self.http.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Ok(Vec::new());
+        }
+        // A success body is normally the array shape, but the API has
+        // been seen to answer 200 with the `{"error": …}` object too;
+        // fall back to empty rather than surfacing a decode error.
+        Ok(resp.json::<Vec<Datis>>().await.unwrap_or_default())
     }
 
     async fn fetch_hazard<T: serde::de::DeserializeOwned>(

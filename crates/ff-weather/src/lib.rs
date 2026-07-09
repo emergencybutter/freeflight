@@ -7,9 +7,9 @@ pub mod hazards;
 pub mod records;
 pub mod winds_aloft;
 
-pub use client::{WeatherClient, WeatherError, DEFAULT_BASE_URL};
+pub use client::{WeatherClient, WeatherError, DATIS_BASE_URL, DEFAULT_BASE_URL};
 pub use hazards::{Cwa, GAirmet, GAirmetCoord, IntlSigmet, Pirep, PirepCloud, Sigmet, SigmetCoord};
-pub use records::{CloudLayer, Metar, Taf, TafForecastPeriod};
+pub use records::{CloudLayer, Datis, Metar, Taf, TafForecastPeriod};
 pub use winds_aloft::{
     parse_windtemp_bulletin, StationWindsAloft, Wind, WindsAloftBulletin, WindsAloftError,
     WindsAloftLevel,

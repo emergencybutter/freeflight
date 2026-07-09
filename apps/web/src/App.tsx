@@ -12,6 +12,7 @@ import type {
   Airport,
   AirportDetail as AirportDetailData,
   AirspaceVolume,
+  Datis,
   MapTapResult,
   Metar,
   Procedure,
@@ -20,7 +21,7 @@ import type {
   RouteWaypoint,
   Taf,
 } from "./types";
-import { fetchMetar, fetchTaf } from "./weather";
+import { fetchDatis, fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
 const EMPTY_ROUTE: RouteState = { departure: null, arrival: null, sid: null, star: null, middleTokens: [] };
@@ -728,11 +729,21 @@ function formatWind(wdir: number | string | null, wspd: number | null, wgst: num
   return `${dir} at ${wspd}${gust}kt`;
 }
 
-/** Live METAR/TAF for the selected airport, proxied through ff-api
- * (services/ff-api). */
+/** Human label for a D-ATIS entry's `type` — "combined" needs no
+ * qualifier, "dep"/"arr" become Departure/Arrival for split ATIS. */
+function datisLabel(kind: string): string {
+  if (kind === "dep") return "ATIS · Departure";
+  if (kind === "arr") return "ATIS · Arrival";
+  return "ATIS";
+}
+
+/** Live METAR/TAF plus D-ATIS for the selected airport, proxied through
+ * ff-api (services/ff-api). ATIS is fetched independently so a failure or
+ * an airport without Digital ATIS never hides the METAR/TAF. */
 function WeatherSection({ icao }: { icao: string }) {
   const [metar, setMetar] = useState<Metar | null>(null);
   const [taf, setTaf] = useState<Taf | null>(null);
+  const [datis, setDatis] = useState<Datis[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -740,6 +751,7 @@ function WeatherSection({ icao }: { icao: string }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setDatis([]);
     Promise.all([fetchMetar(icao), fetchTaf(icao)])
       .then(([m, t]) => {
         if (cancelled) return;
@@ -752,6 +764,15 @@ function WeatherSection({ icao }: { icao: string }) {
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
+      });
+    // ATIS degrades on its own — most airports have none, so its absence
+    // or failure shouldn't surface as a weather error.
+    fetchDatis(icao)
+      .then((d) => {
+        if (!cancelled) setDatis(d);
+      })
+      .catch(() => {
+        if (!cancelled) setDatis([]);
       });
     return () => {
       cancelled = true;
@@ -786,6 +807,15 @@ function WeatherSection({ icao }: { icao: string }) {
           {taf ? <p className="weather-report raw-report">{taf.rawTAF}</p> : <p className="hint">no current TAF</p>}
         </>
       )}
+      {datis.map((d) => (
+        <p key={d.type} className="weather-report">
+          <span className="hint">
+            {datisLabel(d.type)} · Info {d.code}
+          </span>
+          <br />
+          <span className="raw-report">{d.datis}</span>
+        </p>
+      ))}
     </>
   );
 }
