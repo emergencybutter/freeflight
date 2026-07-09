@@ -40,6 +40,11 @@ const TAP_TABS: { id: TapTabId; label: string }[] = [
 export default function App() {
   const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The startup manifest fetch is a single quick request, so there's no
+  // byte-level progress to report — but if the origin is slow to answer
+  // (cold server, large cycle still settling) we surface a "still
+  // working" hint after a few seconds rather than leaving a dead screen.
+  const [loadSlow, setLoadSlow] = useState(false);
   const [selectedAirport, setSelectedAirport] = useState<Airport | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "plan">("map");
@@ -105,9 +110,12 @@ export default function App() {
   useEffect(() => {
     // Web assumes connectivity to ff-api (DESIGN.md §8): if this first
     // fetch fails there's nothing to fall back to — fail visibly.
+    const slowTimer = setTimeout(() => setLoadSlow(true), 4000);
     fetchCycleManifest()
       .then((manifest) => setCycleId(manifest.cycle_id))
-      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)))
+      .finally(() => clearTimeout(slowTimer));
+    return () => clearTimeout(slowTimer);
   }, []);
 
   const selectAirport = (airport: Airport | null) => {
@@ -153,7 +161,21 @@ export default function App() {
   }
 
   if (!cycleId) {
-    return <div className="loading">Loading freeflight…</div>;
+    return (
+      <div className="loading">
+        <div className="loading-card">
+          <div className="loading-title">Loading freeflight</div>
+          <div className="loading-bar" role="progressbar" aria-label="Loading" />
+          <div className="loading-status">Connecting to ff-api…</div>
+          {loadSlow && (
+            <div className="loading-hint">
+              Still connecting to {API_BASE_URL} — the server may be waking up or the data cycle is
+              large. Hang tight.
+            </div>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
