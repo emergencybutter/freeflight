@@ -87,6 +87,98 @@
   height: 100vh;
 }
 
+/* The main area below the top toggle: the map pane, a drag handle, and
+   the info/flight-plan panel. Narrow → stacked (map on top); wide → side
+   by side (map on the left). */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-map {
+  position: relative;
+  flex-grow: 0;
+  flex-shrink: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* flex-basis is set inline (its height when stacked, its width when
+     side by side — flex-basis follows the container's main axis). */
+}
+
+/* Drag handle: a row-resize grip between the stacked map and panel when
+   narrow, a col-resize grip between the columns when wide. */
+.workspace-resizer {
+  flex: 0 0 7px;
+  position: relative;
+  z-index: 2;
+  background: #0e1626;
+  border-top: 1px solid #1c2333;
+  border-bottom: 1px solid #1c2333;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.workspace-resizer::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2.5rem;
+  height: 3px;
+  border-radius: 2px;
+  background: #3a4a68;
+}
+
+.workspace-resizer:hover {
+  background: #16233a;
+}
+
+.workspace-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-info,
+.flight-plan-pane {
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+@media (min-width: 900px) {
+  .workspace {
+    flex-direction: row;
+  }
+  .workspace-resizer {
+    flex-basis: 7px;
+    border-top: none;
+    border-bottom: none;
+    border-left: 1px solid #1c2333;
+    border-right: 1px solid #1c2333;
+    cursor: col-resize;
+  }
+  .workspace-resizer::after {
+    width: 3px;
+    height: 2.5rem;
+  }
+}
+
+/* Narrow only: the Flight Plan view is full-screen (no map), matching the
+   original phone-first layout. Wide keeps the map visible in both views. */
+@media (max-width: 899.98px) {
+  .app-layout[data-view="plan"] .workspace-map,
+  .app-layout[data-view="plan"] .workspace-resizer {
+    display: none;
+  }
+}
+
 .sync-status {
   flex-shrink: 0;
   padding: 0.3rem 0.75rem;
@@ -203,8 +295,8 @@
 }
 
 .map-view {
-  height: 42vh;
-  flex-shrink: 0;
+  width: 100%;
+  height: 100%;
   position: relative;
 }
 
@@ -310,6 +402,21 @@
   grid-template-columns: 1fr 1fr;
   flex: 1;
   min-height: 0;
+}
+
+/* Wide layout puts the map-info in a narrower side panel, so the airport
+   and procedure detail stack in one column there instead of side by
+   side (which only has room when the info spans the full narrow width). */
+@media (min-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .layout .panel {
+    border-right: none;
+  }
+  .layout .panel + .panel {
+    border-top: 1px solid #1c2333;
+  }
 }
 
 .panel {

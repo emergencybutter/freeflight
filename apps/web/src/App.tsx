@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
@@ -24,6 +24,11 @@ import { fetchMetar, fetchTaf } from "./weather";
 import "./App.css";
 
 const EMPTY_ROUTE: RouteState = { departure: null, arrival: null, sid: null, star: null, middleTokens: [] };
+
+// Above this width the map becomes a persistent left column with the
+// info/flight-plan on the right; below it the views stack (map on top,
+// info below), which is the original phone-first layout.
+const WIDE_LAYOUT_QUERY = "(min-width: 900px)";
 
 type TapTabId = "airport" | "waypoint" | "airspace" | "pireps" | "airmet" | "sigmet" | "cwa";
 const TAP_TABS: { id: TapTabId; label: string }[] = [
@@ -59,6 +64,51 @@ export default function App() {
   // in WaypointTab since that tab unmounts whenever another tap tab is
   // shown, which would otherwise reset the count.
   const [userWaypointCount, setUserWaypointCount] = useState(0);
+
+  // Responsive layout: wide = map is the left column, info/flight-plan on
+  // the right; narrow = the original stacked layout (map on top).
+  const mapPaneRef = useRef<HTMLDivElement>(null);
+  const [isWide, setIsWide] = useState(() => window.matchMedia(WIDE_LAYOUT_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(WIDE_LAYOUT_QUERY);
+    const onChange = () => setIsWide(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  // The map pane is drag-resized independently per orientation — its
+  // width when it's the left column (wide), its height when it's the top
+  // row (narrow) — so flipping between them keeps a sensible size for
+  // each rather than reusing a pixel count that only fit the other axis.
+  // null = use the CSS default (55% wide / 42vh tall).
+  const [mapWidthPx, setMapWidthPx] = useState<number | null>(null);
+  const [mapHeightPx, setMapHeightPx] = useState<number | null>(null);
+  const startMapResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const pane = mapPaneRef.current;
+    if (!pane) return;
+    const rect = pane.getBoundingClientRect();
+    const wide = isWide;
+    const startPos = wide ? e.clientX : e.clientY;
+    const startSize = wide ? rect.width : rect.height;
+    const max = (wide ? window.innerWidth : window.innerHeight) * 0.85;
+    const onMove = (ev: PointerEvent) => {
+      const delta = (wide ? ev.clientX : ev.clientY) - startPos;
+      const next = Math.max(160, Math.min(max, startSize + delta));
+      if (wide) setMapWidthPx(next);
+      else setMapHeightPx(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+  const mapPaneStyle: React.CSSProperties = isWide
+    ? { flexBasis: mapWidthPx !== null ? `${mapWidthPx}px` : "55%" }
+    : { flexBasis: mapHeightPx !== null ? `${mapHeightPx}px` : "42vh" };
   // Lifted out of FlightPlanning (rather than its own local state) so
   // MapView can draw the planned route too. Departure/arrival/SID/STAR
   // are dedicated slots (picked explicitly via FlightPlanning's route
@@ -183,7 +233,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-layout">
+    <div className="app-layout" data-view={view}>
       <div className="sync-status">
         <span className="view-toggle">
           <button className={view === "map" ? "selected" : ""} onClick={() => setView("map")}>
@@ -194,94 +244,107 @@ export default function App() {
           </button>
         </span>
       </div>
-      {/* Both views stay mounted once shown — conditionally rendering
-          them out of the tree on every toggle used to destroy the
-          Flight Plan view's own React state (the route, the profile,
-          W&B loads) the instant you switched to the map and back.
-          Visibility is CSS-only; MapView gets a `visible` prop so it
-          can call MapLibre's resize() when it reappears, since a map
-          left `display: none` doesn't repaint correctly on its own. */}
-      <div style={{ display: view === "map" ? "contents" : "none" }}>
-        <MapView
-          selectedAirport={selectedAirport}
-          onSelectAirport={selectAirport}
-          onMapTap={setMapTap}
-          selectedProcedureId={selectedProcedureId}
-          visible={view === "map"}
-          route={routePoints}
-          preferredAltitudeFt={profile.cruise_altitude_ft}
-        />
-        <div className="tap-tab-bar">
-          {TAP_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              className={activeTapTab === tab.id ? "selected" : ""}
-              onClick={() => setActiveTapTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-        {activeTapTab === "airport" && (
-          <>
-            <AirportActionBar
-              selectedAirport={selectedAirport}
-              isDeparture={selectedAirport !== null && selectedAirport.icao === route.departure?.ident}
-              isArrival={selectedAirport !== null && selectedAirport.icao === route.arrival?.ident}
-              onSelectAirport={selectAirport}
-              onSetDeparture={setSelectedAirportAsDeparture}
-              onSetArrival={setSelectedAirportAsArrival}
-              onAddToFlightPlan={addSelectedAirportToFlightPlan}
-            />
-            <div className="layout">
-              {selectedAirport && (
-                <AirportPanel
-                  icao={selectedAirport.icao}
-                  selectedProcedureId={selectedProcedureId}
-                  onSelectProcedure={setSelectedProcedureId}
-                />
-              )}
-              {selectedProcedureId && (
-                <ProcedurePanel procedureId={selectedProcedureId} route={route} onRouteChange={setRoute} />
-              )}
-            </div>
-          </>
-        )}
-        {activeTapTab === "waypoint" && (
-          <WaypointTab
-            mapTap={mapTap}
-            route={route}
-            onRouteChange={setRoute}
-            userWaypointCount={userWaypointCount}
-            onAddUserWaypoint={() => setUserWaypointCount((n) => n + 1)}
+      {/* The workspace is a two-pane split: the map, and the info/
+          flight-plan panel. Wide → side by side (map left); narrow →
+          stacked (map top). The map is kept mounted always (App toggles
+          the right panel's contents, not the map) so `visible` is true
+          whenever it's actually shown; the right panel keeps both the
+          map-info and Flight Plan mounted, toggling visibility via CSS,
+          so the Flight Plan view's own local state survives switching. */}
+      <div className="workspace">
+        <div className="workspace-map" style={mapPaneStyle} ref={mapPaneRef}>
+          <MapView
+            selectedAirport={selectedAirport}
+            onSelectAirport={selectAirport}
+            onMapTap={setMapTap}
+            selectedProcedureId={selectedProcedureId}
+            visible={isWide || view === "map"}
+            route={routePoints}
+            preferredAltitudeFt={profile.cruise_altitude_ft}
           />
-        )}
-        {activeTapTab === "airspace" && (
-          <TapInfoTab items={mapTap?.airspace ?? []} formatter={airspaceInfoHtml} emptyText="No airspace at the last tap." />
-        )}
-        {activeTapTab === "pireps" && (
-          <TapInfoTab items={mapTap?.pireps ?? []} formatter={pirepInfoHtml} emptyText="No PIREP at the last tap." />
-        )}
-        {activeTapTab === "airmet" && (
-          <TapInfoTab items={mapTap?.gairmets ?? []} formatter={gairmetInfoHtml} emptyText="No G-AIRMET at the last tap." />
-        )}
-        {activeTapTab === "sigmet" && (
-          <TapInfoTab items={mapTap?.sigmets ?? []} formatter={sigmetInfoHtml} emptyText="No SIGMET at the last tap." />
-        )}
-        {activeTapTab === "cwa" && (
-          <TapInfoTab items={mapTap?.cwas ?? []} formatter={cwaInfoHtml} emptyText="No CWA at the last tap." />
-        )}
-      </div>
-      <div style={{ display: view === "plan" ? "contents" : "none" }}>
-        <FlightPlanning
-          route={route}
-          onRouteChange={setRoute}
-          points={routePoints}
-          warnings={expandedMiddle.warnings}
-          airspaceCrossings={airspaceCrossings}
-          profile={profile}
-          onProfileChange={setProfile}
+        </div>
+        <div
+          className="workspace-resizer"
+          onPointerDown={startMapResize}
+          role="separator"
+          aria-orientation={isWide ? "vertical" : "horizontal"}
+          aria-label="Resize map"
         />
+        <div className="workspace-panel">
+          <div className="map-info" style={{ display: view === "map" ? "flex" : "none" }}>
+            <div className="tap-tab-bar">
+              {TAP_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  className={activeTapTab === tab.id ? "selected" : ""}
+                  onClick={() => setActiveTapTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {activeTapTab === "airport" && (
+              <>
+                <AirportActionBar
+                  selectedAirport={selectedAirport}
+                  isDeparture={selectedAirport !== null && selectedAirport.icao === route.departure?.ident}
+                  isArrival={selectedAirport !== null && selectedAirport.icao === route.arrival?.ident}
+                  onSelectAirport={selectAirport}
+                  onSetDeparture={setSelectedAirportAsDeparture}
+                  onSetArrival={setSelectedAirportAsArrival}
+                  onAddToFlightPlan={addSelectedAirportToFlightPlan}
+                />
+                <div className="layout">
+                  {selectedAirport && (
+                    <AirportPanel
+                      icao={selectedAirport.icao}
+                      selectedProcedureId={selectedProcedureId}
+                      onSelectProcedure={setSelectedProcedureId}
+                    />
+                  )}
+                  {selectedProcedureId && (
+                    <ProcedurePanel procedureId={selectedProcedureId} route={route} onRouteChange={setRoute} />
+                  )}
+                </div>
+              </>
+            )}
+            {activeTapTab === "waypoint" && (
+              <WaypointTab
+                mapTap={mapTap}
+                route={route}
+                onRouteChange={setRoute}
+                userWaypointCount={userWaypointCount}
+                onAddUserWaypoint={() => setUserWaypointCount((n) => n + 1)}
+              />
+            )}
+            {activeTapTab === "airspace" && (
+              <TapInfoTab items={mapTap?.airspace ?? []} formatter={airspaceInfoHtml} emptyText="No airspace at the last tap." />
+            )}
+            {activeTapTab === "pireps" && (
+              <TapInfoTab items={mapTap?.pireps ?? []} formatter={pirepInfoHtml} emptyText="No PIREP at the last tap." />
+            )}
+            {activeTapTab === "airmet" && (
+              <TapInfoTab items={mapTap?.gairmets ?? []} formatter={gairmetInfoHtml} emptyText="No G-AIRMET at the last tap." />
+            )}
+            {activeTapTab === "sigmet" && (
+              <TapInfoTab items={mapTap?.sigmets ?? []} formatter={sigmetInfoHtml} emptyText="No SIGMET at the last tap." />
+            )}
+            {activeTapTab === "cwa" && (
+              <TapInfoTab items={mapTap?.cwas ?? []} formatter={cwaInfoHtml} emptyText="No CWA at the last tap." />
+            )}
+          </div>
+          <div className="flight-plan-pane" style={{ display: view === "plan" ? "flex" : "none" }}>
+            <FlightPlanning
+              route={route}
+              onRouteChange={setRoute}
+              points={routePoints}
+              warnings={expandedMiddle.warnings}
+              airspaceCrossings={airspaceCrossings}
+              profile={profile}
+              onProfileChange={setProfile}
+            />
+          </div>
+        </div>
       </div>
       <div className="status-footer">
         Cycle {cycleId} · live from ff-api at {API_BASE_URL}

@@ -907,6 +907,12 @@ export function MapView({
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), "top-right");
 
+    // MapLibre only auto-tracks *window* resizes, not container ones —
+    // so when the map pane is drag-resized or the narrow/wide layout
+    // flips (App.tsx), nudge it to repaint at the new container size.
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(containerRef.current);
+
     map.on("load", () => {
       map.addSource(AIRPORTS_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
       map.addLayer({
@@ -1451,6 +1457,7 @@ export function MapView({
 
     return () => {
       unmountedRef.current = true;
+      resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
       setLoaded(false);
