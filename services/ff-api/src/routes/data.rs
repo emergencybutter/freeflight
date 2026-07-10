@@ -66,6 +66,11 @@ pub struct AirportDetail {
     pub airport: AirportRow,
     pub runways: Vec<RunwayRow>,
     pub frequencies: Vec<FrequencyRow>,
+    /// The FAA d-TPP airport diagram, if `ff-etl`'s d-TPP matching found
+    /// one for this airport (see `ff-etl::dtpp::AIRPORT_DIAGRAM_IDENT`) —
+    /// `None` doesn't mean there's no real diagram, just that this cycle
+    /// didn't confidently link one (or the airport has none published).
+    pub airport_diagram_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -373,10 +378,23 @@ pub async fn airport_detail(
             frequencies.push(frequency?);
         }
 
+        // Same "at most one row expected, take the first" shape as
+        // procedure_detail's own chart lookup below — see that comment.
+        let airport_diagram_url = conn
+            .query_row(
+                "SELECT pdf_url FROM dtpp_chart
+                 WHERE airport_icao = ?1 AND procedure_ident = ?2
+                 ORDER BY id LIMIT 1",
+                rusqlite::params![icao, ff_etl::dtpp::AIRPORT_DIAGRAM_IDENT],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
+
         Ok(AirportDetail {
             airport,
             runways,
             frequencies,
+            airport_diagram_url,
         })
     })
     .await;

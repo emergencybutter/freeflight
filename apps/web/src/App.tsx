@@ -29,6 +29,16 @@ import "./App.css";
 
 const EMPTY_ROUTE: RouteState = { departure: null, arrival: null, sid: null, star: null, middleTokens: [] };
 
+// A sentinel value for `selectedProcedureId` (shared with the real
+// procedure/SID/STAR ids it normally holds) meaning "show this airport's
+// diagram instead of a procedure" — an airport diagram isn't a procedure
+// (no transitions/legs, no route-builder "+"), so it's rendered by its
+// own AirportDiagramPanel rather than ProcedurePanel, but reuses the same
+// single-selection slot so picking a diagram and picking a procedure
+// behave identically (only one detail panel showing at a time, cleared
+// when a new airport is selected).
+const AIRPORT_DIAGRAM_SELECTION = "__AIRPORT_DIAGRAM__";
+
 // Above this width the map becomes a persistent left column with the
 // info/flight-plan on the right; below it the views stack (map on top,
 // info below), which is the original phone-first layout.
@@ -314,7 +324,10 @@ export default function App() {
                       onSelectProcedure={setSelectedProcedureId}
                     />
                   )}
-                  {selectedProcedureId && (
+                  {selectedProcedureId === AIRPORT_DIAGRAM_SELECTION && selectedAirport && (
+                    <AirportDiagramPanel icao={selectedAirport.icao} />
+                  )}
+                  {selectedProcedureId && selectedProcedureId !== AIRPORT_DIAGRAM_SELECTION && (
                     <ProcedurePanel procedureId={selectedProcedureId} route={route} onRouteChange={setRoute} />
                   )}
                 </div>
@@ -661,6 +674,22 @@ function AirportPanel({
       </p>
 
       <WeatherSection icao={icao} />
+
+      <h3>Airport Diagram</h3>
+      {detail.airport_diagram_url ? (
+        <ul className="procedure-list">
+          <li>
+            <button
+              className={selectedProcedureId === AIRPORT_DIAGRAM_SELECTION ? "selected" : ""}
+              onClick={() => onSelectProcedure(AIRPORT_DIAGRAM_SELECTION)}
+            >
+              View diagram
+            </button>
+          </li>
+        </ul>
+      ) : (
+        <p className="hint">none in this cycle</p>
+      )}
 
       {(["SID", "STAR", "APPROACH"] as const).map((kind) => (
         <div key={kind}>
@@ -1048,6 +1077,74 @@ function ProcedurePanel({
           </table>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** The airport diagram detail panel — same chart-frame/"Full Page"
+ * presentation as ProcedurePanel's plate, but with no transitions/legs
+ * (a diagram isn't a procedure) and its own fetch: the diagram URL comes
+ * from AirportDetail (`/data/airports/:icao`), not a procedure-detail
+ * response, so this re-fetches that endpoint rather than threading the
+ * URL down from the sibling AirportPanel that already has it — the same
+ * "each detail panel fetches its own data" shape ProcedurePanel already
+ * uses. */
+function AirportDiagramPanel({ icao }: { icao: string }) {
+  const [detail, setDetail] = useState<AirportDetailData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [chartExpanded, setChartExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null);
+    setError(null);
+    setChartExpanded(false);
+    fetchAirportDetail(icao)
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [icao]);
+
+  if (error) {
+    return (
+      <div className="panel procedure-detail">
+        <p className="hint">Failed to load airport diagram: {error}</p>
+      </div>
+    );
+  }
+  if (!detail) {
+    return (
+      <div className="panel procedure-detail">
+        <p className="hint">loading…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel procedure-detail">
+      <h2>{detail.icao} Airport Diagram</h2>
+      {detail.airport_diagram_url ? (
+        <>
+          <div className={chartExpanded ? "dtpp-chart-toolbar dtpp-chart-toolbar-expanded" : "dtpp-chart-toolbar"}>
+            <button onClick={() => setChartExpanded((prev) => !prev)}>
+              {chartExpanded ? "Reduce" : "Full Page"}
+            </button>
+          </div>
+          <iframe
+            src={detail.airport_diagram_url}
+            title={`${detail.icao} airport diagram`}
+            className={chartExpanded ? "dtpp-chart-frame dtpp-chart-frame-expanded" : "dtpp-chart-frame"}
+          />
+        </>
+      ) : (
+        <p className="hint">No FAA airport diagram matched for this airport.</p>
+      )}
     </div>
   );
 }

@@ -43,6 +43,10 @@ export interface Frequency {
 export interface AirportDetail extends Airport {
   runways: Runway[];
   frequencies: Frequency[];
+  /** The FAA d-TPP airport diagram PDF, if ff-etl's d-TPP matching found
+   * one for this cycle — null doesn't mean there's no real diagram, just
+   * that this app couldn't confidently link one. */
+  airport_diagram_url: string | null;
 }
 
 export interface Procedure {

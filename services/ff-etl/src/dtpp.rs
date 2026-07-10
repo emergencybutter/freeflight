@@ -24,7 +24,7 @@ use chrono::NaiveDate;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -122,8 +122,8 @@ pub fn discover_dtpp_cycle() -> Result<String, DtppError> {
 }
 
 /// One `<record>` from the metafile, kept only for `chart_code`s this
-/// app links (SIDs/ODPs/STARs/Approaches — not airport diagrams, takeoff/
-/// alternate minimums, or hot spots).
+/// app links (SIDs/ODPs/STARs/Approaches/Airport Diagrams — not takeoff/
+/// alternate minimums or hot spots).
 struct DtppRecord {
     icao_ident: String,
     chart_code: String,
@@ -132,7 +132,17 @@ struct DtppRecord {
     faanfd18: String,
 }
 
-const WANTED_CHART_CODES: [&str; 4] = ["DP", "ODP", "STR", "IAP"];
+const WANTED_CHART_CODES: [&str; 5] = ["DP", "ODP", "STR", "IAP", "APD"];
+
+/// Sentinel `dtpp_chart.procedure_ident` for an airport diagram row — a
+/// diagram is airport-level, not tied to a specific procedure, but
+/// `dtpp_chart` only has an `(airport_icao, procedure_ident)` key (no
+/// separate airport-level chart table), so this reuses that column
+/// rather than adding a new one. Confirmed against a real metafile: every
+/// `APD` record's `chart_name` is the literal string `"AIRPORT DIAGRAM"`
+/// with no runway/variant, so unlike `IAP`/`DP`/`STR` there's nothing to
+/// disambiguate — one row per airport is all this ever needs to express.
+pub const AIRPORT_DIAGRAM_IDENT: &str = "AIRPORT_DIAGRAM";
 
 /// Streams the metafile rather than building a full DOM — it's ~16MB and
 /// this only needs a handful of fields off each `<record>`, tagged with
@@ -401,6 +411,15 @@ fn match_record(record: &DtppRecord, procedures: &AirportProcedures) -> Option<S
     }
 }
 
+/// Whether an `APD` record should become an airport-diagram row — true
+/// when its airport actually exists in this bundle (see
+/// `fetch_and_match_dtpp_charts`'s doc comment on `airport_icaos` for why
+/// this checks the `airport` table rather than `by_airport`). A no-op for
+/// any other chart code, since only `APD` records ever reach this check.
+fn is_airport_diagram_in_bundle(record: &DtppRecord, airport_icaos: &HashSet<String>) -> bool {
+    record.chart_code == "APD" && airport_icaos.contains(&record.icao_ident)
+}
+
 /// Downloads and parses the given cycle's d-TPP metafile, then matches
 /// its SID/STAR/Approach records against every procedure already in the
 /// bundle being built (`bundle_path`, opened read-only here — the
@@ -433,8 +452,33 @@ pub fn fetch_and_match_dtpp_charts(
             .push((ident, runway_ident, kind));
     }
 
+    // Airport diagrams match against this bundle's airports directly
+    // rather than `by_airport` — a diagram is airport-level, and plenty
+    // of airports that have one (a towered field with only visual
+    // approaches, say) carry no SID/STAR/IAP procedure at all, so gating
+    // on `by_airport` the way match_record's other chart codes do would
+    // silently drop them.
+    let mut airport_icaos: HashSet<String> = HashSet::new();
+    let mut stmt = conn.prepare("SELECT icao FROM airport")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        airport_icaos.insert(row?);
+    }
+
     let mut matched = Vec::new();
     for record in &records {
+        if record.chart_code == "APD" {
+            if is_airport_diagram_in_bundle(record, &airport_icaos) {
+                matched.push(MatchedDtppChart {
+                    airport_icao: record.icao_ident.clone(),
+                    procedure_ident: AIRPORT_DIAGRAM_IDENT.to_string(),
+                    chart_name: record.chart_name.clone(),
+                    pdf_url: format!("https://aeronav.faa.gov/d-tpp/{cycle}/{}", record.pdf_name),
+                    cycle: cycle.to_string(),
+                });
+            }
+            continue;
+        }
         let Some(procedures) = by_airport.get(&record.icao_ident) else {
             continue;
         };
@@ -449,4 +493,87 @@ pub fn fetch_and_match_dtpp_charts(
         }
     }
     Ok(matched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_an_airport_diagram_record_alongside_procedure_charts() {
+        // Excerpt shape confirmed against a real d-TPP metafile (KSFO):
+        // APD sits among IAP/STR/DP records for the same airport, with
+        // chart_name always the literal "AIRPORT DIAGRAM".
+        let xml = br#"<?xml version="1.0"?>
+            <digital_tpp cycle="2607" from_edate="0901Z  07/09/26" to_edate="0901Z  08/06/26">
+              <state_code ID="CA" state_fullname="CALIFORNIA">
+                <city_name ID="SAN FRANCISCO" volume="SW-2">
+                  <airport_name ID="SAN FRANCISCO INTL" apt_ident="SFO" icao_ident="KSFO" alnum="375">
+                    <record>
+                      <chart_code>MIN</chart_code>
+                      <chart_name>TAKEOFF MINIMUMS</chart_name>
+                      <pdf_name>SW2TO.PDF</pdf_name>
+                      <faanfd18></faanfd18>
+                    </record>
+                    <record>
+                      <chart_code>APD</chart_code>
+                      <chart_name>AIRPORT DIAGRAM</chart_name>
+                      <pdf_name>00375AD.PDF</pdf_name>
+                      <faanfd18></faanfd18>
+                    </record>
+                    <record>
+                      <chart_code>IAP</chart_code>
+                      <chart_name>ILS OR LOC RWY 28R</chart_name>
+                      <pdf_name>00375IL28R.PDF</pdf_name>
+                      <faanfd18></faanfd18>
+                    </record>
+                  </airport_name>
+                </city_name>
+              </state_code>
+            </digital_tpp>"#;
+
+        let records = parse_dtpp_records(xml).unwrap();
+        let apd = records
+            .iter()
+            .find(|r| r.chart_code == "APD")
+            .expect("APD record should be parsed now that it's in WANTED_CHART_CODES");
+        assert_eq!(apd.icao_ident, "KSFO");
+        assert_eq!(apd.chart_name, "AIRPORT DIAGRAM");
+        assert_eq!(apd.pdf_name, "00375AD.PDF");
+        // The other wanted codes are unaffected.
+        assert!(records.iter().any(|r| r.chart_code == "IAP"));
+        // MIN was never wanted and still isn't.
+        assert!(!records.iter().any(|r| r.chart_code == "MIN"));
+    }
+
+    #[test]
+    fn airport_diagrams_only_match_airports_present_in_this_bundle() {
+        // A regional/test bundle can restrict its `airport` table to a
+        // subset of ICAOs — an APD record for one outside that subset
+        // must not produce a match, the same way match_record's other
+        // chart codes are already implicitly restricted via `by_airport`.
+        let airport_icaos: HashSet<String> = ["KSFO".to_string()].into_iter().collect();
+        let record = |icao: &str| DtppRecord {
+            icao_ident: icao.to_string(),
+            chart_code: "APD".to_string(),
+            chart_name: "AIRPORT DIAGRAM".to_string(),
+            pdf_name: "00375AD.PDF".to_string(),
+            faanfd18: String::new(),
+        };
+        assert!(is_airport_diagram_in_bundle(&record("KSFO"), &airport_icaos));
+        assert!(!is_airport_diagram_in_bundle(&record("KOAK"), &airport_icaos));
+    }
+
+    #[test]
+    fn non_apd_records_never_match_as_an_airport_diagram() {
+        let airport_icaos: HashSet<String> = ["KSFO".to_string()].into_iter().collect();
+        let record = DtppRecord {
+            icao_ident: "KSFO".to_string(),
+            chart_code: "IAP".to_string(),
+            chart_name: "ILS OR LOC RWY 28R".to_string(),
+            pdf_name: "00375IL28R.PDF".to_string(),
+            faanfd18: String::new(),
+        };
+        assert!(!is_airport_diagram_in_bundle(&record, &airport_icaos));
+    }
 }

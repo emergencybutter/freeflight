@@ -1,0 +1,14 @@
+# Builds the one-off backfill_airport_diagrams tool — pure metadata (a
+# PDF URL string per airport), no raster processing, so unlike
+# Dockerfile.tiler this needs no GDAL. Build context is the workspace root.
+FROM rust:1-bookworm AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p ff-etl --bin backfill_airport_diagrams
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/backfill_airport_diagrams /usr/local/bin/backfill_airport_diagrams
+CMD ["backfill_airport_diagrams"]
