@@ -2,7 +2,7 @@ use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
 use crate::bundle::{
     add_airspace, add_chart, add_dtpp_charts, build_bundle, BundleSource, ChartSource,
 };
-use crate::chart_prep::{crop_legend_and_collar, expand_palette_to_rgb};
+use crate::chart_prep::{crop_legend_and_collar, crop_to_neatline, expand_palette_to_rgb};
 use crate::dtpp::{discover_dtpp_cycle, fetch_and_match_dtpp_charts};
 use crate::fetch::{
     discover_chart_cycle, discover_ifr_enroute_cycle, fetch_cifp, fetch_ifr_enroute_panel,
@@ -149,22 +149,24 @@ pub fn run() -> Result<(), EtlError> {
     }
 
     // IFR Enroute Low/High Altitude panels, same shape as the sectional
-    // loop above but no legend crop: unlike sectionals (colored terrain
-    // body, white legend/collar), these charts' *body* is itself mostly
-    // white background with just line symbology, so the white-fraction
-    // crop heuristic can't tell chart content from legend — confirmed by
+    // loop above but cropped by neatline detection rather than the
+    // white-band heuristic: unlike sectionals (colored terrain body,
+    // white legend/collar), these charts' *body* is itself mostly white
+    // background with just line symbology, so the white-fraction crop
+    // heuristic can't tell chart content from legend — confirmed by
     // running it against a real downloaded panel, where it kept only
-    // 4.5% of the image. Tiling the panel uncropped leaves a persistent
-    // legend column visible on one edge, a cosmetic compromise rather
-    // than a correctness bug (real paper IFR charts have the same
-    // margin). These GeoTIFFs are already 3-band RGB (confirmed via
-    // gdalinfo on real samples) rather than palette-indexed like
-    // sectionals — expand_palette_to_rgb detects this and skips the
-    // conversion (calling `gdal_translate -expand rgb` on an
-    // already-RGB source doesn't just do nothing, it errors: caught
-    // live while validating this against a real downloaded panel).
-    // Still called for one shared code path in case some panel (e.g. a
-    // future Caribbean/oceanic addition) is palette-indexed after all.
+    // 4.5% of the image. crop_to_neatline finds the black frame around
+    // the body instead, and degrades to tiling the panel uncropped when
+    // no frame is detected. Expansion runs before cropping since
+    // neatline detection needs real RGB (see crop_to_neatline's docs);
+    // these GeoTIFFs are already 3-band RGB (confirmed via gdalinfo on
+    // real samples) rather than palette-indexed like sectionals —
+    // expand_palette_to_rgb detects this and skips the conversion
+    // (calling `gdal_translate -expand rgb` on an already-RGB source
+    // doesn't just do nothing, it errors: caught live while validating
+    // this against a real downloaded panel). Still called for one shared
+    // code path in case some panel (e.g. a future Caribbean/oceanic
+    // addition) is palette-indexed after all.
     let ifr_cycle: IfrEnrouteCycle = discover_ifr_enroute_cycle()?;
     tracing::info!(
         low = ifr_cycle.low_panel_names.len(),
@@ -190,6 +192,8 @@ pub fn run() -> Result<(), EtlError> {
             let parts = fetch_ifr_enroute_panel(chart_workdir.path(), panel_name, &ifr_cycle)?;
             for part in parts {
                 let rgb_tif = expand_palette_to_rgb(&part.tif_path, chart_workdir.path())?;
+                let rgb_tif =
+                    crop_to_neatline(&rgb_tif, chart_workdir.path())?.unwrap_or(rgb_tif);
 
                 let slug = part.label.to_lowercase();
                 let pmtiles_filename = format!("chart-{slug}.pmtiles");
@@ -216,13 +220,15 @@ pub fn run() -> Result<(), EtlError> {
     }
 
     // Terminal Area Charts — whose zips also carry each city's VFR Flyway
-    // planning chart — plus Helicopter route charts. Tiled whole, with no
-    // legend crop: these terminal/specialty charts aren't what
-    // crop_legend_and_collar's white-fraction heuristic was tuned for, and
-    // their collars are minor — the same uncropped tradeoff the IFR panels
-    // above already make. A missing tac-files/Heli_files listing leaves
-    // these lists empty (see discover_chart_cycle), so this simply does
-    // nothing rather than failing the run.
+    // planning chart — plus Helicopter route charts, cropped by neatline
+    // detection like the IFR panels above: crop_legend_and_collar's
+    // white-band heuristic can't read these layouts (a TAC's legend side
+    // carries colored inset panels that stop the white scan early), but
+    // they all frame the georeferenced body in a black neatline. Degrades
+    // to tiling uncropped when no frame is detected. A missing
+    // tac-files/Heli_files listing leaves these lists empty (see
+    // discover_chart_cycle), so this simply does nothing rather than
+    // failing the run.
     for (subdir, names) in [
         ("tac-files", &chart_cycle.tac_names),
         ("Heli_files", &chart_cycle.heli_names),
@@ -233,6 +239,8 @@ pub fn run() -> Result<(), EtlError> {
             let parts = fetch_terminal_chart_zip(chart_workdir.path(), name, subdir, &chart_cycle)?;
             for part in parts {
                 let rgb_tif = expand_palette_to_rgb(&part.tif_path, chart_workdir.path())?;
+                let rgb_tif =
+                    crop_to_neatline(&rgb_tif, chart_workdir.path())?.unwrap_or(rgb_tif);
                 // Kind-specific slug suffix keeps these from colliding with
                 // the same city's sectional (e.g. `chart-los_angeles`) or
                 // each other (`-tac`/`-fly`/`-heli`).
