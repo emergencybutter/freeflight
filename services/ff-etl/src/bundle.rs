@@ -700,6 +700,7 @@ fn chart_kind_str(k: ChartKind) -> &'static str {
     match k {
         ChartKind::Sectional => "Sectional",
         ChartKind::TerminalAreaChart => "TerminalAreaChart",
+        ChartKind::VfrFlyway => "VfrFlyway",
         ChartKind::WorldAeronauticalChart => "WorldAeronauticalChart",
         ChartKind::IfrEnrouteLow => "IfrEnrouteLow",
         ChartKind::IfrEnrouteHigh => "IfrEnrouteHigh",

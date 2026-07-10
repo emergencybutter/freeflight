@@ -62,6 +62,9 @@ function nearestWindsAloftLevel(altitudeFt: number): number {
  * for anything not listed here. */
 const CHART_KIND_LABELS: Record<string, string> = {
   Sectional: "Sectional",
+  TerminalAreaChart: "TAC",
+  VfrFlyway: "Flyway",
+  HelicopterRoute: "Heli",
   IfrEnrouteLow: "IFR Low",
   IfrEnrouteHigh: "IFR High",
 };

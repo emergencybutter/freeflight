@@ -4,6 +4,7 @@
 //! environments, so if these calls start failing with connection errors
 //! (as opposed to a 4xx/5xx from FAA itself), check egress policy first,
 //! not this code.
+use ff_charts::ChartKind;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -181,18 +182,26 @@ pub fn fetch_nasr(workdir: &Path, cycle_date: &str) -> Result<PathBuf, FetchErro
 pub struct ChartCycle {
     pub dates: Vec<String>,
     pub sectional_names: Vec<String>,
+    /// Terminal Area Chart names under `tac-files/` (e.g. `"Los_Angeles_TAC"`)
+    /// — each zip also carries that city's VFR Flyway chart (see
+    /// [`fetch_tac_chart`]). Empty if the cycle's `tac-files/` listing is
+    /// unavailable, which just means no TAC/Flyway charts this run.
+    pub tac_names: Vec<String>,
+    /// Helicopter route chart names under `Heli_files/` (e.g.
+    /// `"Los_Angeles_Heli"`). Empty if that listing is unavailable.
+    pub heli_names: Vec<String>,
 }
 
-/// Scans a `sectional-files/` directory listing page for `NAME.zip`
-/// entries and returns the names (e.g. `"San_Francisco"`), sorted and
-/// deduplicated. Same substring-scanning approach as
-/// [`latest_cifp_zip_name`]/[`chart_cycle_dates`] — no HTML parser
-/// dependency needed for FAA's simple directory-listing markup.
-fn sectional_names_from_listing(listing_html: &str) -> Vec<String> {
+/// Scans a directory-listing page for `<subdir>/NAME.zip` entries and
+/// returns the names, sorted and deduplicated. Same substring-scanning
+/// approach as [`latest_cifp_zip_name`]/[`chart_cycle_dates`] — no HTML
+/// parser dependency needed for FAA's simple directory-listing markup.
+fn zip_names_from_listing(listing_html: &str, subdir: &str) -> Vec<String> {
+    let marker = format!("{subdir}/");
     let mut names = Vec::new();
     let mut rest = listing_html;
-    while let Some(pos) = rest.find("sectional-files/") {
-        rest = &rest[pos + "sectional-files/".len()..];
+    while let Some(pos) = rest.find(&marker) {
+        rest = &rest[pos + marker.len()..];
         if let Some(end) = rest.find(".zip") {
             let candidate = &rest[..end];
             if !candidate.is_empty() && !candidate.contains('/') && !candidate.contains('"') {
@@ -203,6 +212,17 @@ fn sectional_names_from_listing(listing_html: &str) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+/// One extracted, kind-classified chart TIF from a TAC or Heli zip (see
+/// [`fetch_tac_chart`]/[`fetch_heli_chart`]) — the analog of
+/// [`SectionalTif`] but carrying the [`ChartKind`] since a single TAC zip
+/// holds both a TAC and a VFR Flyway chart, distinguished by filename.
+pub struct ChartPart {
+    /// e.g. `"Los_Angeles"`, or `"Los_Angeles_East"` for a split heli chart.
+    pub label: String,
+    pub tif_path: PathBuf,
+    pub kind: ChartKind,
 }
 
 /// Discovers the current chart cycle's candidate dates and the full list
@@ -227,16 +247,40 @@ pub fn discover_chart_cycle() -> Result<ChartCycle, FetchError> {
         let resp = client.get(&url).send()?;
         if resp.status().is_success() {
             let listing = resp.text()?;
-            let sectional_names = sectional_names_from_listing(&listing);
+            let sectional_names = zip_names_from_listing(&listing, "sectional-files");
             if !sectional_names.is_empty() {
+                // TAC and Helicopter charts live in sibling directories for
+                // the same cycle date. Best-effort: a missing/empty listing
+                // (some cycles, or an egress hiccup) just yields no charts
+                // of that kind rather than failing the whole run, since the
+                // sectionals — the primary VFR layer — are already in hand.
+                let tac_names = list_chart_dir(&client, date, "tac-files");
+                let heli_names = list_chart_dir(&client, date, "Heli_files");
                 return Ok(ChartCycle {
                     dates: dates.clone(),
                     sectional_names,
+                    tac_names,
+                    heli_names,
                 });
             }
         }
     }
     Err(FetchError::NoChartCycleFound)
+}
+
+/// Lists `<subdir>/NAME.zip` entries for a chart cycle date, returning an
+/// empty list (not an error) if the directory is missing or unreadable —
+/// see the call site in [`discover_chart_cycle`] for why these secondary
+/// chart kinds degrade rather than fail the run.
+fn list_chart_dir(client: &reqwest::blocking::Client, date: &str, subdir: &str) -> Vec<String> {
+    let url = format!("https://aeronav.faa.gov/visual/{date}/{subdir}/");
+    match client.get(&url).send() {
+        Ok(resp) if resp.status().is_success() => match resp.text() {
+            Ok(listing) => zip_names_from_listing(&listing, subdir),
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// Scans the FAA VFR charts page for `visual/MM-DD-YYYY/` chart-cycle
@@ -345,6 +389,91 @@ pub fn fetch_sectional_chart(
         results.push(SectionalTif { label, tif_path });
     }
 
+    Ok(results)
+}
+
+/// Classifies a chart TIF filename from a TAC/Heli zip by its trailing
+/// product suffix and returns the chart kind plus a clean, underscored
+/// label. FAA names these `"<City> TAC.tif"`, `"<City> FLY.tif"`, and
+/// `"<City> [East|West] HEL.tif"` (confirmed live). `None` for anything
+/// that doesn't match a known suffix, so the caller can skip it.
+fn classify_chart_tif(filename: &str) -> Option<(ChartKind, String)> {
+    let stem = Path::new(filename).file_stem()?.to_str()?;
+    for (suffix, kind) in [
+        (" TAC", ChartKind::TerminalAreaChart),
+        (" FLY", ChartKind::VfrFlyway),
+        (" HEL", ChartKind::HelicopterRoute),
+    ] {
+        if let Some(base) = stem.strip_suffix(suffix) {
+            return Some((kind, base.trim().replace(' ', "_")));
+        }
+    }
+    None
+}
+
+/// Downloads a TAC or Helicopter chart zip (`subdir` = `"tac-files"` or
+/// `"Heli_files"`) for whichever of `cycle`'s candidate dates has it, and
+/// extracts every recognized `.tif` inside, kind-classified by filename
+/// (see [`classify_chart_tif`]). A TAC zip yields two parts — the TAC and
+/// its VFR Flyway — while a heli zip yields one or more `HEL` tifs. Same
+/// newest-first date fallback and multi-tif handling as
+/// [`fetch_sectional_chart`].
+pub fn fetch_terminal_chart_zip(
+    workdir: &Path,
+    name: &str,
+    subdir: &str,
+    cycle: &ChartCycle,
+) -> Result<Vec<ChartPart>, FetchError> {
+    let client = http_client();
+
+    let mut zip_bytes = None;
+    for date in &cycle.dates {
+        let url = format!("https://aeronav.faa.gov/visual/{date}/{subdir}/{name}.zip");
+        let resp = client.get(&url).send()?;
+        if resp.status().is_success() {
+            tracing::info!(chart_cycle = %date, chart = %name, "downloading terminal/heli chart");
+            zip_bytes = Some(resp.bytes()?);
+            break;
+        }
+        tracing::warn!(chart_cycle = %date, status = %resp.status(), "terminal/heli chart not available for this cycle, trying older");
+    }
+    let zip_bytes = zip_bytes.ok_or(FetchError::NoChartCycleFound)?;
+
+    let zip_path = workdir.join(format!("{name}.zip"));
+    std::fs::write(&zip_path, &zip_bytes)?;
+
+    let zip_file = std::fs::File::open(&zip_path)?;
+    let mut archive = zip::ZipArchive::new(zip_file)?;
+    let tif_indices: Vec<usize> = (0..archive.len())
+        .filter(|&i| {
+            archive
+                .by_index(i)
+                .map(|entry| entry.name().ends_with(".tif"))
+                .unwrap_or(false)
+        })
+        .collect();
+    if tif_indices.is_empty() {
+        return Err(FetchError::NoChartTifFound);
+    }
+
+    let mut results = Vec::with_capacity(tif_indices.len());
+    for (n, index) in tif_indices.into_iter().enumerate() {
+        let mut entry = archive.by_index(index)?;
+        let name_in_zip = entry.name().to_string();
+        let Some((kind, label)) = classify_chart_tif(&name_in_zip) else {
+            tracing::warn!(file = %name_in_zip, "unrecognized chart tif name (not TAC/FLY/HEL), skipping");
+            continue;
+        };
+        let tif_path = workdir.join(format!("terminal_{n}.tif"));
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)?;
+        std::fs::write(&tif_path, &buf)?;
+        results.push(ChartPart {
+            label,
+            tif_path,
+            kind,
+        });
+    }
     Ok(results)
 }
 
@@ -560,7 +689,7 @@ mod tests {
             <A HREF="/visual/07-09-2026/sectional-files/San_Francisco.zip">San_Francisco.zip</A> 12-Jun-2026 09:14AM 77919083
         "#;
         assert_eq!(
-            sectional_names_from_listing(html),
+            zip_names_from_listing(html, "sectional-files"),
             vec![
                 "Albuquerque".to_string(),
                 "Dallas-Ft_Worth".to_string(),
@@ -570,8 +699,39 @@ mod tests {
     }
 
     #[test]
+    fn finds_tac_names_from_a_real_directory_listing() {
+        // Shape confirmed against a live aeronav.faa.gov tac-files listing;
+        // Heli_files uses the same markup with its own subdir marker.
+        let html = r#"
+            <A HREF="/visual/07-09-2026/tac-files/Los_Angeles_TAC.zip">Los_Angeles_TAC.zip</A> 10-Jun-2026 01:53PM 37425023
+            <A HREF="/visual/07-09-2026/tac-files/New_York_TAC.zip">New_York_TAC.zip</A> 10-Jun-2026 01:53PM 41234567
+        "#;
+        assert_eq!(
+            zip_names_from_listing(html, "tac-files"),
+            vec!["Los_Angeles_TAC".to_string(), "New_York_TAC".to_string()]
+        );
+    }
+
+    #[test]
+    fn classifies_chart_tifs_by_product_suffix() {
+        assert_eq!(
+            classify_chart_tif("Los Angeles TAC.tif"),
+            Some((ChartKind::TerminalAreaChart, "Los_Angeles".to_string()))
+        );
+        assert_eq!(
+            classify_chart_tif("Los Angeles FLY.tif"),
+            Some((ChartKind::VfrFlyway, "Los_Angeles".to_string()))
+        );
+        assert_eq!(
+            classify_chart_tif("Los Angeles East HEL.tif"),
+            Some((ChartKind::HelicopterRoute, "Los_Angeles_East".to_string()))
+        );
+        assert_eq!(classify_chart_tif("Something Else.tif"), None);
+    }
+
+    #[test]
     fn ignores_listing_pages_with_no_sectional_entries() {
-        assert!(sectional_names_from_listing("<html><body>empty</body></html>").is_empty());
+        assert!(zip_names_from_listing("<html><body>empty</body></html>", "sectional-files").is_empty());
     }
 
     #[test]

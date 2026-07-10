@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub enum ChartKind {
     Sectional,
     TerminalAreaChart,
+    /// VFR Flyway Planning chart — printed on the reverse of a TAC and
+    /// shipped as its own `<City> FLY.tif` inside the same TAC zip.
+    VfrFlyway,
     WorldAeronauticalChart,
     IfrEnrouteLow,
     IfrEnrouteHigh,

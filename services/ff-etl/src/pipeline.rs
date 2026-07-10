@@ -6,7 +6,7 @@ use crate::chart_prep::{crop_legend_and_collar, expand_palette_to_rgb};
 use crate::dtpp::{discover_dtpp_cycle, fetch_and_match_dtpp_charts};
 use crate::fetch::{
     discover_chart_cycle, discover_ifr_enroute_cycle, fetch_cifp, fetch_ifr_enroute_panel,
-    fetch_nasr, fetch_sectional_chart, ChartCycle, IfrEnrouteCycle,
+    fetch_nasr, fetch_sectional_chart, fetch_terminal_chart_zip, ChartCycle, IfrEnrouteCycle,
 };
 use crate::publish::{latest_bundle_path, publish_bundle};
 use crate::validate::validate_bundle;
@@ -207,6 +207,57 @@ pub fn run() -> Result<(), EtlError> {
                     },
                 )?;
                 tracing::info!(panel = %part.label, "tiled IFR enroute panel into PMTiles and added chart_catalog entry");
+
+                let published_copy = workdir.path().join(&pmtiles_filename);
+                std::fs::copy(&pmtiles_path, &published_copy)?;
+                published_pmtiles.push((pmtiles_filename, published_copy));
+            }
+        }
+    }
+
+    // Terminal Area Charts — whose zips also carry each city's VFR Flyway
+    // planning chart — plus Helicopter route charts. Tiled whole, with no
+    // legend crop: these terminal/specialty charts aren't what
+    // crop_legend_and_collar's white-fraction heuristic was tuned for, and
+    // their collars are minor — the same uncropped tradeoff the IFR panels
+    // above already make. A missing tac-files/Heli_files listing leaves
+    // these lists empty (see discover_chart_cycle), so this simply does
+    // nothing rather than failing the run.
+    for (subdir, names) in [
+        ("tac-files", &chart_cycle.tac_names),
+        ("Heli_files", &chart_cycle.heli_names),
+    ] {
+        for name in names {
+            tracing::info!(chart = %name, subdir, "fetching terminal/heli chart");
+            let chart_workdir = tempfile::tempdir()?;
+            let parts = fetch_terminal_chart_zip(chart_workdir.path(), name, subdir, &chart_cycle)?;
+            for part in parts {
+                let rgb_tif = expand_palette_to_rgb(&part.tif_path, chart_workdir.path())?;
+                // Kind-specific slug suffix keeps these from colliding with
+                // the same city's sectional (e.g. `chart-los_angeles`) or
+                // each other (`-tac`/`-fly`/`-heli`).
+                let (slug_suffix, name_suffix) = match part.kind {
+                    ChartKind::TerminalAreaChart => ("tac", "TAC"),
+                    ChartKind::VfrFlyway => ("fly", "VFR Flyway"),
+                    ChartKind::HelicopterRoute => ("heli", "Helicopter"),
+                    _ => ("chart", "Chart"),
+                };
+                let slug = format!("{}-{slug_suffix}", part.label.to_lowercase());
+                let pmtiles_filename = format!("chart-{slug}.pmtiles");
+                let pmtiles_path = chart_workdir.path().join(&pmtiles_filename);
+                add_chart(
+                    &bundle_path,
+                    &ChartSource {
+                        id: format!("{}-{slug}", cifp.cycle_date),
+                        geotiff_path: rgb_tif,
+                        pmtiles_out: pmtiles_path.clone(),
+                        cycle_id: cifp.cycle_date.clone(),
+                        name: format!("{} {name_suffix}", part.label.replace('_', " ")),
+                        tile_url: format!("/bundles/{}/{pmtiles_filename}", cifp.cycle_date),
+                        kind: part.kind,
+                    },
+                )?;
+                tracing::info!(chart = %part.label, kind = ?part.kind, "tiled terminal/heli chart into PMTiles and added chart_catalog entry");
 
                 let published_copy = workdir.path().join(&pmtiles_filename);
                 std::fs::copy(&pmtiles_path, &published_copy)?;
