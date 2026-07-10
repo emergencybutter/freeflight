@@ -226,6 +226,34 @@ export interface MapTapResult {
   pireps: Record<string, unknown>[];
 }
 
+/** One NOTAM from the FAA NMS API, unwrapped from the GeoJSON envelope
+ * `{ data: { geojson: [ { properties: { coreNOTAMData: { notam } } } ] } }`
+ * that `GET /notams?location=<icao>` proxies through (see ff-notam). Only
+ * the fields the panel renders are typed; the API sends more. `text` is
+ * the NOTAM body; `effectiveStart`/`effectiveEnd` are ISO timestamps (or
+ * a keyword like "PERM" for `effectiveEnd`). */
+export interface Notam {
+  id: string;
+  number: string;
+  type: string;
+  issued: string;
+  location: string;
+  effectiveStart: string;
+  effectiveEnd: string;
+  text: string;
+  classification: string;
+  icaoLocation: string;
+}
+
+/** The raw `GET /notams` envelope — `status` plus a GeoJSON
+ * FeatureCollection-ish `data.geojson` array carrying the NOTAMs. */
+export interface NotamResponse {
+  status: string;
+  data?: {
+    geojson?: { properties?: { coreNOTAMData?: { notam?: Notam } } }[];
+  };
+}
+
 /** `GET /cycles/latest` — mirrors ff-sync's CycleManifest. */
 export interface CycleManifest {
   cycle_id: string;

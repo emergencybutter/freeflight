@@ -572,6 +572,27 @@ th {
   margin: 0 0 0.6rem;
 }
 
+.notam-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #1c2333;
+}
+
+.notam-item:last-child {
+  border-bottom: none;
+}
+
+.notam-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.notam-item .raw-report {
+  white-space: pre-wrap;
+}
+
 .raw-report {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.82rem;

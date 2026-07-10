@@ -27,7 +27,27 @@ pub enum NotamError {
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
+    // FAA's production API returns this as a JSON number, but the CGI
+    // staging/SIT gateways return it as a quoted string (e.g. "1799") —
+    // accept either so the same client works against both.
+    #[serde(deserialize_with = "de_u64_or_string")]
     expires_in: u64,
+}
+
+fn de_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum U64OrString {
+        U64(u64),
+        String(String),
+    }
+    match U64OrString::deserialize(deserializer)? {
+        U64OrString::U64(n) => Ok(n),
+        U64OrString::String(s) => s.parse().map_err(serde::de::Error::custom),
+    }
 }
 
 struct CachedToken {
@@ -170,5 +190,18 @@ mod tests {
             client.fetch_notams_raw("").await,
             Err(NotamError::NoLocation)
         ));
+    }
+
+    #[test]
+    fn token_response_accepts_string_or_numeric_expires_in() {
+        // CGI staging returns expires_in as a quoted string...
+        let staging: TokenResponse =
+            serde_json::from_str(r#"{"access_token":"abc","expires_in":"1799"}"#).unwrap();
+        assert_eq!(staging.expires_in, 1799);
+        assert_eq!(staging.access_token, "abc");
+        // ...production returns it as a JSON number.
+        let prod: TokenResponse =
+            serde_json::from_str(r#"{"access_token":"xyz","expires_in":1799}"#).unwrap();
+        assert_eq!(prod.expires_in, 1799);
     }
 }

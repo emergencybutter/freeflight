@@ -1,4 +1,4 @@
-use ff_notam::NotamClient;
+use ff_notam::{NotamClient, DEFAULT_API_BASE_URL, DEFAULT_AUTH_URL};
 use ff_weather::WeatherClient;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,7 +21,17 @@ impl Default for AppState {
             std::env::var("FF_NOTAM_CLIENT_ID"),
             std::env::var("FF_NOTAM_CLIENT_SECRET"),
         ) {
-            (Ok(id), Ok(secret)) => Some(Arc::new(NotamClient::new(id, secret))),
+            (Ok(id), Ok(secret)) => {
+                // Default to the production NMS host, but allow overriding
+                // the auth/API base URLs so the same build can point at
+                // FAA's staging/SIT (cgifederal-aim.com) environments —
+                // whichever the issued client_id/secret belong to.
+                let auth_url =
+                    std::env::var("FF_NOTAM_AUTH_URL").unwrap_or_else(|_| DEFAULT_AUTH_URL.to_string());
+                let api_base_url = std::env::var("FF_NOTAM_API_BASE_URL")
+                    .unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_string());
+                Some(Arc::new(NotamClient::with_urls(id, secret, auth_url, api_base_url)))
+            }
             _ => None,
         };
         let data_dir =

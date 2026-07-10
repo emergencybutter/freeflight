@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView } from "./MapView";
+import { fetchNotams } from "./notams";
 import { loadPlan, savePlan } from "./persistence";
 import { findCrossedAirspace } from "./planning/airspaceCrossing";
 import { expandRoute } from "./planning/expandRoute";
@@ -16,6 +17,7 @@ import type {
   Datis,
   MapTapResult,
   Metar,
+  Notam,
   Procedure,
   ProcedureDetail as ProcedureDetailData,
   RouteState,
@@ -727,6 +729,8 @@ function AirportPanel({
           </tbody>
         </table>
       )}
+
+      <NotamSection icao={icao} />
     </div>
   );
 }
@@ -825,6 +829,84 @@ function WeatherSection({ icao }: { icao: string }) {
           <span className="raw-report">{d.datis}</span>
         </p>
       ))}
+    </>
+  );
+}
+
+/** ISO timestamp → compact UTC label (e.g. "Apr 26, 23:59Z"); passes
+ * through non-date keywords like "PERM"/"EST" unchanged. */
+function formatNotamTime(s: string): string {
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return (
+    d.toLocaleString("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }) + "Z"
+  );
+}
+
+// Staging can return hundreds of test NOTAMs; cap the rendered list so a
+// busy field doesn't spawn a huge DOM (the rest are one scroll away in
+// the panel anyway, and real fields carry far fewer).
+const MAX_NOTAMS_SHOWN = 60;
+
+/** Current NOTAMs for the selected airport, proxied through ff-api's FAA
+ * NMS bridge. Shows a friendly note if the proxy isn't configured
+ * (ff-api returns 501 without credentials). */
+function NotamSection({ icao }: { icao: string }) {
+  const [notams, setNotams] = useState<Notam[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setNotams(null);
+    fetchNotams(icao)
+      .then((list) => {
+        if (!cancelled) setNotams(list);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [icao]);
+
+  return (
+    <>
+      <h3>NOTAMs{notams && notams.length > 0 ? ` (${notams.length})` : ""}</h3>
+      {loading && <p className="hint">loading…</p>}
+      {error && <p className="hint">Couldn't fetch NOTAMs: {error}</p>}
+      {!loading && !error && notams && notams.length === 0 && <p className="hint">no current NOTAMs</p>}
+      {!loading &&
+        !error &&
+        notams?.slice(0, MAX_NOTAMS_SHOWN).map((n) => (
+          <div key={n.id} className="notam-item">
+            <div className="notam-head">
+              <strong>{n.number}</strong>
+              <span className="hint">
+                {formatNotamTime(n.effectiveStart)} – {formatNotamTime(n.effectiveEnd)}
+              </span>
+            </div>
+            <div className="raw-report">{n.text}</div>
+          </div>
+        ))}
+      {!loading && !error && notams && notams.length > MAX_NOTAMS_SHOWN && (
+        <p className="hint">
+          Showing first {MAX_NOTAMS_SHOWN} of {notams.length}.
+        </p>
+      )}
     </>
   );
 }

@@ -10,6 +10,12 @@ services:
     environment:
       - FF_ETL_DATA_DIR=/data
       - PORT=8080
+    # Secrets (FF_NOTAM_CLIENT_ID/FF_NOTAM_CLIENT_SECRET for the FAA NMS
+    # NOTAM proxy) live in a server-only .env — never committed. Optional
+    # so a fresh checkout without it still starts (NOTAMs just stay off).
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - /containers/freeflight/data:/data:ro
     networks:
