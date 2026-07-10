@@ -327,7 +327,8 @@
   margin: 0.15rem 0;
 }
 
-.winds-aloft-altitude-select {
+.winds-aloft-altitude-select,
+.chart-kind-select {
   width: auto;
   padding: 0.3rem 0.6rem;
   font-size: 0.8rem;

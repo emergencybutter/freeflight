@@ -69,6 +69,18 @@ const CHART_KIND_LABELS: Record<string, string> = {
   IfrEnrouteHigh: "IFR High",
 };
 
+// Dropdown order for the base-chart selector — VFR (broad → terminal),
+// then IFR, then the specialty heli charts. Kinds not listed fall to the
+// end. Independent of the catalog's own alphabetical ordering.
+const CHART_KIND_ORDER: Record<string, number> = {
+  Sectional: 0,
+  TerminalAreaChart: 1,
+  VfrFlyway: 2,
+  IfrEnrouteLow: 3,
+  IfrEnrouteHigh: 4,
+  HelicopterRoute: 5,
+};
+
 const FLIGHT_CATEGORY_COLORS: Record<string, string> = {
   VFR: "#3fa64a",
   MVFR: "#1f6fd1",
@@ -1565,21 +1577,21 @@ export function MapView({
     };
   }, [selectedProcedureId, loaded]);
 
-  // At most one chart kind at a time — Sectional/IFR Low/IFR High are
+  // At most one chart series at a time — Sectional/TAC/Flyway/IFR/Heli are
   // meant to replace each other, not stack (they're the same charts at
-  // different altitude scopes, not independent overlays like airspace/
-  // weather/airports below). Clicking the already-selected one turns it
-  // off with nothing to replace it; clicking a different one swaps to
-  // just that one.
-  const toggleChartKind = (kind: string) => {
+  // different scales/scopes, not independent overlays like airspace/
+  // weather/airports below), so they're a single dropdown rather than the
+  // independent on/off buttons further down. `kind` is the chosen series,
+  // or "" for no base chart.
+  const selectChartKind = (kind: string) => {
     const map = mapRef.current;
     if (!map) return;
-    setVisibleChartKinds((current) => {
-      const next: Set<string> = current.has(kind) ? new Set() : new Set([kind]);
-      // First time this kind is selected, its sources/layers haven't
-      // been added yet (see materializeChartKind) — do that now so the
+    setVisibleChartKinds(() => {
+      const next: Set<string> = kind ? new Set([kind]) : new Set();
+      // First time a kind is selected, its sources/layers haven't been
+      // added yet (see materializeChartKind) — do that now so the
       // visibility loop below has layer ids to flip.
-      if (next.has(kind)) materializeChartKind(map, kind);
+      if (kind) materializeChartKind(map, kind);
       for (const [k, layerIds] of chartLayerIdsByKindRef.current) {
         const nowVisible = next.has(k);
         for (const layerId of layerIds) {
@@ -1638,15 +1650,26 @@ export function MapView({
     <div className="map-view">
       <div ref={containerRef} className="map-view-canvas" />
       <div className="chart-kind-toggle">
-        {chartKinds.map((kind) => (
-          <button
-            key={kind}
-            className={visibleChartKinds.has(kind) ? "selected" : ""}
-            onClick={() => toggleChartKind(kind)}
-          >
-            {CHART_KIND_LABELS[kind] ?? kind}
-          </button>
-        ))}
+        {/* One base chart series at a time — a dropdown rather than a row
+            of mutually-exclusive buttons, since there are now several
+            (Sectional/TAC/Flyway/IFR Low/IFR High/Heli). Ordered by
+            CHART_KIND_ORDER so the list reads sensibly regardless of the
+            catalog's own ordering. */}
+        <select
+          className="chart-kind-select"
+          value={[...visibleChartKinds][0] ?? ""}
+          onChange={(e) => selectChartKind(e.target.value)}
+          aria-label="Base chart"
+        >
+          <option value="">No chart</option>
+          {[...chartKinds]
+            .sort((a, b) => (CHART_KIND_ORDER[a] ?? 99) - (CHART_KIND_ORDER[b] ?? 99))
+            .map((kind) => (
+              <option key={kind} value={kind}>
+                {CHART_KIND_LABELS[kind] ?? kind}
+              </option>
+            ))}
+        </select>
         {/* Independent of chart-kind loading — winds-aloft is fetched
             eagerly on mount regardless of the chart catalog, so this
             shouldn't wait on chartKinds the way the toggle buttons do. */}
