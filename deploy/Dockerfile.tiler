@@ -1,0 +1,15 @@
+# Builds the one-off tile_terminal_charts backfill tool with GDAL's CLI
+# tools in the runtime, so TAC/VFR-Flyway/Helicopter charts can be tiled
+# into an existing cycle on vya2 without installing GDAL on the host.
+# Build context is the workspace root.
+FROM rust:1-bookworm AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p ff-etl --bin tile_terminal_charts
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gdal-bin ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/tile_terminal_charts /usr/local/bin/tile_terminal_charts
+CMD ["tile_terminal_charts"]
