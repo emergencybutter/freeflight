@@ -219,6 +219,7 @@ Implemented today:
 | `GET /weather/pirep?bbox=` | both clients | `Vec<Pirep>` — unlike the other weather routes this one requires a bbox (aviationweather.gov's own API does too); its lat/lon order differs from this app's other bbox routes, converted server-side rather than leaking that inconsistency to clients |
 | `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin`, each station's ident additionally resolved to a `lat`/`lon` against the current cycle bundle (best-effort — the raw NWS product only carries idents; used for the route builder's nearest-station wind lookup, §9.3) |
 | `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
+| `GET /dtpp/plate?url=` | web (`PlateViewer`) | proxies a single FAA d-TPP plate PDF byte-for-byte (`Content-Type: application/pdf`) — `url` must start with `https://aeronav.faa.gov/d-tpp/` (checked server-side; otherwise 400) so this can't be turned into an open proxy. Exists because `pdf.js` needs to fetch the PDF's bytes itself for highlighter annotation (§9.1), and aeronav.faa.gov sends no CORS headers, so a direct browser fetch is blocked |
 | `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256). `pmtiles_url`/`sha256` are always `None`: a nationwide cycle publishes one PMTiles file per sectional, which this single-chart shape can't represent (see `/data/charts` for the real list) — revisit once Android needs multi-chart offline sync |
 | `GET /bundles/:id/cycle.sqlite` | Android sync | raw SQLite bytes (static file service, Range-capable) |
 | `GET /bundles/:id/chart-<sectional>.pmtiles` | both clients | one sectional's chart tiles, one file per `chart_catalog` row — PMTiles is fetched via HTTP Range requests (web reads it directly through MapLibre's pmtiles protocol) |
@@ -533,19 +534,46 @@ Consequences:
   the selected airport already matches that slot.
 - Selecting a procedure draws it on the map (leg-by-leg from
   `procedure_leg`) and, when `ff-etl`'s d-TPP matching found one, shows
-  the real FAA plate chart inline for visual cross-check — implemented
-  on web as a plain `<iframe>` pointing straight at the FAA-hosted PDF
-  (browsers render PDFs natively; no `pdf.js` or other client-side
-  rendering dependency needed, simpler than originally envisioned here).
-  Android's equivalent still needs its own approach (a `WebView`-based
-  iframe wouldn't get the same free ride — see `[dtpp-render]`, §12).
-  A "+" next to the procedure's heading adds it as the route builder's
-  SID/STAR directly from this view, without needing to browse for it
-  again via §9.3's own picker — resolves immediately if the procedure
-  has a single enroute transition,
-  else shows the transition list to choose from (same "skip the picker
-  when there's only one real choice" behavior as the route builder's own
-  SID/STAR picker).
+  the real FAA plate chart inline for visual cross-check — rendered on
+  web by `PlateViewer` (`apps/web/src/PlateViewer.tsx`) via `pdf.js` onto
+  a `<canvas>`, not the plain `<iframe>` this used before: a pilot can
+  mark a plate up with translucent highlighter strokes (four colors, plus
+  Erase/Undo/Clear — see below), and that needs pixels this page's JS
+  controls, which a cross-origin iframe's rendered PDF content never
+  gives access to. `pdf.js` needs the PDF's own bytes to rasterize, and
+  aeronav.faa.gov sends no CORS headers, so `ff-api`'s `/dtpp/plate?url=`
+  (§4.1) fetches server-side and re-serves them from our own origin —
+  the same reasoning as this server's weather/NOTAM proxies, applied to a
+  static file instead of a live API. The same `PlateViewer` backs
+  `ProcedurePanel`'s plate, `AirportDiagramPanel`'s diagram, and
+  `QuickChartLinks`' full-page overlay — one component, three call
+  sites, matching the pre-existing "Full Page"/"Reduce" toggle's
+  fixed-height (normal) / fullscreen (expanded) footprint. The page is
+  fit "contain" (whole plate visible, no scroll/pan/zoom in v1) rather
+  than reproducing a full PDF viewer. Android's equivalent still needs
+  its own approach (a `WebView` can't run this page's `pdf.js`/canvas
+  code either — see `[dtpp-render]`, §12).
+  - **Highlighter annotations**: freehand strokes drawn by dragging over
+    the plate, stored as fractional (page-relative) point lists in
+    `localStorage` keyed by the plate's own PDF URL
+    (`apps/web/src/annotations.ts`, `freeflight.plateAnnotations.v1`) —
+    same best-effort persistence contract as `persistence.ts`'s flight
+    plan, and (like that plan) session-local/device-local only: no
+    server sync, no cross-device story (Phase 4 territory if ever). A
+    plate's URL embeds its FAA d-TPP cycle, so a cycle rollover simply
+    starts that plate's markup over rather than trying to carry it onto
+    a plate that may have changed. Rendered translucent (0.4 opacity) on
+    a second, transparent canvas stacked over the PDF canvas — a real
+    highlighter's own look, legible over whatever's underneath rather
+    than obscuring it. The eraser hit-tests a pointer position against
+    each stroke's polyline (point-to-segment distance) rather than
+    requiring a pixel-exact hit.
+  - A "+" next to the procedure's heading adds it as the route builder's
+    SID/STAR directly from this view, without needing to browse for it
+    again via §9.3's own picker — resolves immediately if the procedure
+    has a single enroute transition, else shows the transition list to
+    choose from (same "skip the picker when there's only one real
+    choice" behavior as the route builder's own SID/STAR picker).
 
 ### 9.2 Weather & NOTAMs
 
@@ -716,14 +744,24 @@ document survive insertions/removals.
   does it deploy, who notices when it's down, and what's the trigger for
   adding rate limiting/CORS restrictions (proposal: before any non-local
   deployment, not after the first incident).
-- **[dtpp-render] d-TPP plate rendering — web resolved, Android open**:
-  web links/displays the real FAA plate inline via a plain `<iframe>`
-  (§9.1) — browsers render PDFs natively, so this needed no rendering
-  library at all, simpler than the PDF.js/native-renderer approach
-  originally envisioned here. Android still needs its own spike: no
+- **[dtpp-render] d-TPP plate rendering — web resolved (twice over),
+  Android open**: web originally displayed the real FAA plate inline via
+  a plain `<iframe>` — simpler than the `pdf.js`/native-renderer approach
+  first envisioned here, since browsers render PDFs natively. That
+  changed once highlighter annotation (§9.1) needed pixels this page's
+  JS controls, which a cross-origin iframe's rendered content can't
+  give — web now renders plates itself via `pdf.js` onto a `<canvas>`
+  (`PlateViewer`), fetching bytes through `ff-api`'s `/dtpp/plate` proxy
+  (§4.1) since aeronav.faa.gov sends no CORS headers for a direct
+  browser fetch. Net effect: the "no rendering library needed" win was
+  temporary, but it bought time before the actual requirement (markup,
+  not just viewing) showed up. Android still needs its own spike: no
   equivalent "just point an iframe at it" trick, so it's a choice
   between an in-app PDF rendering library (perf/quality on low-end
-  devices unverified) and "open externally" (simpler, worse UX).
+  devices unverified) and "open externally" (simpler, worse UX) — and
+  if Android ever wants highlighter parity with web, that decision
+  needs to support drawing on the rendered output too, not just
+  displaying it.
 - **[leg-types] ARINC 424 leg coding completeness**: implementing the
   full leg-type state machine (RF legs, vectors-to-final, holding
   patterns) is nontrivial; Phase 1 should scope down to the common leg
@@ -770,7 +808,8 @@ document survive insertions/removals.
   airports/PIREPs/CWA overlay toggles, a tap-driven Airport/Waypoint/
   Airspace/PIREPs/AIRMET/SIGMET/CWA tab bar replacing per-layer popups
   (§9.1), full METAR/TAF/AIRMET/SIGMET/CWA/PIREP/winds-aloft weather
-  (§9.2), and inline FAA plate charts for SID/STAR/Approach procedures.
+  (§9.2), and inline FAA plate charts (SID/STAR/Approach/Airport Diagram)
+  rendered via `pdf.js` with translucent highlighter annotation (§9.1).
   NOTAM proxy exists but its record shape is still unvalidated pending
   credentials (`[notam-api]`, §12). **Android hasn't been started at
   all** — every item above is web-only; Android is the actual gap this

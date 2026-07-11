@@ -549,8 +549,18 @@ th {
   margin-bottom: 1.25rem;
 }
 
-.dtpp-chart-frame {
-  display: block;
+/* PlateViewer: a d-TPP plate (SID/STAR/Approach/Airport Diagram) rendered
+   via pdf.js onto a canvas, "contain"-fit into this box (whole page
+   visible, letterboxed on whichever axis has slack), with a second
+   transparent canvas stacked on top for highlighter annotations — see
+   PlateViewer.tsx. Same footprint/expanded behavior as the plain-iframe
+   version this replaced (`.dtpp-chart-frame`/`-expanded`, now retired). */
+.plate-canvas-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   width: 100%;
   height: 70vh;
   margin: 0.5rem 0 1rem;
@@ -559,7 +569,7 @@ th {
   background: #fff;
 }
 
-.dtpp-chart-frame-expanded {
+.plate-canvas-wrap-expanded {
   position: fixed;
   inset: 0;
   width: 100vw;
@@ -570,9 +580,32 @@ th {
   z-index: 1000;
 }
 
+.plate-page {
+  position: relative;
+}
+
+.plate-pdf-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.plate-draw-canvas {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+
+.plate-status {
+  position: absolute;
+  color: #333;
+}
+
 .dtpp-chart-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   margin-top: 0.5rem;
 }
 
@@ -585,8 +618,30 @@ th {
 .dtpp-chart-toolbar-expanded {
   position: fixed;
   top: 0.6rem;
+  left: 0.6rem;
   right: 0.6rem;
   z-index: 1001;
+}
+
+.highlighter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.highlighter-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+
+.highlighter-swatch.active {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
 }
 
 .weather-report {

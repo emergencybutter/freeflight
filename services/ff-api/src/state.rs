@@ -13,6 +13,13 @@ pub struct AppState {
     /// Same directory `ff-etl` publishes cycle bundles under
     /// (`FF_ETL_DATA_DIR`, default `data/`) — see `routes::cycles`.
     pub data_dir: PathBuf,
+    /// Shared client for `routes::dtpp`'s d-TPP plate PDF proxy — a plain
+    /// `reqwest::Client` (not one of `WeatherClient`/`NotamClient`'s
+    /// wrapped ones) since this route doesn't decode/cache a structured
+    /// response, just re-serves the upstream bytes. Built once and cloned
+    /// (cheap — internally `Arc`-backed) rather than per-request, so
+    /// connections to aeronav.faa.gov can be reused.
+    pub http: reqwest::Client,
 }
 
 impl Default for AppState {
@@ -40,6 +47,7 @@ impl Default for AppState {
             weather: Arc::new(WeatherClient::new()),
             notam,
             data_dir,
+            http: reqwest::Client::new(),
         }
     }
 }

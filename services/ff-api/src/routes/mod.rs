@@ -1,5 +1,6 @@
 pub mod cycles;
 pub mod data;
+pub mod dtpp;
 pub mod health;
 pub mod notams;
 pub mod weather;
@@ -44,6 +45,7 @@ pub fn router(state: AppState) -> Router {
         .route("/data/airspace", get(data::airspace))
         .route("/data/nearest_fix", get(data::nearest_fix))
         .route("/notams", get(notams::get_notams))
+        .route("/dtpp/plate", get(dtpp::plate))
         .nest_service("/bundles", bundles)
         .with_state(state)
         // Permissive: this proxies only public FAA/NOAA data and takes no

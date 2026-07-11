@@ -9,6 +9,7 @@ import { expandRoute } from "./planning/expandRoute";
 import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
 import { buildResolvedProcedure, transitionOptions } from "./planning/procedureLookup";
 import type { AircraftProfile } from "./planning/wasm";
+import { PlateViewer } from "./PlateViewer";
 import { buildShareUrl, clearSharedPlanFromUrl, hydrateSharedRoute, readSharedPlanFromUrl } from "./share";
 import { airspaceInfoHtml, cwaInfoHtml, gairmetInfoHtml, pirepInfoHtml, sigmetInfoHtml } from "./tapInfo";
 import type {
@@ -525,12 +526,13 @@ function QuickChartLinks({ route }: { route: RouteState }) {
         ))}
       </span>
       {expanded && (
-        <>
-          <div className="dtpp-chart-toolbar dtpp-chart-toolbar-expanded">
-            <button onClick={() => setExpanded(null)}>Close</button>
-          </div>
-          <iframe src={expanded.url} title={expanded.title} className="dtpp-chart-frame-expanded" />
-        </>
+        <PlateViewer
+          url={expanded.url}
+          title={expanded.title}
+          expanded
+          onToggleExpanded={() => setExpanded(null)}
+          collapseLabel="Close"
+        />
       )}
     </>
   );
@@ -1190,18 +1192,12 @@ function ProcedurePanel({
       )}
       {detail.runway_ident && <p className="hint">runway {detail.runway_ident}</p>}
       {detail.chart_url ? (
-        <>
-          <div className={chartExpanded ? "dtpp-chart-toolbar dtpp-chart-toolbar-expanded" : "dtpp-chart-toolbar"}>
-            <button onClick={() => setChartExpanded((prev) => !prev)}>
-              {chartExpanded ? "Reduce" : "Full Page"}
-            </button>
-          </div>
-          <iframe
-            src={detail.chart_url}
-            title={detail.chart_name ?? `${detail.kind} ${detail.ident} plate`}
-            className={chartExpanded ? "dtpp-chart-frame dtpp-chart-frame-expanded" : "dtpp-chart-frame"}
-          />
-        </>
+        <PlateViewer
+          url={detail.chart_url}
+          title={detail.chart_name ?? `${detail.kind} ${detail.ident} plate`}
+          expanded={chartExpanded}
+          onToggleExpanded={() => setChartExpanded((prev) => !prev)}
+        />
       ) : (
         <p className="hint">No FAA plate chart matched for this procedure.</p>
       )}
@@ -1288,18 +1284,12 @@ function AirportDiagramPanel({ icao }: { icao: string }) {
     <div className="panel procedure-detail">
       <h2>{detail.icao} Airport Diagram</h2>
       {detail.airport_diagram_url ? (
-        <>
-          <div className={chartExpanded ? "dtpp-chart-toolbar dtpp-chart-toolbar-expanded" : "dtpp-chart-toolbar"}>
-            <button onClick={() => setChartExpanded((prev) => !prev)}>
-              {chartExpanded ? "Reduce" : "Full Page"}
-            </button>
-          </div>
-          <iframe
-            src={detail.airport_diagram_url}
-            title={`${detail.icao} airport diagram`}
-            className={chartExpanded ? "dtpp-chart-frame dtpp-chart-frame-expanded" : "dtpp-chart-frame"}
-          />
-        </>
+        <PlateViewer
+          url={detail.airport_diagram_url}
+          title={`${detail.icao} airport diagram`}
+          expanded={chartExpanded}
+          onToggleExpanded={() => setChartExpanded((prev) => !prev)}
+        />
       ) : (
         <p className="hint">No FAA airport diagram matched for this airport.</p>
       )}
