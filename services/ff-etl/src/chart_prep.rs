@@ -253,32 +253,25 @@ pub fn crop_legend_and_collar(
 /// A pixel is "dark" for neatline detection if even its brightest channel
 /// is dim — colored chart body (yellow terrain, blue water) keeps a bright
 /// max channel, while the black frame line stays dark even after `-r
-/// average` downsampling blurs it against white paper.
-const NEATLINE_DARK_MAX_CHANNEL: u8 = 160;
-/// Looser darkness for the row-detection retry: a real Los Angeles VFR
-/// Flyway chart draws its *top* frame line thin enough to blur to light
-/// gray (its sides and bottom stay black), so it never reads as dark at
-/// the strict threshold. Only used in the fallback path — see
-/// [`detect_neatline`].
-const NEATLINE_FAINT_MAX_CHANNEL: u8 = 210;
-/// A column is a frame candidate if a continuous dark run covers this
-/// fraction of the preview height (the neatline's verticals span nearly
-/// the whole body; legend text/table rules are far shorter).
-const NEATLINE_COL_RUN_FRACTION: f64 = 0.55;
-/// Rows are matched within the detected left/right frame columns, and the
-/// frame's horizontals span that window end to end — a high threshold
-/// rejects scale bars and title rules in the margins, which are long but
-/// not *that* long.
-const NEATLINE_ROW_RUN_FRACTION: f64 = 0.85;
+/// average` downsampling blurs it against white paper. Loose enough to
+/// also catch a thin/faint frame line (a real LA VFR Flyway draws its top
+/// line light enough that a stricter threshold missed it).
+const NEATLINE_DARK_MAX_CHANNEL: u8 = 200;
+/// A row is a frame-line candidate if a continuous dark run covers this
+/// fraction of the preview width — high enough to reject legend/table
+/// rules (long but not page-spanning), low enough to still catch a real
+/// top/bottom neatline even where legend content eats into one end of it
+/// (a real Los Angeles Helicopter chart's top/bottom lines each span only
+/// ~50-67% of the page: the georeferenced body's width, not the
+/// legend-column-plus-body width the rest of the page uses).
+const NEATLINE_ROW_RUN_FRACTION: f64 = 0.4;
 /// Reject a "detection" whose body would be implausibly small — that's
 /// noise, not a chart frame.
 const NEATLINE_MIN_BODY_FRACTION: f64 = 0.4;
-/// Rows demand a much taller body than the generic bar: every real chart
-/// measured (TAC/Flyway/ENR) uses ≥93% of the sheet height for the body,
-/// and a lower bar let the strict row pass accept an (interior parallel,
-/// bottom frame) pair instead of falling through to the loose retry that
-/// finds the real (faint) top line.
-const NEATLINE_ROW_MIN_BODY_FRACTION: f64 = 0.8;
+/// Rows (top/bottom) demand a much taller body than the generic bar:
+/// every real chart family measured (TAC/Flyway/ENR/Heli) uses ≥97% of
+/// the sheet height for the body.
+const NEATLINE_ROW_MIN_BODY_FRACTION: f64 = 0.9;
 /// Preview width for neatline detection. Much wider than the white-band
 /// heuristic's 5% preview: the neatline is only a few source pixels
 /// thick, and at coarser scales `-r average` washes it out past the dark
@@ -286,22 +279,36 @@ const NEATLINE_ROW_MIN_BODY_FRACTION: f64 = 0.8;
 /// cleanly at 4000px but vanishes at 2000px.
 const NEATLINE_PREVIEW_WIDTH: u32 = 4000;
 /// Candidate line coordinates within this many preview pixels merge into
-/// one cluster (a blurred frame line spans a few preview columns).
+/// one cluster (a blurred frame line spans a few preview rows).
 const NEATLINE_CLUSTER_MERGE_PX: u32 = 5;
 
-/// Longest run of consecutive `true`s from `is_set` over `0..len`.
-fn longest_run(len: u32, is_set: impl Fn(u32) -> bool) -> u32 {
-    let mut best = 0;
-    let mut current = 0;
-    for i in 0..len {
-        if is_set(i) {
-            current += 1;
-            best = best.max(current);
+/// Longest continuous run of dark pixels in row `y`, and that run's
+/// `(start_x, end_x)` span (inclusive) — `None` if the row has no dark
+/// pixel at all.
+fn row_dark_run(rgb: &image::RgbImage, y: u32) -> (u32, Option<(u32, u32)>) {
+    let w = rgb.width();
+    let is_dark = |x: u32| {
+        let p = rgb.get_pixel(x, y);
+        p[0].max(p[1]).max(p[2]) < NEATLINE_DARK_MAX_CHANNEL
+    };
+    let (mut best, mut cur, mut cur_start) = (0u32, 0u32, 0u32);
+    let (mut best_start, mut best_end) = (0u32, 0u32);
+    for x in 0..w {
+        if is_dark(x) {
+            if cur == 0 {
+                cur_start = x;
+            }
+            cur += 1;
+            if cur > best {
+                best = cur;
+                best_start = cur_start;
+                best_end = x;
+            }
         } else {
-            current = 0;
+            cur = 0;
         }
     }
-    best
+    (best, (best > 0).then_some((best_start, best_end)))
 }
 
 /// Groups sorted candidate coordinates into `(start, end)` clusters,
@@ -321,8 +328,8 @@ fn cluster_lines(candidates: &[u32]) -> Vec<(u32, u32)> {
 /// chart body is the widest framed cell, which is what distinguishes the
 /// body's frame from the sheet border and the legend panel's own box (a
 /// real ENR panel has all three; taking plain extremes grabbed the
-/// legend). Returns the crop edges: the left cluster's start and the
-/// right cluster's end, so the frame lines themselves stay in the crop.
+/// legend). Returns the crop edges: the first cluster's start and the
+/// second cluster's end, so the frame lines themselves stay in the crop.
 fn widest_cell(clusters: &[(u32, u32)]) -> Option<(u32, u32)> {
     let mut best: Option<(u32, u32)> = None;
     let mut best_gap = 0;
@@ -346,65 +353,67 @@ pub fn detect_neatline_for_probe(rgb: &image::RgbImage) -> Option<(u32, u32, u32
 
 /// Finds the chart's neatline — the black frame around the georeferenced
 /// body — in a preview image, as inclusive `(left, top, right, bottom)`
-/// pixel coordinates.
+/// pixel coordinates. Rows-first (not columns-first): a real Los Angeles
+/// Helicopter route chart's legend panel isn't excluded by a drawn
+/// vertical line at all (confirmed live — the legend simply abuts the map
+/// body with no border of its own), so hunting for tall vertical runs
+/// finds nothing there, while the top/bottom horizontal frame lines are
+/// always solid and reliable across every chart family measured
+/// (TAC/Flyway/ENR/Heli).
 ///
-/// Columns: collect those whose longest continuous dark run spans most of
-/// the height (frame verticals), cluster them, and take the widest cell
-/// between adjacent clusters (see [`widest_cell`]) — the body, not the
-/// legend panel's own box.
+/// Collects rows whose longest continuous dark run covers a large
+/// fraction of the width (candidate top/bottom lines), clusters them, and
+/// takes the widest cell between adjacent clusters (see [`widest_cell`])
+/// as the vertical (top, bottom) span — the body, not the legend panel's
+/// own horizontal rule. Left/right then come from the actual dark run's
+/// own `(start, end)` on whichever row in the top/bottom clusters has the
+/// longest run — that span *is* the frame line itself, so it's exactly
+/// the left/right bound even when (as on a Heli chart) no vertical line
+/// confirms it independently.
 ///
-/// Rows (within those columns): same widest-cell pass first; when it
-/// can't find two lines — a real LA Flyway draws its top frame line too
-/// faint for the strict threshold — retry at the looser
-/// [`NEATLINE_FAINT_MAX_CHANNEL`] taking the outermost clusters instead:
-/// interior graticule parallels also match when loosened, but they sit
-/// *between* the frame lines, so extremes stay correct, and this path
-/// only runs for charts the strict pass already failed.
-///
-/// `None` when no plausible frame is found.
+/// `None` when no plausible frame is found — callers fall back to tiling
+/// uncropped.
 fn detect_neatline(rgb: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
     let (w, h) = rgb.dimensions();
-    let dark_at = |max_channel: u8| {
-        move |x: u32, y: u32| {
-            let p = rgb.get_pixel(x, y);
-            p[0].max(p[1]).max(p[2]) < max_channel
-        }
-    };
+    let row_run_min = (NEATLINE_ROW_RUN_FRACTION * w as f64) as u32;
 
-    let is_dark = dark_at(NEATLINE_DARK_MAX_CHANNEL);
-    let col_run_min = (NEATLINE_COL_RUN_FRACTION * h as f64) as u32;
-    let frame_cols: Vec<u32> = (0..w)
-        .filter(|&x| longest_run(h, |y| is_dark(x, y)) >= col_run_min)
-        .collect();
-    let (left, right) = widest_cell(&cluster_lines(&frame_cols))?;
-    if (right - left) < (NEATLINE_MIN_BODY_FRACTION * w as f64) as u32 {
+    let mut candidate_rows = Vec::new();
+    let mut span_by_row = std::collections::HashMap::new();
+    for y in 0..h {
+        let (run, span) = row_dark_run(rgb, y);
+        if run >= row_run_min {
+            candidate_rows.push(y);
+            span_by_row.insert(y, span.expect("run > 0 implies a span"));
+        }
+    }
+
+    let row_clusters = cluster_lines(&candidate_rows);
+    let (top, bottom) = widest_cell(&row_clusters)?;
+    if (bottom - top) < (NEATLINE_ROW_MIN_BODY_FRACTION * h as f64) as u32 {
         return None;
     }
 
-    let row_window = right - left + 1;
-    let row_run_min = (NEATLINE_ROW_RUN_FRACTION * row_window as f64) as u32;
-    let row_clusters = |max_channel: u8| {
-        let is_dark = dark_at(max_channel);
-        let rows: Vec<u32> = (0..h)
-            .filter(|&y| longest_run(row_window, |i| is_dark(left + i, y)) >= row_run_min)
-            .collect();
-        cluster_lines(&rows)
+    // The frame line within each boundary cluster is whichever row there
+    // has the longest run (clusters can be a few rows thick once merged);
+    // its own span is the left/right bound. Combine both ends' bounds
+    // (min start, max end) since legend content can shave a few pixels
+    // off one end's measured span without affecting the other.
+    let cluster_containing = |y: u32| row_clusters.iter().find(|(s, e)| *s <= y && y <= *e).copied();
+    let widest_span_in = |(start, end): (u32, u32)| {
+        (start..=end)
+            .filter_map(|y| span_by_row.get(&y).copied())
+            .max_by_key(|(s, e)| e - s)
     };
-    let min_body_h = (NEATLINE_ROW_MIN_BODY_FRACTION * h as f64) as u32;
-    let plausible = |&(top, bottom): &(u32, u32)| (bottom - top) >= min_body_h;
-    // Rows take cluster extremes, not the widest cell: an interior
-    // graticule parallel is itself a frame-spanning dark line, and
-    // widest-cell could pair it with one frame edge and crop mid-chart —
-    // while nothing in the margins is long enough to pass the row-run
-    // bar (a TAC's scale bar measures ~60% of the body width), so the
-    // outermost matches are reliably the frame.
-    let row_extremes = |max_channel: u8| {
-        let clusters = row_clusters(max_channel);
-        let (first, last) = (clusters.first()?, clusters.last()?);
-        Some((first.0, last.1)).filter(plausible)
+    let top_span = cluster_containing(top).and_then(widest_span_in);
+    let bottom_span = cluster_containing(bottom).and_then(widest_span_in);
+    let (left, right) = match (top_span, bottom_span) {
+        (Some((ls, le)), Some((bs, be))) => (ls.min(bs), le.max(be)),
+        (Some(span), None) | (None, Some(span)) => span,
+        (None, None) => return None,
     };
-    let (top, bottom) = row_extremes(NEATLINE_DARK_MAX_CHANNEL)
-        .or_else(|| row_extremes(NEATLINE_FAINT_MAX_CHANNEL))?;
+    if (right - left) < (NEATLINE_MIN_BODY_FRACTION * w as f64) as u32 {
+        return None;
+    }
 
     Some((left, top, right, bottom))
 }
@@ -516,42 +525,45 @@ mod tests {
         assert_eq!(cut, 10.0 / 30.0);
     }
 
-    /// White canvas with a black rectangle frame (the neatline), short
-    /// dark "legend text" strokes left of it, and a partial-width "scale
-    /// bar" below it — the shapes detection must accept and reject.
+    /// White canvas with a black rectangle frame (the neatline) spanning
+    /// nearly the full height/width, plus a partial-width "scale bar" a
+    /// few rows below the bottom line — the shapes detection must accept
+    /// and reject. Mirrors a real chart's proportions (body ≥97% of
+    /// sheet height) closely enough to exercise the real thresholds.
     fn synthetic_framed_chart() -> image::RgbImage {
         let (w, h) = (400u32, 300u32);
         let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
         let black = image::Rgb([0, 0, 0]);
-        // Frame: verticals x=40..41 and x=360..361, horizontals y=20..21
-        // and y=280..281 (2px thick, like a blurred real neatline).
-        for y in 20..=281 {
+        // Frame: horizontals y=5..6 and y=289..290, verticals x=40..41 and
+        // x=360..361 (2px thick, like a blurred real neatline). Left/right
+        // come from the horizontal lines' own span, not the verticals —
+        // these are drawn purely for a realistic-looking fixture.
+        for x in 40..=361 {
+            for y in [5, 6, 289, 290] {
+                img.put_pixel(x, y, black);
+            }
+        }
+        for y in 5..=290 {
             for x in [40, 41, 360, 361] {
                 img.put_pixel(x, y, black);
             }
         }
-        for x in 40..=361 {
-            for y in [20, 21, 280, 281] {
-                img.put_pixel(x, y, black);
-            }
-        }
-        // "Legend text": short vertical strokes in the left margin — long
-        // enough to be visible, far too short to be a frame line.
-        for y in 60..100 {
-            img.put_pixel(10, y, black);
-            img.put_pixel(20, y, black);
-        }
-        // "Scale bar" in the bottom margin: long but not frame-spanning.
+        // "Scale bar" a few rows below the bottom line: long enough to be
+        // its own row candidate, but must not be mistaken for the real
+        // bottom line — mirrors a real Los Angeles TAC/Heli chart, which
+        // both have a stray footer/title row a few pixels past the real
+        // frame that widest_cell must skip over (confirmed live: TAC has
+        // 3 candidate row clusters, Heli has 4).
         for x in 100..300 {
-            img.put_pixel(x, 295, black);
+            img.put_pixel(x, 297, black);
         }
         img
     }
 
     #[test]
-    fn detects_the_neatline_frame_and_ignores_margin_marks() {
+    fn detects_the_neatline_frame_and_ignores_a_trailing_margin_row() {
         let img = synthetic_framed_chart();
-        assert_eq!(detect_neatline(&img), Some((40, 20, 361, 281)));
+        assert_eq!(detect_neatline(&img), Some((40, 5, 361, 290)));
     }
 
     #[test]
@@ -562,59 +574,70 @@ mod tests {
 
     #[test]
     fn colored_chart_body_is_not_mistaken_for_frame_lines() {
-        // A column of saturated terrain color (bright max channel) must
-        // not read as "dark" — only genuinely dark ink counts.
+        // A row of saturated terrain color (bright max channel) must not
+        // read as "dark" — only genuinely dark ink counts — even though
+        // it's long enough to otherwise qualify as a candidate row.
         let mut img = synthetic_framed_chart();
-        for y in 22..280 {
-            img.put_pixel(200, y, image::Rgb([255, 230, 0])); // yellow
+        for x in 45..355 {
+            img.put_pixel(x, 150, image::Rgb([255, 230, 0])); // yellow
         }
-        assert_eq!(detect_neatline(&img), Some((40, 20, 361, 281)));
+        assert_eq!(detect_neatline(&img), Some((40, 5, 361, 290)));
     }
 
     #[test]
-    fn faint_top_frame_line_is_found_by_the_loose_row_retry() {
-        // Real LA Flyway: sides/bottom black, top frame line light gray —
-        // the strict row pass sees one line, the loose retry must find
-        // both, and an interior black graticule parallel must not shrink
-        // the crop (extremes, not widest-cell, on the loose pass).
+    fn faint_frame_line_is_still_found_at_the_single_loose_threshold() {
+        // Real LA VFR Flyway: its top frame line is light gray, not
+        // black — must still cross NEATLINE_DARK_MAX_CHANNEL directly
+        // (no separate retry pass; one threshold loose enough to catch
+        // this covers every real chart family measured).
         let mut img = synthetic_framed_chart();
         let gray = image::Rgb([185, 185, 185]);
         for x in 40..=361 {
-            for y in [20, 21] {
+            for y in [5, 6] {
                 img.put_pixel(x, y, gray); // repaint top line faint
             }
         }
-        for x in 42..360 {
-            img.put_pixel(x, 150, image::Rgb([0, 0, 0])); // interior parallel
-        }
-        assert_eq!(detect_neatline(&img), Some((40, 20, 361, 281)));
+        assert_eq!(detect_neatline(&img), Some((40, 5, 361, 290)));
     }
 
     #[test]
-    fn picks_the_body_frame_not_the_legend_panels_own_box() {
-        // Real ENR panels wrap the legend column in its own full-height
-        // box, next to the body frame — plain leftmost/rightmost line
-        // picking grabbed the legend; the widest-cell rule must not.
+    fn left_and_right_come_from_the_frame_line_itself_not_a_vertical_check() {
+        // Real LA Helicopter charts: no vertical line encloses the left
+        // side at all (confirmed live — the legend just abuts the map
+        // body with no border of its own), only top/bottom horizontal
+        // lines, each narrower than the full canvas because a "legend"
+        // occupies the left portion outside the frame. Detection must
+        // still find the correct box from the horizontal lines alone.
         let (w, h) = (400u32, 300u32);
         let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
         let black = image::Rgb([0, 0, 0]);
-        // Legend panel box: x=4..36, full-height verticals at both edges.
-        for y in 10..=290 {
-            for x in [4, 36] {
+        // No verticals at all — just top/bottom lines from x=150..380,
+        // leaving x=0..150 as an unbordered "legend" area.
+        for x in 150..=380 {
+            for y in [8, 9, 292, 293] {
                 img.put_pixel(x, y, black);
             }
         }
-        // Body frame: x=60..380, y=10..290.
-        for y in 10..=290 {
-            for x in [60, 380] {
-                img.put_pixel(x, y, black);
-            }
+        assert_eq!(detect_neatline(&img), Some((150, 8, 380, 293)));
+    }
+
+    #[test]
+    fn combines_both_boundary_lines_extents_for_left_and_right() {
+        // A real chart's top and bottom lines don't always measure
+        // exactly the same span (legend content can shave a pixel or two
+        // off one end) — the wider of the two on each side should win,
+        // not just whichever line is checked first. Top line extends
+        // furthest left (40), bottom line extends furthest right (360);
+        // the combined box must use both.
+        let (w, h) = (400u32, 300u32);
+        let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
+        let black = image::Rgb([0, 0, 0]);
+        for x in 40..=350 {
+            img.put_pixel(x, 10, black); // top: 40..350
         }
-        for x in 60..=380 {
-            for y in [10, 290] {
-                img.put_pixel(x, y, black);
-            }
+        for x in 50..=360 {
+            img.put_pixel(x, 290, black); // bottom: 50..360
         }
-        assert_eq!(detect_neatline(&img), Some((60, 10, 380, 290)));
+        assert_eq!(detect_neatline(&img), Some((40, 10, 360, 290)));
     }
 }
