@@ -257,6 +257,7 @@ export default function App() {
   return (
     <div className="app-layout" data-view={view}>
       <div className="sync-status">
+        <QuickChartLinks route={route} />
         <span className="view-toggle">
           <button className={view === "map" ? "selected" : ""} onClick={() => setView("map")}>
             Map
@@ -375,6 +376,84 @@ export default function App() {
         Cycle {cycleId} · live from ff-api at {API_BASE_URL}
       </div>
     </div>
+  );
+}
+
+/** Quick links to the departure/arrival airport diagrams and the SID
+ * plate, shown in the top bar next to the Map/Flight Plan toggle — that
+ * bar is the one piece of chrome visible from both views, so a link set
+ * while building the route in Flight Plan stays reachable after
+ * switching to Map, and vice versa. Each opens its PDF in a new tab (the
+ * browser's own full-page PDF viewer) rather than the in-app "Full Page"
+ * iframe overlay ProcedurePanel/AirportDiagramPanel use, since those are
+ * tied to a specific selected-airport/procedure panel that isn't always
+ * mounted from here.
+ *
+ * The SID's chart URL rides along on `route.sid` already (see
+ * ResolvedProcedureRef/buildResolvedProcedure) — no fetch needed. Airport
+ * diagram URLs aren't on RouteWaypoint, so departure/arrival each get
+ * their own AirportDetail fetch, reset synchronously on every ident
+ * change so a link never shows one airport's label pointing at the
+ * previous airport's still-cached PDF while the new fetch is in flight. */
+function QuickChartLinks({ route }: { route: RouteState }) {
+  const [departureDiagramUrl, setDepartureDiagramUrl] = useState<string | null>(null);
+  const [arrivalDiagramUrl, setArrivalDiagramUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ident = route.departure?.ident ?? null;
+    setDepartureDiagramUrl(null);
+    if (!ident) return;
+    let cancelled = false;
+    fetchAirportDetail(ident)
+      .then((d) => {
+        if (!cancelled) setDepartureDiagramUrl(d.airport_diagram_url);
+      })
+      .catch(() => {
+        if (!cancelled) setDepartureDiagramUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route.departure?.ident]);
+
+  useEffect(() => {
+    const ident = route.arrival?.ident ?? null;
+    setArrivalDiagramUrl(null);
+    if (!ident) return;
+    let cancelled = false;
+    fetchAirportDetail(ident)
+      .then((d) => {
+        if (!cancelled) setArrivalDiagramUrl(d.airport_diagram_url);
+      })
+      .catch(() => {
+        if (!cancelled) setArrivalDiagramUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route.arrival?.ident]);
+
+  const links: { key: string; label: string; url: string }[] = [];
+  if (route.departure && departureDiagramUrl) {
+    links.push({ key: "dep", label: `${route.departure.ident} Diagram`, url: departureDiagramUrl });
+  }
+  if (route.sid?.chartUrl) {
+    links.push({ key: "sid", label: `${route.sid.procedureIdent} Chart`, url: route.sid.chartUrl });
+  }
+  if (route.arrival && arrivalDiagramUrl) {
+    links.push({ key: "arr", label: `${route.arrival.ident} Diagram`, url: arrivalDiagramUrl });
+  }
+
+  if (links.length === 0) return null;
+
+  return (
+    <span className="quick-chart-links">
+      {links.map((l) => (
+        <a key={l.key} href={l.url} target="_blank" rel="noopener noreferrer">
+          {l.label}
+        </a>
+      ))}
+    </span>
   );
 }
 

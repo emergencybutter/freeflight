@@ -83,5 +83,12 @@ export function buildResolvedProcedure(
           ...legsToPoints(primary.legs, detail.fixes),
         ];
 
-  return { airportIcao, kind, procedureIdent: detail.ident, transitionIdent: primary.ident, points };
+  return {
+    airportIcao,
+    kind,
+    procedureIdent: detail.ident,
+    transitionIdent: primary.ident,
+    points,
+    chartUrl: detail.chart_url,
+  };
 }

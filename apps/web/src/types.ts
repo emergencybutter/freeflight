@@ -146,6 +146,14 @@ export interface ResolvedProcedureRef {
   procedureIdent: string;
   transitionIdent: string;
   points: RouteWaypoint[];
+  /** The FAA d-TPP plate for this procedure, carried over from the
+   * ProcedureDetail already fetched to resolve it (see
+   * planning/procedureLookup.ts's buildResolvedProcedure) — lets the
+   * route builder's departure/SID/arrival quick chart links (App.tsx)
+   * link straight to the plate with no extra fetch. Null the same way
+   * ProcedureDetail.chart_url is: no confidently-matched plate this
+   * cycle, not necessarily no real chart. */
+  chartUrl: string | null;
 }
 
 /** One entry in the route builder's reorderable middle list (fixes and
