@@ -144,6 +144,23 @@ maplibregl.addProtocol("pmtiles", new PmtilesProtocol().tile);
 // show/hide logic once loaded and visible.
 const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
+// iOS detection for the pixelRatio cap below. iPadOS 13+ deliberately
+// reports a macOS user agent, so UA sniffing alone misses modern iPads —
+// "MacIntel with a touchscreen" is the standard tell (real Macs report
+// maxTouchPoints 0).
+const IS_IOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+// iOS Safari kills a tab outright at its per-tab memory ceiling (see the
+// maxTileCacheSize note at the Map constructor) — and render-buffer/tile
+// texture memory scales with pixelRatio². Capping an iPad's dpr-2 canvas
+// at 1.5 cuts that footprint ~1.8× for a mild softening of map text;
+// capping to 1 would halve it again but makes chart fine print
+// noticeably fuzzy, the wrong trade for a chart app. Desktop/Android
+// keep native sharpness.
+const MAX_IOS_PIXEL_RATIO = 1.5;
+
 const EMPTY_COLLECTION: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 function airportsGeoJson(airports: Airport[], flightCategories: Map<string, string>): GeoJSON.FeatureCollection {
@@ -887,6 +904,11 @@ export const MapView = forwardRef<
   // link's initialView still wins over it: someone opening a link sent
   // to them should see the sender's view, not their own last session.
   const [persistedView] = useState(loadMapView);
+  // Set when the mount camera came from somewhere meaningful (a shared
+  // link or the persisted view) — makes the route-fit effect below skip
+  // its first run so that camera isn't immediately overridden. See that
+  // effect's comment.
+  const skipNextRouteFitRef = useRef(initialView !== undefined || persistedView.center !== undefined);
   const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(() => {
     const kind = initialView !== undefined ? initialView.chartKind : (persistedView.chartKind ?? "Sectional");
     return kind === null ? new Set() : new Set([kind]);
@@ -992,6 +1014,9 @@ export const MapView = forwardRef<
       // trades some tile re-fetching on pan-back (cheap: HTTP range
       // requests, CDN-cached) for bounded memory.
       maxTileCacheSize: 16,
+      // See MAX_IOS_PIXEL_RATIO — undefined everywhere else keeps
+      // MapLibre's default (the device's own devicePixelRatio).
+      pixelRatio: IS_IOS ? Math.min(window.devicePixelRatio || 1, MAX_IOS_PIXEL_RATIO) : undefined,
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -1607,6 +1632,18 @@ export const MapView = forwardRef<
     // container and produce a bogus camera position, so this waits
     // until the view is actually shown.
     if (!map || !loaded || !visible || route.length === 0) return;
+    // A restored camera (persisted view or shared link) must win over
+    // the route fit on the first eligible run: a persisted flight plan
+    // reloads alongside the persisted camera, and without this the fit
+    // immediately flew the map to the route bounds, stomping the exact
+    // view the persistence had just restored — reported on iPad after a
+    // Safari memory-kill reload ("returned me to my flight plan, but
+    // not the region of the map I was viewing"). Later route *changes*
+    // fit as before; the skip is consumed exactly once.
+    if (skipNextRouteFitRef.current) {
+      skipNextRouteFitRef.current = false;
+      return;
+    }
     if (route.length === 1) {
       map.flyTo({ center: [route[0].lon, route[0].lat], zoom: 10 });
       return;

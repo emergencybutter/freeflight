@@ -515,7 +515,11 @@ Consequences:
   iPad — Safari kills and force-reloads the tab when that happens. The
   map now also sets a small fixed `maxTileCacheSize`, trading tile
   re-fetches on pan-back (cheap: HTTP range requests, CDN-cached) for
-  bounded memory.
+  bounded memory, and caps `pixelRatio` at 1.5 on iOS (render-buffer/
+  texture memory scales with pixelRatio², so an iPad's dpr-2 canvas
+  costs ~1.8× more than needed for a mild text softening; capping to 1
+  would make chart fine print noticeably fuzzy — the wrong trade for a
+  chart app). Desktop/Android keep native sharpness.
   Airspace/AIRMET-SIGMET/Airports/PIREPs/CWA are independent on/off
   switches (any combination can be showing at once), all on by default.
   MapLibre's own zoom/compass/attribution controls are restyled to
@@ -527,6 +531,11 @@ Consequences:
   refresh, tab eviction — restores the last view instead of resetting
   to defaults; a shared link's `?p=` view still wins over it (§9.1's
   Share button), since a link's recipient should see the sender's view.
+  The fit-map-to-route effect skips its first run when a restored
+  camera exists, so reloading with both a persisted flight plan and a
+  persisted camera lands on the camera, not the route bounds (found
+  via the same iPad report: the reload "returned me to my flight plan,
+  but not the region of the map I was viewing").
 - Tapping the map selects whichever airport in the current view is
   closest to the tap point, unconditionally (not gated on hitting the
   airport's own marker), and populates a tab bar below the map: Airport/
