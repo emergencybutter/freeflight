@@ -379,18 +379,18 @@ export default function App() {
   );
 }
 
-/** Quick links to the departure/arrival airport diagrams and the SID
- * plate, shown in the top bar next to the Map/Flight Plan toggle — that
- * bar is the one piece of chrome visible from both views, so a link set
- * while building the route in Flight Plan stays reachable after
+/** Quick links to the departure/arrival airport diagrams and the SID/
+ * STAR plates, shown in the top bar next to the Map/Flight Plan toggle —
+ * that bar is the one piece of chrome visible from both views, so a link
+ * set while building the route in Flight Plan stays reachable after
  * switching to Map, and vice versa. Each opens its PDF in a new tab (the
  * browser's own full-page PDF viewer) rather than the in-app "Full Page"
  * iframe overlay ProcedurePanel/AirportDiagramPanel use, since those are
  * tied to a specific selected-airport/procedure panel that isn't always
  * mounted from here.
  *
- * The SID's chart URL rides along on `route.sid` already (see
- * ResolvedProcedureRef/buildResolvedProcedure) — no fetch needed. Airport
+ * The SID/STAR chart URLs ride along on `route.sid`/`route.star` already
+ * (see ResolvedProcedureRef/buildResolvedProcedure) — no fetch needed. Airport
  * diagram URLs aren't on RouteWaypoint, so departure/arrival each get
  * their own AirportDetail fetch, reset synchronously on every ident
  * change so a link never shows one airport's label pointing at the
@@ -439,6 +439,9 @@ function QuickChartLinks({ route }: { route: RouteState }) {
   }
   if (route.sid?.chartUrl) {
     links.push({ key: "sid", label: `${route.sid.procedureIdent} Chart`, url: route.sid.chartUrl });
+  }
+  if (route.star?.chartUrl) {
+    links.push({ key: "star", label: `${route.star.procedureIdent} Chart`, url: route.star.chartUrl });
   }
   if (route.arrival && arrivalDiagramUrl) {
     links.push({ key: "arr", label: `${route.arrival.ident} Diagram`, url: arrivalDiagramUrl });
