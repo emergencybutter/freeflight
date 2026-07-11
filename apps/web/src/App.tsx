@@ -383,11 +383,12 @@ export default function App() {
  * STAR plates, shown in the top bar next to the Map/Flight Plan toggle —
  * that bar is the one piece of chrome visible from both views, so a link
  * set while building the route in Flight Plan stays reachable after
- * switching to Map, and vice versa. Each opens its PDF in a new tab (the
- * browser's own full-page PDF viewer) rather than the in-app "Full Page"
- * iframe overlay ProcedurePanel/AirportDiagramPanel use, since those are
- * tied to a specific selected-airport/procedure panel that isn't always
- * mounted from here.
+ * switching to Map, and vice versa. Clicking one opens the exact same
+ * full-page overlay ProcedurePanel/AirportDiagramPanel's "Full Page"
+ * button does (`dtpp-chart-frame-expanded`, fixed over the whole
+ * viewport) — reused directly here rather than each panel's own local
+ * `chartExpanded` toggle, since a quick link isn't tied to any specific
+ * panel being mounted.
  *
  * The SID/STAR chart URLs ride along on `route.sid`/`route.star` already
  * (see ResolvedProcedureRef/buildResolvedProcedure) — no fetch needed. Airport
@@ -398,6 +399,7 @@ export default function App() {
 function QuickChartLinks({ route }: { route: RouteState }) {
   const [departureDiagramUrl, setDepartureDiagramUrl] = useState<string | null>(null);
   const [arrivalDiagramUrl, setArrivalDiagramUrl] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<{ url: string; title: string } | null>(null);
 
   useEffect(() => {
     const ident = route.departure?.ident ?? null;
@@ -450,13 +452,23 @@ function QuickChartLinks({ route }: { route: RouteState }) {
   if (links.length === 0) return null;
 
   return (
-    <span className="quick-chart-links">
-      {links.map((l) => (
-        <a key={l.key} href={l.url} target="_blank" rel="noopener noreferrer">
-          {l.label}
-        </a>
-      ))}
-    </span>
+    <>
+      <span className="quick-chart-links">
+        {links.map((l) => (
+          <button key={l.key} onClick={() => setExpanded({ url: l.url, title: l.label })}>
+            {l.label}
+          </button>
+        ))}
+      </span>
+      {expanded && (
+        <>
+          <div className="dtpp-chart-toolbar dtpp-chart-toolbar-expanded">
+            <button onClick={() => setExpanded(null)}>Close</button>
+          </div>
+          <iframe src={expanded.url} title={expanded.title} className="dtpp-chart-frame-expanded" />
+        </>
+      )}
+    </>
   );
 }
 

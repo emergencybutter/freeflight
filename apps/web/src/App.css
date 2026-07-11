@@ -193,19 +193,19 @@
   gap: 0.4rem;
 }
 
-.quick-chart-links a {
+.quick-chart-links button {
   display: inline-block;
+  width: auto;
   padding: 0.15rem 0.6rem;
   font-size: 0.75rem;
   color: #9fc3e8;
   background: #1d3a5f;
   border: 1px solid #3d7fc4;
   border-radius: 4px;
-  text-decoration: none;
 }
 
-.quick-chart-links a:hover {
-  text-decoration: underline;
+.quick-chart-links button:hover {
+  border-color: #5a9bd8;
 }
 
 .airport-action-bar {
