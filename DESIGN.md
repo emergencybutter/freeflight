@@ -550,10 +550,16 @@ Consequences:
   sites, matching the pre-existing "Full Page"/"Reduce" toggle's
   fixed-height (normal) / fullscreen (expanded) footprint. The page is
   fit "contain" (whole plate visible) by default; in the full-page
-  overlay it can be zoomed in (buttons or wheel, up to 5×), which
-  re-rasterizes the PDF at the higher resolution — a real re-render, not
-  a blurry CSS upscale — and scrolls to pan. Inline (non-full-page) plates
-  stay fit-only. Not a full PDF viewer (no rotate, text selection, etc.).
+  overlay it can be zoomed in (buttons, wheel, or two-finger pinch on
+  touch, up to 5×), which re-rasterizes the PDF at the higher resolution
+  — a real re-render, not a blurry CSS upscale — and panned by scrolling
+  or one-finger drag (when no highlighter tool is active; a second finger
+  always pinches, even mid-stroke). The whole gesture layer runs on
+  pointer events so mouse and touch share one path; the draw canvas keeps
+  `touch-action: none` so a stroke doesn't scroll the page, which is why
+  pan/pinch are handled explicitly rather than left to native scrolling.
+  Inline (non-full-page) plates stay fit-only. Not a full PDF viewer (no
+  rotate, text selection, etc.).
   Android's equivalent still needs its own approach (a `WebView` can't
   run this page's `pdf.js`/canvas code either — see `[dtpp-render]`, §12).
   - **Highlighter annotations**: freehand strokes drawn by dragging over

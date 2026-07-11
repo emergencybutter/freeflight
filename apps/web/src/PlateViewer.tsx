@@ -61,6 +61,10 @@ function distance(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
 }
 
+function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+}
+
 /** Shortest distance from point `p` to the segment `a`-`b`, all in the
  * same (CSS-px) space — used by the eraser to hit-test a stroke's
  * polyline rather than just its individual sampled points, so a fast,
@@ -141,6 +145,26 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
   const isErasingRef = useRef(false);
   const draftPointsRef = useRef<[number, number][]>([]);
   const nextIdRef = useRef(1);
+  // Touch/multi-pointer gesture state (full-page pan + pinch-zoom): the
+  // live client-coord position of every pressed pointer, plus the
+  // in-progress pinch (2 pointers) or one-finger pan bookkeeping. Drawing
+  // still owns a single pointer when a highlighter/eraser tool is active;
+  // with no tool active a single pointer pans, and two pointers always
+  // pinch (even mid-drawing — a second finger converts the gesture to a
+  // zoom). See handlePointer* below.
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{
+    startDist: number;
+    startZoom: number;
+    lastRatio: number;
+    originLocalX: number;
+    originLocalY: number;
+    midClientX: number;
+    midClientY: number;
+    containerLeft: number;
+    containerTop: number;
+  } | null>(null);
+  const panLastRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     activeColorRef.current = activeColor;
@@ -330,14 +354,14 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      setZoom((z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * factor)));
+      setZoom((z) => clampZoom(z * factor));
     };
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => container.removeEventListener("wheel", onWheel);
   }, [expanded]);
 
-  const zoomIn = () => setZoom((z) => Math.min(MAX_ZOOM, z * ZOOM_STEP));
-  const zoomOut = () => setZoom((z) => Math.max(MIN_ZOOM, z / ZOOM_STEP));
+  const zoomIn = () => setZoom((z) => clampZoom(z * ZOOM_STEP));
+  const zoomOut = () => setZoom((z) => clampZoom(z / ZOOM_STEP));
 
   function commitDraftStroke() {
     const points = draftPointsRef.current;
@@ -365,42 +389,169 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
     );
   }
 
+  // Begins a two-finger pinch: freezes the current zoom/midpoint so
+  // updatePinch can preview via a cheap CSS transform (no per-frame PDF
+  // re-render) and commitPinch can re-rasterize sharply and re-anchor
+  // scroll once fingers lift. Only meaningful in the full-page overlay
+  // (the only place zoom exists).
+  function startPinch() {
+    const pts = [...pointersRef.current.values()];
+    if (pts.length < 2) return;
+    const [a, b] = pts;
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const container = containerRef.current;
+    const pageWrap = pageWrapRef.current;
+    if (!container || !pageWrap) return;
+    const cRect = container.getBoundingClientRect();
+    const pRect = pageWrap.getBoundingClientRect();
+    const originLocalX = midX - pRect.left;
+    const originLocalY = midY - pRect.top;
+    pinchRef.current = {
+      startDist: distance(a.x, a.y, b.x, b.y),
+      startZoom: zoomRef.current,
+      lastRatio: 1,
+      originLocalX,
+      originLocalY,
+      midClientX: midX,
+      midClientY: midY,
+      containerLeft: cRect.left,
+      containerTop: cRect.top,
+    };
+    // Scale the preview about the initial pinch point, so it reads as
+    // zooming into where the fingers are rather than the corner.
+    pageWrap.style.transformOrigin = `${originLocalX}px ${originLocalY}px`;
+  }
+
+  function updatePinch() {
+    const g = pinchRef.current;
+    const pageWrap = pageWrapRef.current;
+    if (!g || !pageWrap) return;
+    const pts = [...pointersRef.current.values()];
+    if (pts.length < 2) return;
+    const [a, b] = pts;
+    const dist = distance(a.x, a.y, b.x, b.y);
+    const targetZoom = clampZoom((g.startZoom * dist) / g.startDist);
+    g.lastRatio = targetZoom / g.startZoom;
+    pageWrap.style.transform = `scale(${g.lastRatio})`;
+  }
+
+  // Ends the pinch: drop the transform preview, re-render the PDF sharply
+  // at the committed zoom, and set scroll so the point the fingers were
+  // over stays put (standard zoom-to-point). renderPage sizes the page
+  // synchronously (the async part is just the raster), so scrollLeft/Top
+  // can be set right after.
+  function commitPinch() {
+    const g = pinchRef.current;
+    pinchRef.current = null;
+    const pageWrap = pageWrapRef.current;
+    const container = containerRef.current;
+    if (!g || !pageWrap || !container) return;
+    pageWrap.style.transform = "";
+    pageWrap.style.transformOrigin = "";
+    const newZoom = clampZoom(g.startZoom * g.lastRatio);
+    const eff = newZoom / g.startZoom;
+    zoomRef.current = newZoom;
+    renderPage();
+    container.scrollLeft = g.originLocalX * eff - (g.midClientX - g.containerLeft);
+    container.scrollTop = g.originLocalY * eff - (g.midClientY - g.containerTop);
+    setZoom(newZoom);
+  }
+
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = drawCanvasRef.current;
     if (!canvas) return;
-    canvas.setPointerCapture(e.pointerId);
+    // Capture so a drag/stroke that leaves the canvas keeps delivering
+    // moves. Guarded because it throws if the pointer has already ended
+    // (a fast tap) — that's harmless, the gesture just isn't captured.
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released — nothing to capture */
+    }
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    // Pan and pinch are full-page-only (that's where zoom/scroll exist);
+    // the inline plate is fit-to-box, so a second finger there does
+    // nothing rather than pinching a chart that can't scroll.
+    if (pointersRef.current.size >= 2) {
+      isDrawingRef.current = false;
+      isErasingRef.current = false;
+      draftPointsRef.current = [];
+      panLastRef.current = null;
+      redraw();
+      if (expanded) startPinch();
+      return;
+    }
+
     if (eraseActiveRef.current) {
       isErasingRef.current = true;
       eraseAt(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
       return;
     }
-    if (!activeColorRef.current) return;
-    isDrawingRef.current = true;
-    draftPointsRef.current = [[e.nativeEvent.offsetX, e.nativeEvent.offsetY]];
-    redraw();
+    if (activeColorRef.current) {
+      isDrawingRef.current = true;
+      draftPointsRef.current = [[e.nativeEvent.offsetX, e.nativeEvent.offsetY]];
+      redraw();
+      return;
+    }
+    // No highlighter tool active — a single finger/mouse drag pans the
+    // zoomed plate.
+    if (expanded) panLastRef.current = { x: e.clientX, y: e.clientY };
   }
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (pinchRef.current) {
+      updatePinch();
+      return;
+    }
     const x = e.nativeEvent.offsetX;
     const y = e.nativeEvent.offsetY;
     if (isErasingRef.current) {
       eraseAt(x, y);
       return;
     }
-    if (!isDrawingRef.current) return;
-    const points = draftPointsRef.current;
-    const [lastX, lastY] = points[points.length - 1];
-    if (distance(x, y, lastX, lastY) < SAMPLE_MIN_PX) return;
-    points.push([x, y]);
-    redraw();
+    if (isDrawingRef.current) {
+      const points = draftPointsRef.current;
+      const [lastX, lastY] = points[points.length - 1];
+      if (distance(x, y, lastX, lastY) < SAMPLE_MIN_PX) return;
+      points.push([x, y]);
+      redraw();
+      return;
+    }
+    if (panLastRef.current) {
+      const dx = e.clientX - panLastRef.current.x;
+      const dy = e.clientY - panLastRef.current.y;
+      containerRef.current?.scrollBy(-dx, -dy);
+      panLastRef.current = { x: e.clientX, y: e.clientY };
+    }
   }
-  function handlePointerUp() {
+  function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    pointersRef.current.delete(e.pointerId);
+    if (pinchRef.current) {
+      // Commit once we're back below two fingers; if one finger remains,
+      // hand it off to panning so the gesture flows straight into a drag.
+      if (pointersRef.current.size < 2) {
+        commitPinch();
+        const remaining = [...pointersRef.current.values()][0];
+        if (remaining && !activeColorRef.current && !eraseActiveRef.current) {
+          panLastRef.current = { x: remaining.x, y: remaining.y };
+        }
+      }
+      return;
+    }
     if (isErasingRef.current) {
       isErasingRef.current = false;
       return;
     }
-    if (!isDrawingRef.current) return;
-    isDrawingRef.current = false;
-    commitDraftStroke();
+    if (isDrawingRef.current) {
+      isDrawingRef.current = false;
+      commitDraftStroke();
+      return;
+    }
+    panLastRef.current = null;
   }
 
   const toggleColor = (color: string) => setActiveColor((prev) => (prev === color ? null : color));
@@ -460,7 +611,7 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
           <canvas
             ref={drawCanvasRef}
             className="plate-draw-canvas"
-            style={{ cursor: eraseActive ? "cell" : activeColor ? "crosshair" : "default" }}
+            style={{ cursor: eraseActive ? "cell" : activeColor ? "crosshair" : expanded ? "grab" : "default" }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
