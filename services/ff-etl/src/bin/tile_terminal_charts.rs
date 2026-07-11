@@ -79,7 +79,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             for part in parts {
                 let rgb = expand_palette_to_rgb(&part.tif_path, workdir.path())?;
-                let rgb = crop_to_neatline(&rgb, workdir.path())?.unwrap_or(rgb);
+                let rgb = crop_to_neatline(&rgb, workdir.path(), &part.label)?.unwrap_or(rgb);
                 let (slug_suffix, name_suffix) = match part.kind {
                     ChartKind::TerminalAreaChart => ("tac", "TAC"),
                     ChartKind::VfrFlyway => ("fly", "VFR Flyway"),
@@ -139,7 +139,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 for part in parts {
                     let rgb = expand_palette_to_rgb(&part.tif_path, workdir.path())?;
-                    let rgb = crop_to_neatline(&rgb, workdir.path())?.unwrap_or(rgb);
+                    let rgb = crop_to_neatline(&rgb, workdir.path(), &part.label)?.unwrap_or(rgb);
                     let slug = part.label.to_lowercase();
                     let pmtiles_filename = format!("chart-{slug}.pmtiles");
                     add_chart(

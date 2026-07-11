@@ -418,6 +418,57 @@ fn detect_neatline(rgb: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
     Some((left, top, right, bottom))
 }
 
+/// Fractional (left, top, right, bottom) crop overrides, keyed by
+/// [`ChartPart::label`], for charts whose layout neither
+/// [`crop_legend_and_collar`]'s white-band heuristic nor
+/// [`detect_neatline`]'s black-frame search can read: New York and
+/// Downtown Manhattan Helicopter route charts carry their legend as
+/// dense text blocks beside/above the map body with no drawn border
+/// line, and the body itself has large white/light areas (water, an
+/// inset distance-circle diagram) that fool the white-band scan into
+/// keeping only a sliver. Confirmed against both real rasters — neither
+/// heuristic finds a usable box — so these are hand-picked from the
+/// rendered preview instead. A rectangle can't exclude a legend box
+/// that's inset *within* the map body rather than at a page edge (New
+/// York has one such residual box), so this is a best-effort crop, not a
+/// perfect one.
+///
+/// Fractions are of the full-resolution source image; since the
+/// detection preview in [`crop_to_neatline`] is rendered at a fixed
+/// width with proportional height, a fraction measured on that preview
+/// applies unchanged to the full-res source.
+const HARDCODED_NEATLINE_FRACTIONS: &[(&str, (f64, f64, f64, f64))] = &[
+    ("New_York", (0.35, 0.4313, 1.0, 0.9565)),
+    ("Downtown_Manhattan", (0.215, 0.068, 0.776, 0.909)),
+];
+
+fn crop_to_fraction(
+    source_tif: &Path,
+    workdir: &Path,
+    (left_frac, top_frac, right_frac, bottom_frac): (f64, f64, f64, f64),
+) -> Result<PathBuf, ChartPrepError> {
+    let (full_w, full_h) = source_dimensions(source_tif)?;
+    let src_left = (left_frac * full_w as f64).floor() as u32;
+    let src_top = (top_frac * full_h as f64).floor() as u32;
+    let src_right = ((right_frac * full_w as f64).ceil() as u32).min(full_w);
+    let src_bottom = ((bottom_frac * full_h as f64).ceil() as u32).min(full_h);
+
+    let cropped = workdir.join("chart_neatline_cropped.tif");
+    run_tool(
+        "gdal_translate",
+        &[
+            "-srcwin".as_ref(),
+            src_left.to_string().as_ref(),
+            src_top.to_string().as_ref(),
+            (src_right - src_left).to_string().as_ref(),
+            (src_bottom - src_top).to_string().as_ref(),
+            source_tif.as_os_str(),
+            cropped.as_os_str(),
+        ],
+    )?;
+    Ok(cropped)
+}
+
 /// Crops `source_tif` to its neatline (see [`detect_neatline`]) — the
 /// crop strategy for chart styles the white-band heuristic of
 /// [`crop_legend_and_collar`] can't read: IFR enroute panels (whose
@@ -427,6 +478,10 @@ fn detect_neatline(rgb: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
 /// white-band scan early). All of them frame the georeferenced body in a
 /// continuous black neatline, with the legend/collar outside it —
 /// confirmed against real Los Angeles TAC and ENR_L02 rasters.
+///
+/// `label` is checked against [`HARDCODED_NEATLINE_FRACTIONS`] first,
+/// bypassing detection entirely for the handful of charts known to defeat
+/// it.
 ///
 /// Returns `Ok(None)` when no plausible frame is detected (an odd layout,
 /// a style change) — callers fall back to tiling uncropped, the previous
@@ -439,7 +494,12 @@ fn detect_neatline(rgb: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
 pub fn crop_to_neatline(
     source_tif: &Path,
     workdir: &Path,
+    label: &str,
 ) -> Result<Option<PathBuf>, ChartPrepError> {
+    if let Some(&(_, frac)) = HARDCODED_NEATLINE_FRACTIONS.iter().find(|(l, _)| *l == label) {
+        return Ok(Some(crop_to_fraction(source_tif, workdir, frac)?));
+    }
+
     let preview_path = workdir.join("neatline_preview.png");
     run_tool(
         "gdal_translate",

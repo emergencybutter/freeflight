@@ -192,8 +192,8 @@ pub fn run() -> Result<(), EtlError> {
             let parts = fetch_ifr_enroute_panel(chart_workdir.path(), panel_name, &ifr_cycle)?;
             for part in parts {
                 let rgb_tif = expand_palette_to_rgb(&part.tif_path, chart_workdir.path())?;
-                let rgb_tif =
-                    crop_to_neatline(&rgb_tif, chart_workdir.path())?.unwrap_or(rgb_tif);
+                let rgb_tif = crop_to_neatline(&rgb_tif, chart_workdir.path(), &part.label)?
+                    .unwrap_or(rgb_tif);
 
                 let slug = part.label.to_lowercase();
                 let pmtiles_filename = format!("chart-{slug}.pmtiles");
@@ -239,8 +239,8 @@ pub fn run() -> Result<(), EtlError> {
             let parts = fetch_terminal_chart_zip(chart_workdir.path(), name, subdir, &chart_cycle)?;
             for part in parts {
                 let rgb_tif = expand_palette_to_rgb(&part.tif_path, chart_workdir.path())?;
-                let rgb_tif =
-                    crop_to_neatline(&rgb_tif, chart_workdir.path())?.unwrap_or(rgb_tif);
+                let rgb_tif = crop_to_neatline(&rgb_tif, chart_workdir.path(), &part.label)?
+                    .unwrap_or(rgb_tif);
                 // Kind-specific slug suffix keeps these from colliding with
                 // the same city's sectional (e.g. `chart-los_angeles`) or
                 // each other (`-tac`/`-fly`/`-heli`).
