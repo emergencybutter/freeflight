@@ -265,20 +265,29 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
     pageWrap.style.height = `${cssHeight}px`;
 
     // Rasterize at the zoomed scale × dpr so zooming in stays crisp
-    // (a real re-render at higher resolution, not a blurry CSS upscale).
+    // (a real re-render at higher resolution, not a blurry CSS upscale) —
+    // but capped: iOS Safari refuses canvases over ~16.7M pixels (they
+    // silently render nothing, and the allocation attempt contributes to
+    // the tab getting memory-killed), and at 5× zoom with dpr 2 the
+    // uncapped size reached ~51M pixels. `k` is the backing-resolution
+    // factor actually used (dpr when it fits, shrunk when it wouldn't) —
+    // CSS size is unaffected, so extreme zoom just gets slightly softer
+    // rather than blank.
     const dpr = window.devicePixelRatio || 1;
-    const viewport = page.getViewport({ scale: scale * dpr });
+    const MAX_CANVAS_PIXELS = 16_000_000;
+    const k = Math.min(dpr, Math.sqrt(MAX_CANVAS_PIXELS / (cssWidth * cssHeight)));
+    const viewport = page.getViewport({ scale: scale * k });
 
     pdfCanvas.width = viewport.width;
     pdfCanvas.height = viewport.height;
     pdfCanvas.style.width = `${cssWidth}px`;
     pdfCanvas.style.height = `${cssHeight}px`;
-    drawCanvas.width = cssWidth * dpr;
-    drawCanvas.height = cssHeight * dpr;
+    drawCanvas.width = cssWidth * k;
+    drawCanvas.height = cssHeight * k;
     drawCanvas.style.width = `${cssWidth}px`;
     drawCanvas.style.height = `${cssHeight}px`;
     const drawCtx = drawCanvas.getContext("2d");
-    drawCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawCtx?.setTransform(k, 0, 0, k, 0, 0);
 
     // A resize can fire again before the previous render finishes (e.g. a
     // window drag-resize, or two ResizeObserver callbacks back to back

@@ -3,6 +3,7 @@ import maplibregl, { type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
+import { loadMapView, saveMapView } from "./persistence";
 import {
   fetchAirportDetail,
   fetchAirportsInBbox,
@@ -881,19 +882,41 @@ export const MapView = forwardRef<
   const chartsByKindRef = useRef<Map<string, ChartCatalogEntry[]>>(new Map());
   const materializedChartKindsRef = useRef<Set<string>>(new Set());
   const [chartKinds, setChartKinds] = useState<string[]>([]);
-  const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(() =>
-    initialView === undefined ? new Set(["Sectional"]) : initialView.chartKind === null ? new Set() : new Set([initialView.chartKind]),
-  );
+  // The last-persisted view (camera/base chart/overlay toggles — see
+  // persistence.ts's PersistedMapView), read once per mount. A shared
+  // link's initialView still wins over it: someone opening a link sent
+  // to them should see the sender's view, not their own last session.
+  const [persistedView] = useState(loadMapView);
+  const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(() => {
+    const kind = initialView !== undefined ? initialView.chartKind : (persistedView.chartKind ?? "Sectional");
+    return kind === null ? new Set() : new Set([kind]);
+  });
   // Independent on/off toggles (unlike the chart-kind group above, these
   // aren't mutually exclusive — airspace, weather hazards, airports,
   // PIREPs, and CWA are separate concerns a pilot might want any
-  // combination of). All default on since that's the map's existing
-  // behavior; these just add manual control on top of it.
-  const [visibleAirspace, setVisibleAirspace] = useState(true);
-  const [visibleWeatherHazards, setVisibleWeatherHazards] = useState(true);
-  const [visibleAirports, setVisibleAirports] = useState(true);
-  const [visiblePireps, setVisiblePireps] = useState(true);
-  const [visibleCwas, setVisibleCwas] = useState(true);
+  // combination of). Default on (the map's original behavior), restored
+  // from the persisted view when one exists.
+  const [visibleAirspace, setVisibleAirspace] = useState(persistedView.overlays?.airspace ?? true);
+  const [visibleWeatherHazards, setVisibleWeatherHazards] = useState(persistedView.overlays?.weatherHazards ?? true);
+  const [visibleAirports, setVisibleAirports] = useState(persistedView.overlays?.airports ?? true);
+  const [visiblePireps, setVisiblePireps] = useState(persistedView.overlays?.pireps ?? true);
+  const [visibleCwas, setVisibleCwas] = useState(persistedView.overlays?.cwas ?? true);
+  // Persist base chart + overlay toggles whenever they change; the
+  // camera is saved separately on moveend (see the mount effect). Makes
+  // any reload — including the iOS Safari memory-kill this was added
+  // for — land back on the same view instead of the defaults.
+  useEffect(() => {
+    saveMapView({
+      chartKind: [...visibleChartKinds][0] ?? null,
+      overlays: {
+        airspace: visibleAirspace,
+        weatherHazards: visibleWeatherHazards,
+        airports: visibleAirports,
+        pireps: visiblePireps,
+        cwas: visibleCwas,
+      },
+    });
+  }, [visibleChartKinds, visibleAirspace, visibleWeatherHazards, visibleAirports, visiblePireps, visibleCwas]);
 
   // Adds map sources/layers for one chart kind's catalog entries, if it
   // hasn't happened already — a no-op on repeat calls (e.g. re-selecting
@@ -921,6 +944,24 @@ export const MapView = forwardRef<
     chartLayerIdsByKindRef.current.set(kind, layerIds);
   }
 
+  // The inverse: fully removes a kind's layers *and sources*, releasing
+  // their tile caches/textures. Switching kinds used to just flip
+  // visibility to "none", but a hidden source keeps its cached tiles
+  // alive — after browsing a few kinds that stacked several hundred MB
+  // of dead raster textures, a real contributor to the iOS Safari
+  // memory-kill described at the maxTileCacheSize option above. Cheap to
+  // undo: re-selecting the kind re-adds sources and re-fetches a couple
+  // of small PMTiles headers.
+  function dematerializeChartKind(map: maplibregl.Map, kind: string) {
+    if (!materializedChartKindsRef.current.has(kind)) return;
+    materializedChartKindsRef.current.delete(kind);
+    for (const layerId of chartLayerIdsByKindRef.current.get(kind) ?? []) {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(layerId)) map.removeSource(layerId);
+    }
+    chartLayerIdsByKindRef.current.delete(kind);
+  }
+
   useEffect(() => {
     if (!containerRef.current) return;
     // React StrictMode double-invokes this effect in dev (mount, cleanup,
@@ -932,8 +973,25 @@ export const MapView = forwardRef<
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: BASEMAP_STYLE_URL,
-      center: initialView ? [initialView.center.lon, initialView.center.lat] : [-73.874, 40.7769], // KLGA
-      zoom: initialView?.zoom ?? 6,
+      // Camera precedence: a shared link's view, else wherever this
+      // browser last left the map (persisted on moveend below), else the
+      // KLGA default.
+      center: initialView
+        ? [initialView.center.lon, initialView.center.lat]
+        : persistedView.center
+          ? [persistedView.center.lon, persistedView.center.lat]
+          : [-73.874, 40.7769], // KLGA
+      zoom: initialView?.zoom ?? persistedView.zoom ?? 6,
+      // MapLibre's default tile cache is dynamically sized per source —
+      // and one chart kind here is up to 57 raster sources at once (a
+      // source per sectional), each caching decoded tile textures as the
+      // view pans across it. On iOS Safari that blew past the per-tab
+      // memory ceiling within a minute of panning (reported on iPad:
+      // page crashes and force-reloads), because iOS kills the tab
+      // instead of evicting GPU memory. A small fixed cap per source
+      // trades some tile re-fetching on pan-back (cheap: HTTP range
+      // requests, CDN-cached) for bounded memory.
+      maxTileCacheSize: 16,
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -1482,6 +1540,12 @@ export const MapView = forwardRef<
         );
         void refreshVisibleAirspace(map, unmountedRef);
         void refreshVisiblePireps(map, unmountedRef);
+        // Persist the camera so any reload (crash, refresh, tab
+        // eviction) restores this view — one tiny localStorage write per
+        // completed pan/zoom, merged with the chart/toggle slice saved
+        // by its own effect (see saveMapView).
+        const center = map.getCenter();
+        saveMapView({ center: { lat: center.lat, lon: center.lng }, zoom: map.getZoom() });
       });
 
       setLoaded(true);
@@ -1502,6 +1566,23 @@ export const MapView = forwardRef<
     if (!map || !loaded || !visible) return;
     map.resize();
   }, [visible, loaded]);
+
+  // Applies the persisted overlay-toggle state to the actual layers once
+  // they exist — every overlay layer is created visible in the "load"
+  // handler (the pre-persistence default), and the toggle handlers below
+  // only flip visibility on click, so a restored "off" state needs this
+  // one-time reconciliation. Runs on `loaded` only; later changes go
+  // through the toggle handlers as before.
+  useEffect(() => {
+    if (!loaded) return;
+    if (!visibleAirspace) setLayersVisibility(["airspace-fill", "airspace-line"], false);
+    if (!visibleWeatherHazards)
+      setLayersVisibility(["gairmet-fill", "gairmet-line", "sigmet-fill", "sigmet-line"], false);
+    if (!visibleAirports) setLayersVisibility(["airports-circle", "airports-label"], false);
+    if (!visiblePireps) setLayersVisibility(["pirep-circle"], false);
+    if (!visibleCwas) setLayersVisibility(["cwa-fill", "cwa-line"], false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1605,6 +1686,12 @@ export const MapView = forwardRef<
     if (!map) return;
     setVisibleChartKinds(() => {
       const next: Set<string> = kind ? new Set([kind]) : new Set();
+      // Deselected kinds are removed outright (not just hidden) so their
+      // tile caches/GPU textures are actually released — see
+      // dematerializeChartKind's comment for the iOS memory story.
+      for (const k of [...materializedChartKindsRef.current]) {
+        if (!next.has(k)) dematerializeChartKind(map, k);
+      }
       // First time a kind is selected, its sources/layers haven't been
       // added yet (see materializeChartKind) — do that now so the
       // visibility loop below has layer ids to flip.

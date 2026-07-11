@@ -40,3 +40,49 @@ export function savePlan(plan: PersistedPlan): void {
     // Storage full or unavailable — persistence is best-effort.
   }
 }
+
+// The map's own view state (camera, base chart, overlay toggles), in its
+// own key/blob separate from the flight plan above — different shape,
+// different write cadence (every moveend vs. explicit plan edits), so a
+// version bump to one never has to touch the other. Added after an iPad
+// bug report: iOS Safari force-reloads the tab when it hits the per-tab
+// memory ceiling, and before this every reload silently reset the map to
+// its defaults — persisting the view makes *any* reload (crash, refresh,
+// tab eviction) land the user back where they were.
+const MAP_VIEW_KEY = "freeflight.mapview.v1";
+
+export interface PersistedMapView {
+  center?: { lat: number; lon: number };
+  zoom?: number;
+  /** null = "No chart" was explicitly selected; absent = never saved. */
+  chartKind?: string | null;
+  overlays?: {
+    airspace?: boolean;
+    weatherHazards?: boolean;
+    airports?: boolean;
+    pireps?: boolean;
+    cwas?: boolean;
+  };
+}
+
+export function loadMapView(): PersistedMapView {
+  try {
+    const raw = localStorage.getItem(MAP_VIEW_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedMapView;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Read-modify-write merge, so the camera saver (moveend) and the
+ * chart/overlay saver (toggle changes) can each update just their slice
+ * without clobbering the other's last write. */
+export function saveMapView(partial: PersistedMapView): void {
+  try {
+    localStorage.setItem(MAP_VIEW_KEY, JSON.stringify({ ...loadMapView(), ...partial }));
+  } catch {
+    // Storage full or unavailable — persistence is best-effort.
+  }
+}

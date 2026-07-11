@@ -496,7 +496,9 @@ Consequences:
   no API key/rate limits) rather than a blank background, so the map
   stays usable whenever chart imagery is toggled off or hasn't loaded
   yet — opaque chart raster tiles cover it naturally once visible. Opens
-  centered on KLGA at zoom 6 rather than a full-CONUS default view.
+  centered on KLGA at zoom 6 rather than a full-CONUS default view —
+  unless this browser has a persisted view (below), which wins over the
+  default.
 - Two independent groups of map toggle buttons. Chart kind (Sectional/
   IFR Low/IFR High) is single-select — they're the same charts at
   different altitude scopes meant to replace each other, not stack —
@@ -505,10 +507,26 @@ Consequences:
   immediately regardless of layer visibility, so eagerly adding every
   chart in the catalog on load once fired ~108 requests (57 sectionals +
   IFR Low/High) even though only one kind is ever shown at a time.
+  Deselecting a kind removes its sources outright (not just hides its
+  layers): a hidden raster source keeps its decoded tile cache alive,
+  and together with MapLibre's default *dynamically-sized* per-source
+  tile cache (57 sources for the Sectional kind alone) that blew past
+  iOS Safari's per-tab memory ceiling within a minute of panning on an
+  iPad — Safari kills and force-reloads the tab when that happens. The
+  map now also sets a small fixed `maxTileCacheSize`, trading tile
+  re-fetches on pan-back (cheap: HTTP range requests, CDN-cached) for
+  bounded memory.
   Airspace/AIRMET-SIGMET/Airports/PIREPs/CWA are independent on/off
   switches (any combination can be showing at once), all on by default.
   MapLibre's own zoom/compass/attribution controls are restyled to
   match the app's dark theme instead of their white default.
+- The map view persists itself per-browser (`localStorage`, separate
+  blob from the flight plan's — see `persistence.ts`): camera on every
+  moveend, base-chart kind and overlay toggles on change. Any reload —
+  a crash (the iOS memory-kill above force-reloads the page), a manual
+  refresh, tab eviction — restores the last view instead of resetting
+  to defaults; a shared link's `?p=` view still wins over it (§9.1's
+  Share button), since a link's recipient should see the sender's view.
 - Tapping the map selects whichever airport in the current view is
   closest to the tap point, unconditionally (not gated on hitting the
   airport's own marker), and populates a tab bar below the map: Airport/
