@@ -24,3 +24,4 @@ tempfile = "3"
 image.workspace = true
 quick-xml = "0.36"
 chrono.workspace = true
+pmtiles2 = "0.3"

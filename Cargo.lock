@@ -693,6 +693,7 @@ dependencies = [
  "ff-nasr",
  "ff-storage",
  "image",
+ "pmtiles2",
  "quick-xml",
  "reqwest",
  "rusqlite",
