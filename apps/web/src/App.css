@@ -558,8 +558,6 @@ th {
 .plate-canvas-wrap {
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
   width: 100%;
   height: 70vh;
@@ -578,10 +576,16 @@ th {
   border: none;
   border-radius: 0;
   z-index: 1000;
+  /* Zoomed past fit, the page overflows and this scrolls to pan. */
+  overflow: auto;
 }
 
+/* margin:auto (not the parent's align/justify-center) so the page stays
+   centered when it fits but doesn't get its top-left clipped once it
+   overflows a zoomed-in expanded view — the standard flex-overflow fix. */
 .plate-page {
   position: relative;
+  margin: auto;
 }
 
 .plate-pdf-canvas {
@@ -642,6 +646,25 @@ th {
 .highlighter-swatch.active {
   border-color: #ffffff;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.plate-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plate-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.plate-zoom-level {
+  min-width: 3em;
+  text-align: center;
+  font-size: 0.8rem;
+  color: #9fb3c8;
 }
 
 .weather-report {

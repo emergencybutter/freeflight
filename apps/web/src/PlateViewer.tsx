@@ -48,6 +48,15 @@ const SAMPLE_MIN_PX = 3;
 // ANNOTATION_LINE_WIDTH_PX-wide) line it's meant to erase.
 const ERASER_HIT_RADIUS_PX = 12;
 
+// Full-page zoom (§9.1): 1 = fit-to-viewport (the inline size's only
+// option too), up to MAX_ZOOM. Only offered in the expanded overlay —
+// the inline plate is always fit. Zooming past fit re-renders the PDF at
+// the higher resolution (sharp, not a CSS upscale) and lets the overlay
+// scroll to pan.
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
+const ZOOM_STEP = 1.25;
+
 function distance(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
 }
@@ -117,6 +126,11 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
   const cssSizeRef = useRef({ width: 0, height: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Full-page zoom factor over fit-to-viewport (see MIN_ZOOM). Held in a
+  // ref too because renderPage runs from the mount-time ResizeObserver
+  // closure, which must read the current zoom rather than a stale one.
+  const [zoom, setZoom] = useState(MIN_ZOOM);
+  const zoomRef = useRef(MIN_ZOOM);
 
   const [strokes, setStrokes] = useState<HighlighterStroke[]>(() => loadPlateAnnotations(url));
   const [activeColor, setActiveColor] = useState<string | null>(null);
@@ -171,19 +185,37 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
 
   // Switching plates (a different SID vs. STAR, say) loads that plate's
   // own strokes fresh rather than carrying the previous plate's markup
-  // over onto a different chart.
+  // over onto a different chart, and drops any zoom.
   useEffect(() => {
     const loaded = loadPlateAnnotations(url);
     setStrokes(loaded);
     nextIdRef.current = loaded.reduce((max, s) => Math.max(max, s.id), 0) + 1;
     setActiveColor(null);
     setEraseActive(false);
+    setZoom(MIN_ZOOM);
   }, [url]);
 
-  // Fits the page (contain — whole page visible, no scroll/zoom in v1)
-  // into the current container box, at devicePixelRatio resolution for
-  // sharpness, and re-renders both canvases at that size. Called on load,
-  // on every container resize (window resize, the Full Page toggle), and
+  // Collapsing back to the inline plate drops any zoom — the inline size
+  // is always fit, so a leftover zoom would render it overflowing its
+  // fixed-height box.
+  useEffect(() => {
+    if (!expanded) setZoom(MIN_ZOOM);
+  }, [expanded]);
+
+  // Keep zoomRef in sync and re-render at the new zoom whenever it
+  // changes (renderPage reads zoomRef, not the `zoom` state, since it
+  // also runs from the mount-time ResizeObserver closure).
+  useEffect(() => {
+    zoomRef.current = zoom;
+    renderPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom]);
+
+  // Fits the page (contain — whole page visible) into the current
+  // container box, times the current zoom (1 = fit; full-page only), at
+  // devicePixelRatio resolution for sharpness, and re-renders both
+  // canvases at that size. Called on load, on every container resize
+  // (window resize, the Full Page toggle), on zoom change, and
   // is idempotent — safe to call repeatedly.
   function renderPage() {
     const page = pageRef.current;
@@ -197,16 +229,21 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
     const containerWidth = container.clientWidth;
     const containerHeight = container.clientHeight;
     if (containerWidth === 0 || containerHeight === 0) return;
+    // Fit-to-container, then the user's zoom on top (1 = fit). At zoom > 1
+    // the page grows past the container and the overlay scrolls to pan.
     const fitScale = Math.min(containerWidth / unscaled.width, containerHeight / unscaled.height);
-    const cssWidth = unscaled.width * fitScale;
-    const cssHeight = unscaled.height * fitScale;
+    const scale = fitScale * zoomRef.current;
+    const cssWidth = unscaled.width * scale;
+    const cssHeight = unscaled.height * scale;
     cssSizeRef.current = { width: cssWidth, height: cssHeight };
 
     pageWrap.style.width = `${cssWidth}px`;
     pageWrap.style.height = `${cssHeight}px`;
 
+    // Rasterize at the zoomed scale × dpr so zooming in stays crisp
+    // (a real re-render at higher resolution, not a blurry CSS upscale).
     const dpr = window.devicePixelRatio || 1;
-    const viewport = page.getViewport({ scale: fitScale * dpr });
+    const viewport = page.getViewport({ scale: scale * dpr });
 
     pdfCanvas.width = viewport.width;
     pdfCanvas.height = viewport.height;
@@ -282,6 +319,25 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded]);
+
+  // Wheel-to-zoom, full-page only. A native (non-passive) listener rather
+  // than React's onWheel so preventDefault actually takes — otherwise the
+  // wheel would scroll the overlay instead of zooming. Inline mode leaves
+  // the wheel alone (it's fit-only, and the page should scroll normally).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !expanded) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      setZoom((z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * factor)));
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, [expanded]);
+
+  const zoomIn = () => setZoom((z) => Math.min(MAX_ZOOM, z * ZOOM_STEP));
+  const zoomOut = () => setZoom((z) => Math.max(MIN_ZOOM, z / ZOOM_STEP));
 
   function commitDraftStroke() {
     const points = draftPointsRef.current;
@@ -376,7 +432,22 @@ export function PlateViewer({ url, title, expanded, onToggleExpanded, collapseLa
             Clear
           </button>
         </div>
-        <button onClick={onToggleExpanded}>{expanded ? (collapseLabel ?? "Reduce") : "Full Page"}</button>
+        <div className="plate-toolbar-right">
+          {/* Zoom is a full-page-only affordance — the inline plate is
+              always fit-to-box (§9.1). */}
+          {expanded && (
+            <div className="plate-zoom-controls">
+              <button onClick={zoomOut} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out">
+                −
+              </button>
+              <span className="plate-zoom-level">{Math.round(zoom * 100)}%</span>
+              <button onClick={zoomIn} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in">
+                +
+              </button>
+            </div>
+          )}
+          <button onClick={onToggleExpanded}>{expanded ? (collapseLabel ?? "Reduce") : "Full Page"}</button>
+        </div>
       </div>
       <div
         ref={containerRef}
