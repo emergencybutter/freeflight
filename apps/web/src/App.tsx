@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
-import { MapView } from "./MapView";
+import { MapView, type MapViewHandle } from "./MapView";
 import { fetchNotams } from "./notams";
 import { loadPlan, savePlan } from "./persistence";
 import { findCrossedAirspace } from "./planning/airspaceCrossing";
@@ -9,6 +9,7 @@ import { expandRoute } from "./planning/expandRoute";
 import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
 import { buildResolvedProcedure, transitionOptions } from "./planning/procedureLookup";
 import type { AircraftProfile } from "./planning/wasm";
+import { buildShareUrl, clearSharedPlanFromUrl, hydrateSharedRoute, readSharedPlanFromUrl } from "./share";
 import { airspaceInfoHtml, cwaInfoHtml, gairmetInfoHtml, pirepInfoHtml, sigmetInfoHtml } from "./tapInfo";
 import type {
   Airport,
@@ -59,6 +60,16 @@ export default function App() {
   // Restore the last flight plan once on mount (see persistence.ts) — the
   // route, aircraft profile, and user-waypoint counter survive a refresh.
   const [persisted] = useState(loadPlan);
+  // A shared link (the Share button below, see share.ts) takes priority
+  // over the locally-persisted plan — opening a link someone sent you
+  // should show *their* plan, not silently merge with whatever you had
+  // before. Read once via the same lazy-useState pattern as `persisted`;
+  // the map's initial view is simple enough to use directly (below), but
+  // the route needs async re-resolution (SID/STAR/airway detail), so it
+  // starts empty and an effect further down hydrates it.
+  const [sharedPlan] = useState(readSharedPlanFromUrl);
+  const mapViewRef = useRef<MapViewHandle>(null);
+  const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
   const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // The startup manifest fetch is a single quick request, so there's no
@@ -131,7 +142,7 @@ export default function App() {
   // are dedicated slots (picked explicitly via FlightPlanning's route
   // builder) rather than positions in a flat token list — see
   // RouteState's doc comment in types.ts.
-  const [route, setRoute] = useState<RouteState>(persisted.route ?? EMPTY_ROUTE);
+  const [route, setRoute] = useState<RouteState>(sharedPlan ? EMPTY_ROUTE : persisted.route ?? EMPTY_ROUTE);
   // Lifted out of FlightPlanning the same way route was — MapView reads
   // profile.cruise_altitude_ft to default its own winds-aloft altitude
   // selector to whatever the flight plan is actually using.
@@ -141,6 +152,29 @@ export default function App() {
   useEffect(() => {
     savePlan({ route, profile, userWaypointCount });
   }, [route, profile, userWaypointCount]);
+  // Restores a shared link's route (see share.ts) once on mount — re-
+  // resolves SID/STAR/airway detail the same way a manual pick would,
+  // so this runs after everything it needs (fetchProcedureOptions etc.)
+  // is available, same as any other data-fetching effect here. Clears
+  // the `?p=` param once done (success or failure) so a later refresh
+  // doesn't silently re-apply a stale shared plan over whatever the user
+  // has since changed.
+  useEffect(() => {
+    if (!sharedPlan) return;
+    let cancelled = false;
+    hydrateSharedRoute(sharedPlan.route)
+      .then((hydrated) => {
+        if (!cancelled) setRoute(hydrated);
+      })
+      .catch((err: unknown) => console.warn("couldn't restore the shared route", err))
+      .finally(() => {
+        if (!cancelled) clearSharedPlanFromUrl();
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const expandedMiddle = useMemo(() => {
     const before = (route.sid && route.sid.points[route.sid.points.length - 1]) ?? route.departure;
     const after = route.star?.points[0] ?? route.arrival;
@@ -224,6 +258,33 @@ export default function App() {
     });
   };
 
+  // Builds a link encoding the current route plus the map's live chart
+  // kind/center/zoom (read on demand from MapView, not continuously
+  // synced — see MapViewHandle) and copies it to the clipboard. Falls
+  // back to a prompt() if the Clipboard API is unavailable/denied, so
+  // the link is still reachable (copy-paste from the dialog) rather than
+  // silently failing.
+  const handleShare = () => {
+    const mapView = mapViewRef.current?.getViewState() ?? {
+      chartKind: null,
+      center: { lat: 39.5, lon: -98.35 },
+      zoom: 4,
+    };
+    const url = buildShareUrl(route, mapView);
+    const showCopied = () => {
+      setShareStatus("copied");
+      setTimeout(() => setShareStatus("idle"), 1500);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(url)
+        .then(showCopied)
+        .catch(() => window.prompt("Copy this link:", url));
+    } else {
+      window.prompt("Copy this link:", url);
+    }
+  };
+
   if (loadError) {
     return (
       <div className="error">
@@ -265,6 +326,7 @@ export default function App() {
           <button className={view === "plan" ? "selected" : ""} onClick={() => setView("plan")}>
             Flight Plan
           </button>
+          <button onClick={handleShare}>{shareStatus === "copied" ? "Copied!" : "Share"}</button>
         </span>
       </div>
       {/* The workspace is a two-pane split: the map, and the info/
@@ -277,6 +339,7 @@ export default function App() {
       <div className="workspace">
         <div className="workspace-map" style={mapPaneStyle} ref={mapPaneRef}>
           <MapView
+            ref={mapViewRef}
             selectedAirport={selectedAirport}
             onSelectAirport={selectAirport}
             onMapTap={setMapTap}
@@ -284,6 +347,7 @@ export default function App() {
             visible={isWide || view === "map"}
             route={routePoints}
             preferredAltitudeFt={profile.cruise_altitude_ft}
+            initialView={sharedPlan?.map}
           />
         </div>
         <div

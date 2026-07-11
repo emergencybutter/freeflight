@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import maplibregl, { type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
@@ -779,41 +779,55 @@ async function loadWeatherOverlays(
   }
 }
 
-export function MapView({
-  selectedAirport,
-  onSelectAirport,
-  onMapTap,
-  selectedProcedureId,
-  visible,
-  route,
-  preferredAltitudeFt,
-}: {
-  selectedAirport: Airport | null;
-  onSelectAirport: (airport: Airport) => void;
-  /** Everything about a tap besides airport selection (which is always
-   * unconditional — see the map's "click" handler) — feeds the tab bar
-   * below the map (Waypoint/Airspace/PIREPs/AIRMET/SIGMET/CWA). */
-  onMapTap: (result: MapTapResult) => void;
-  selectedProcedureId: string | null;
-  /** Whether this is the currently-shown view. App.tsx keeps MapView
-   * mounted (rather than conditionally rendering it) even while the
-   * Flight Plan view is showing, toggling visibility via CSS instead —
-   * unmounting it on every switch used to destroy the Flight Plan
-   * view's own state the same way (the actual bug this prop exists to
-   * let App.tsx avoid). MapLibre doesn't repaint correctly after its
-   * container was `display: none`, so this drives an explicit
-   * `resize()` when the map becomes visible again. */
-  visible: boolean;
-  /** The Flight Plan view's expanded route points (tokens are expanded
-   * in App.tsx — see planning/expandRoute.ts) — drawn in cyan. */
-  route: RouteWaypoint[];
-  /** The flight plan's aircraft profile cruise altitude, if one's been
-   * set — snaps the winds-aloft altitude selector to the nearest level
-   * that actually has data the first time it becomes available (see the
-   * effect below), rather than fighting a later manual pick on the map
-   * every time this changes. */
-  preferredAltitudeFt: number | null;
-}) {
+/** Imperative handle for reading the map's current view state on demand
+ * (App.tsx's Share button) — a ref rather than lifting this into
+ * continuously-synced React state, since nothing needs to know the
+ * camera position except at the moment of building a share link. */
+export interface MapViewHandle {
+  getViewState: () => { chartKind: string | null; center: { lat: number; lon: number }; zoom: number };
+}
+
+export const MapView = forwardRef<
+  MapViewHandle,
+  {
+    selectedAirport: Airport | null;
+    onSelectAirport: (airport: Airport) => void;
+    /** Everything about a tap besides airport selection (which is always
+     * unconditional — see the map's "click" handler) — feeds the tab bar
+     * below the map (Waypoint/Airspace/PIREPs/AIRMET/SIGMET/CWA). */
+    onMapTap: (result: MapTapResult) => void;
+    selectedProcedureId: string | null;
+    /** Whether this is the currently-shown view. App.tsx keeps MapView
+     * mounted (rather than conditionally rendering it) even while the
+     * Flight Plan view is showing, toggling visibility via CSS instead —
+     * unmounting it on every switch used to destroy the Flight Plan
+     * view's own state the same way (the actual bug this prop exists to
+     * let App.tsx avoid). MapLibre doesn't repaint correctly after its
+     * container was `display: none`, so this drives an explicit
+     * `resize()` when the map becomes visible again. */
+    visible: boolean;
+    /** The Flight Plan view's expanded route points (tokens are expanded
+     * in App.tsx — see planning/expandRoute.ts) — drawn in cyan. */
+    route: RouteWaypoint[];
+    /** The flight plan's aircraft profile cruise altitude, if one's been
+     * set — snaps the winds-aloft altitude selector to the nearest level
+     * that actually has data the first time it becomes available (see the
+     * effect below), rather than fighting a later manual pick on the map
+     * every time this changes. */
+    preferredAltitudeFt: number | null;
+    /** A shared link's map state (App.tsx's share.ts), applied once at
+     * mount: the initial camera position/zoom (passed straight to the
+     * maplibregl.Map constructor) and the initial base chart selection
+     * (used the one time the chart catalog first loads, replacing the
+     * usual default-to-Sectional). `undefined` — no shared link — keeps
+     * every existing default; `chartKind: null` means "no chart" was
+     * itself the shared selection, distinct from "unspecified". */
+    initialView?: { chartKind: string | null; center: { lat: number; lon: number }; zoom: number };
+  }
+>(function MapView(
+  { selectedAirport, onSelectAirport, onMapTap, selectedProcedureId, visible, route, preferredAltitudeFt, initialView },
+  handleRef,
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const visibleAirportsRef = useRef<Airport[]>([]);
@@ -867,7 +881,9 @@ export function MapView({
   const chartsByKindRef = useRef<Map<string, ChartCatalogEntry[]>>(new Map());
   const materializedChartKindsRef = useRef<Set<string>>(new Set());
   const [chartKinds, setChartKinds] = useState<string[]>([]);
-  const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(new Set(["Sectional"]));
+  const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(() =>
+    initialView === undefined ? new Set(["Sectional"]) : initialView.chartKind === null ? new Set() : new Set([initialView.chartKind]),
+  );
   // Independent on/off toggles (unlike the chart-kind group above, these
   // aren't mutually exclusive — airspace, weather hazards, airports,
   // PIREPs, and CWA are separate concerns a pilot might want any
@@ -916,8 +932,8 @@ export function MapView({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: BASEMAP_STYLE_URL,
-      center: [-73.874, 40.7769], // KLGA
-      zoom: 6,
+      center: initialView ? [initialView.center.lon, initialView.center.lat] : [-73.874, 40.7769], // KLGA
+      zoom: initialView?.zoom ?? 6,
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -1101,10 +1117,11 @@ export function MapView({
           chartsByKindRef.current = byKind;
           setChartKinds([...byKind.keys()].sort());
           // visibleChartKinds here is frozen at its initial-render value
-          // (this effect has a [] dep array, mount-only) — always just
-          // the default Set(["Sectional"]), which is exactly what should
-          // materialize (and show) on first load regardless of how long
-          // the fetch took.
+          // (this effect has a [] dep array, mount-only) — either the
+          // usual default Set(["Sectional"]) or whatever a shared link's
+          // initialView asked for (see the useState above), which is
+          // exactly what should materialize (and show) on first load
+          // regardless of how long the fetch took.
           for (const kind of visibleChartKinds) {
             materializeChartKind(map, kind);
             for (const layerId of chartLayerIdsByKindRef.current.get(kind) ?? []) {
@@ -1602,6 +1619,26 @@ export function MapView({
     });
   };
 
+  // Exposes the map's current view (App.tsx's Share button reads this on
+  // click, not continuously — see MapViewHandle) — refreshed whenever
+  // visibleChartKinds changes so the handle always reports the live
+  // selection rather than whatever it was at mount.
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      getViewState: () => {
+        const map = mapRef.current;
+        const center = map?.getCenter();
+        return {
+          chartKind: [...visibleChartKinds][0] ?? null,
+          center: center ? { lat: center.lat, lon: center.lng } : { lat: 40.7769, lon: -73.874 },
+          zoom: map?.getZoom() ?? 6,
+        };
+      },
+    }),
+    [visibleChartKinds],
+  );
+
   const changeWindsAloftAltitude = (altitudeFt: number) => {
     setSelectedAltitudeFt(altitudeFt);
     selectedAltitudeFtRef.current = altitudeFt;
@@ -1708,4 +1745,4 @@ export function MapView({
       </div>
     </div>
   );
-}
+});
