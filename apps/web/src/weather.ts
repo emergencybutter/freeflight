@@ -19,12 +19,14 @@ export async function fetchDatis(icao: string): Promise<Datis[]> {
   return fetchJson<Datis[]>(`/weather/atis?ids=${encodeURIComponent(icao)}`);
 }
 
-/** METAR for multiple stations in one request — used to color airport
- * markers by flight category, as opposed to fetchMetar's one-station
- * detail-panel use. */
-export async function fetchMetars(icaos: string[]): Promise<Metar[]> {
-  if (icaos.length === 0) return [];
-  return fetchJson<Metar[]>(`/weather/metar?ids=${encodeURIComponent(icaos.join(","))}`);
+/** The full `station_id -> flight category` ("VFR"/"MVFR"/"IFR"/"LIFR")
+ * map, served from ff-api's in-memory copy of aviationweather.gov's bulk
+ * METAR cache (refreshed backend-side every few minutes). Fetched once
+ * per session and refreshed on an interval to color every visible
+ * airport marker — as opposed to fetchMetar's one-station detail-panel
+ * use. Returns `{}` until the backend's first successful cache load. */
+export async function fetchFlightCategories(): Promise<Record<string, string>> {
+  return fetchJson<Record<string, string>>("/weather/flightcat");
 }
 
 export async function fetchGairmets(): Promise<GAirmet[]> {

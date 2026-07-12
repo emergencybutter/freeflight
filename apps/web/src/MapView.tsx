@@ -27,7 +27,7 @@ import type {
   Sigmet,
   WindsAloftBulletin,
 } from "./types";
-import { fetchCwas, fetchGairmets, fetchMetars, fetchPireps, fetchSigmets, fetchWindsAloft } from "./weather";
+import { fetchCwas, fetchFlightCategories, fetchGairmets, fetchPireps, fetchSigmets, fetchWindsAloft } from "./weather";
 
 const AIRPORTS_SOURCE = "airports";
 const RUNWAYS_SOURCE = "runways";
@@ -649,18 +649,13 @@ function procedureFixesGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollecti
  * useless as well as slow. */
 const AIRPORT_MIN_ZOOM = 6;
 
-/** Cap on how many visible airports get a METAR flight-category lookup
- * per refresh — one batched request, but aviationweather.gov shouldn't
- * be asked for hundreds of stations every pan. */
-const MAX_METAR_AIRPORTS = 60;
-
 /** Fetches the airports for the map's current view (bbox query, §4.1)
- * and refreshes the marker/winds-aloft sources; colors markers by METAR
- * flight category for up to MAX_METAR_AIRPORTS of them, read from/merged
- * into `flightCategoriesRef` rather than a fresh map each call — this
- * runs on every moveend, and a blank map would flash every marker back
- * to the default color on every pan/zoom while that view's METARs
- * re-fetch, even for stations whose category is already known. Keeps
+ * and refreshes the marker/winds-aloft sources, coloring markers by
+ * METAR flight category from `flightCategoriesRef` — the full
+ * `station -> category` map that `loadFlightCategories` keeps current
+ * from ff-api's bulk cache. Every visible airport with a current METAR
+ * is colored (no per-view cap), and this makes no upstream request on
+ * pan/zoom — it just reads whatever categories are already loaded. Keeps
  * the fetched list in `visibleAirportsRef` so the click handler can hand
  * a full Airport object to the app. */
 async function refreshVisibleAirports(
@@ -705,23 +700,33 @@ async function refreshVisibleAirports(
       windsAloftGeoJson(windsBulletinRef.current, airports, selectedAltitudeFtRef.current),
     );
   }
+}
 
+/** Loads ff-api's bulk METAR flight-category map into
+ * `flightCategoriesRef` and re-colors the airports currently in view.
+ * The heavy lifting (one download of aviationweather.gov's ~5,000-station
+ * cache, parsed and held in memory) happens backend-side and is refreshed
+ * there every few minutes; the client just pulls the resulting small map.
+ * Called once on load and then on an interval — a failed fetch leaves the
+ * previous categories in place rather than blanking the markers. */
+async function loadFlightCategories(
+  map: MlMap,
+  visibleAirportsRef: { current: Airport[] },
+  flightCategoriesRef: { current: Map<string, string> },
+  unmountedRef: { current: boolean },
+) {
+  let categories: Record<string, string>;
   try {
-    const metars = await fetchMetars(airports.slice(0, MAX_METAR_AIRPORTS).map((a) => a.icao));
-    if (unmountedRef.current) return;
-    for (const m of metars) {
-      if (m.fltCat) flightCategoriesRef.current.set(m.icaoId, m.fltCat);
-    }
-    // The view may have moved on while the METARs were in flight — only
-    // apply if these airports are still the current set.
-    if (visibleAirportsRef.current === airports) {
-      (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
-        airportsGeoJson(airports, flightCategoriesRef.current),
-      );
-    }
+    categories = await fetchFlightCategories();
   } catch (err) {
     console.warn("couldn't load METAR flight categories for the map", err);
+    return;
   }
+  if (unmountedRef.current) return;
+  flightCategoriesRef.current = new Map(Object.entries(categories));
+  (map.getSource(AIRPORTS_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+    airportsGeoJson(visibleAirportsRef.current, flightCategoriesRef.current),
+  );
 }
 
 /** Airspace boundaries are view-driven (bbox query per moveend, same as
@@ -1026,6 +1031,11 @@ export const MapView = forwardRef<
     // flips (App.tsx), nudge it to repaint at the new container size.
     const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(containerRef.current);
+
+    // METAR flight categories are refreshed from ff-api's bulk cache on
+    // an interval (backend re-pulls upstream every few minutes; this just
+    // re-reads the small map), not per pan — see loadFlightCategories.
+    let flightCategoryTimer: ReturnType<typeof setInterval> | undefined;
 
     map.on("load", () => {
       map.addSource(AIRPORTS_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
@@ -1552,6 +1562,13 @@ export const MapView = forwardRef<
             unmountedRef,
           ),
       );
+      // Load the flight-category map now and refresh it periodically. The
+      // backend re-pulls upstream on its own schedule; 5 min here keeps
+      // the map's colors reasonably fresh without polling ff-api hard.
+      void loadFlightCategories(map, visibleAirportsRef, flightCategoriesRef, unmountedRef);
+      flightCategoryTimer = setInterval(() => {
+        void loadFlightCategories(map, visibleAirportsRef, flightCategoriesRef, unmountedRef);
+      }, 5 * 60 * 1000);
       void refreshVisibleAirspace(map, unmountedRef);
       void refreshVisiblePireps(map, unmountedRef);
       map.on("moveend", () => {
@@ -1579,6 +1596,7 @@ export const MapView = forwardRef<
     return () => {
       unmountedRef.current = true;
       resizeObserver.disconnect();
+      if (flightCategoryTimer) clearInterval(flightCategoryTimer);
       map.remove();
       mapRef.current = null;
       setLoaded(false);

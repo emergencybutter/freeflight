@@ -1,11 +1,31 @@
 use ff_notam::{NotamClient, DEFAULT_API_BASE_URL, DEFAULT_AUTH_URL};
 use ff_weather::WeatherClient;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
+use tokio::sync::RwLock;
+
+/// In-memory snapshot of the bulk METAR-cache flight categories, kept
+/// current by a background refresh task (see `main::spawn_flight_category_refresh`)
+/// and served at `/weather/flightcat`. Empty until the first successful
+/// load; a failed refresh leaves the previous snapshot in place rather
+/// than blanking it.
+#[derive(Default)]
+pub struct FlightCategoryCache {
+    /// `station_id` (ICAO) -> `"VFR"`/`"MVFR"`/`"IFR"`/`"LIFR"`.
+    pub categories: HashMap<String, String>,
+    /// When `categories` was last successfully replaced — `None` before
+    /// the first load.
+    pub updated: Option<SystemTime>,
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub weather: Arc<WeatherClient>,
+    /// Shared, periodically-refreshed METAR flight categories used to
+    /// color airport markers without a per-view upstream query.
+    pub flight_categories: Arc<RwLock<FlightCategoryCache>>,
     /// `None` unless `FF_NOTAM_CLIENT_ID`/`FF_NOTAM_CLIENT_SECRET` are set
     /// — see `routes::notams` (DESIGN.md §9.2, §12; `ff-notam`'s crate
     /// docs cover why credentials aren't self-service anymore).
@@ -45,6 +65,7 @@ impl Default for AppState {
             PathBuf::from(std::env::var("FF_ETL_DATA_DIR").unwrap_or_else(|_| "data".to_string()));
         Self {
             weather: Arc::new(WeatherClient::new()),
+            flight_categories: Arc::new(RwLock::new(FlightCategoryCache::default())),
             notam,
             data_dir,
             http: reqwest::Client::new(),

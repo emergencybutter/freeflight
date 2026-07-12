@@ -43,6 +43,17 @@ pub async fn get_metars(
     }
 }
 
+/// Serves the in-memory METAR flight-category map (`station_id ->
+/// "VFR"/"MVFR"/"IFR"/"LIFR"`) kept fresh by the background task in
+/// `main::spawn_flight_category_refresh`. The web client fetches this
+/// once (and refreshes on an interval) to color every visible airport
+/// marker, rather than firing a METAR query on every pan/zoom. Returns
+/// `{}` until the first successful upstream load.
+pub async fn get_flight_categories(State(state): State<AppState>) -> Response {
+    let cache = state.flight_categories.read().await;
+    Json(&cache.categories).into_response()
+}
+
 pub async fn get_tafs(
     State(state): State<AppState>,
     Query(query): Query<StationQuery>,

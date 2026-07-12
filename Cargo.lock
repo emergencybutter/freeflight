@@ -788,6 +788,8 @@ dependencies = [
 name = "ff-weather"
 version = "0.1.0"
 dependencies = [
+ "csv",
+ "flate2",
  "reqwest",
  "serde",
  "serde_json",

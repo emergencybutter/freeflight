@@ -22,6 +22,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health::health))
         .route("/weather/metar", get(weather::get_metars))
+        .route("/weather/flightcat", get(weather::get_flight_categories))
         .route("/weather/taf", get(weather::get_tafs))
         .route("/weather/atis", get(weather::get_datis))
         .route("/weather/gairmet", get(weather::get_gairmets))

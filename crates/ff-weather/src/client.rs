@@ -18,6 +18,8 @@ pub enum WeatherError {
     NoStations,
     #[error("failed to parse winds-aloft bulletin: {0}")]
     WindsAloft(#[from] WindsAloftError),
+    #[error("failed to read metar cache: {0}")]
+    Cache(String),
 }
 
 /// Client for the free, unauthenticated aviationweather.gov Data API
@@ -51,6 +53,27 @@ impl WeatherClient {
             http: reqwest::Client::new(),
             base_url: base_url.into(),
         }
+    }
+
+    /// Downloads and parses aviationweather.gov's bulk METAR *cache*
+    /// file (`crate::cache`) into a `station_id -> flight_category` map.
+    /// Unlike `fetch_metars`, this takes no station list — it pulls every
+    /// current worldwide report in one gzipped file, meant to be called
+    /// periodically (not per request) so map-marker coloring never fans
+    /// out into per-view upstream queries.
+    pub async fn fetch_metar_flight_categories(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, WeatherError> {
+        let url = format!("{}/{}", crate::cache::CACHE_BASE_URL, crate::cache::METAR_CACHE_FILE);
+        let bytes = self
+            .http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        crate::cache::parse_metar_flight_categories(&bytes)
     }
 
     pub async fn fetch_metars(&self, station_ids: &[&str]) -> Result<Vec<Metar>, WeatherError> {
