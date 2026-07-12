@@ -62,6 +62,7 @@ export interface PersistedMapView {
     airports?: boolean;
     pireps?: boolean;
     cwas?: boolean;
+    radar?: boolean;
   };
 }
 

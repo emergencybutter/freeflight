@@ -37,6 +37,7 @@ const GAIRMET_SOURCE = "gairmets";
 const SIGMET_SOURCE = "sigmets";
 const CWA_SOURCE = "cwas";
 const PIREP_SOURCE = "pireps";
+const RADAR_SOURCE = "radar";
 const WINDS_ALOFT_SOURCE = "winds-aloft";
 const AIRSPACE_SOURCE = "airspace";
 const PLANNED_ROUTE_SOURCE = "planned-route";
@@ -143,6 +144,23 @@ maplibregl.addProtocol("pmtiles", new PmtilesProtocol().tile);
 // tiles are opaque, so they cover it naturally without any extra
 // show/hide logic once loaded and visible.
 const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+
+// NWS base-reflectivity radar mosaic (mapservices.weather.noaa.gov) — the
+// National Weather Service's own WMS, public-domain NOAA data, no API key
+// and no usage/commercial restriction (unlike RainViewer's free tier).
+// Covers CONUS plus Alaska, Hawaii, the Caribbean and Guam, refreshed
+// ~every 10 min. Consumed as a WMS raster source via MapLibre's
+// {bbox-epsg-3857} tile template — the service advertises EPSG:3857 in its
+// GetCapabilities, and for WMS 1.3.0 that CRS uses easting/northing (x,y)
+// axis order, matching the template's minx,miny,maxx,maxy. png32 gives a
+// real alpha channel so no-echo areas are transparent rather than a solid
+// backdrop over the chart/basemap beneath. `layers` is the single layer
+// the service exposes (confirmed against its GetCapabilities).
+const RADAR_WMS_URL =
+  "https://mapservices.weather.noaa.gov/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer" +
+  "?service=WMS&request=GetMap&version=1.3.0&layers=radar_base_reflectivity_time&styles=" +
+  "&format=image/png32&transparent=true&crs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}";
+const RADAR_LAYER = "radar-reflectivity";
 
 // iOS detection for the pixelRatio cap below. iPadOS 13+ deliberately
 // reports a macOS user agent, so UA sniffing alone misses modern iPads —
@@ -928,6 +946,12 @@ export const MapView = forwardRef<
   const [visibleAirports, setVisibleAirports] = useState(persistedView.overlays?.airports ?? true);
   const [visiblePireps, setVisiblePireps] = useState(persistedView.overlays?.pireps ?? true);
   const [visibleCwas, setVisibleCwas] = useState(persistedView.overlays?.cwas ?? true);
+  // Radar (NWS base reflectivity) defaults *off*, unlike the overlays
+  // above — it's a heavier always-refreshing raster the user opts into for
+  // a weather check, not baseline situational awareness, and leaving it off
+  // by default keeps a fresh load from hitting NOAA for tiles nobody asked
+  // to see.
+  const [visibleRadar, setVisibleRadar] = useState(persistedView.overlays?.radar ?? false);
   // Persist base chart + overlay toggles whenever they change; the
   // camera is saved separately on moveend (see the mount effect). Makes
   // any reload — including the iOS Safari memory-kill this was added
@@ -941,9 +965,10 @@ export const MapView = forwardRef<
         airports: visibleAirports,
         pireps: visiblePireps,
         cwas: visibleCwas,
+        radar: visibleRadar,
       },
     });
-  }, [visibleChartKinds, visibleAirspace, visibleWeatherHazards, visibleAirports, visiblePireps, visibleCwas]);
+  }, [visibleChartKinds, visibleAirspace, visibleWeatherHazards, visibleAirports, visiblePireps, visibleCwas, visibleRadar]);
 
   // Adds map sources/layers for one chart kind's catalog entries, if it
   // hasn't happened already — a no-op on repeat calls (e.g. re-selecting
@@ -962,9 +987,14 @@ export const MapView = forwardRef<
         url: `pmtiles://${API_BASE_URL}${chart.tile_url}`,
         tileSize: 256,
       });
+      // Anchored below the radar overlay, which itself sits just below the
+      // airspace/hazard stack (see the radar layer in the load handler), so
+      // chart imagery stays at the very bottom of every overlay: an opaque
+      // sectional must never paint over precip or airspace. Falls back to
+      // "airspace-fill" if the radar layer somehow isn't present yet.
       map.addLayer(
         { id: sourceId, type: "raster", source: sourceId, layout: { visibility: "none" } },
-        "airspace-fill",
+        map.getLayer(RADAR_LAYER) ? RADAR_LAYER : "airspace-fill",
       );
       layerIds.push(sourceId);
     }
@@ -1169,9 +1199,10 @@ export const MapView = forwardRef<
         paint: { "text-color": "#f2e6c9", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
       });
 
-      // Chart imagery renders as the base layer, under the airspace/
-      // weather/airport overlays added below -- inserted before
-      // "airspace-fill" specifically, not just "airports-circle": this
+      // Chart imagery renders as the base layer, under the radar overlay
+      // and the airspace/weather/airport overlays added below -- inserted
+      // before the radar layer (which is itself pinned just below
+      // "airspace-fill"), not just "airports-circle": this
       // whole fetch runs async (fetchCharts() is a network round trip),
       // so its .then() always fires as a microtask *after* the
       // synchronous airspace/G-AIRMET/SIGMET layer-adding code further
@@ -1269,6 +1300,28 @@ export const MapView = forwardRef<
           paint: { "line-color": airspaceColorExpr, "line-width": 1.5 },
         },
         "airports-circle",
+      );
+
+      // NWS base-reflectivity radar (see RADAR_WMS_URL) as a translucent
+      // raster overlay. Anchored before "airspace-fill" so it sits directly
+      // beneath the airspace/hazard vector overlays (which keep them
+      // readable on top) but above chart imagery — the chart loop anchors
+      // its raster layers before *this* one (see materializeChartKind), so
+      // an opaque sectional never hides the precip. Created hidden: the
+      // overlay defaults off and a hidden WMS source issues no tile
+      // requests, so a page load that doesn't want radar never touches
+      // NOAA; the reconciliation effect flips it on when the persisted
+      // state asks for it, and the toggle button drives it thereafter.
+      map.addSource(RADAR_SOURCE, { type: "raster", tiles: [RADAR_WMS_URL], tileSize: 256 });
+      map.addLayer(
+        {
+          id: RADAR_LAYER,
+          type: "raster",
+          source: RADAR_SOURCE,
+          layout: { visibility: "none" },
+          paint: { "raster-opacity": 0.6 },
+        },
+        "airspace-fill",
       );
 
       // G-AIRMET/SIGMET overlays render above chart imagery but below the
@@ -1624,6 +1677,10 @@ export const MapView = forwardRef<
     if (!visibleAirports) setLayersVisibility(["airports-circle", "airports-label"], false);
     if (!visiblePireps) setLayersVisibility(["pirep-circle"], false);
     if (!visibleCwas) setLayersVisibility(["cwa-fill", "cwa-line"], false);
+    // Radar is the inverse of the overlays above: its layer is created
+    // hidden (default off), so this shows it only when the persisted state
+    // had it on, rather than hiding an otherwise-visible layer.
+    if (visibleRadar) setLayersVisibility([RADAR_LAYER], true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
@@ -1824,6 +1881,11 @@ export const MapView = forwardRef<
       setLayersVisibility(["cwa-fill", "cwa-line"], !prev);
       return !prev;
     });
+  const toggleRadarVisibility = () =>
+    setVisibleRadar((prev) => {
+      setLayersVisibility([RADAR_LAYER], !prev);
+      return !prev;
+    });
 
   return (
     <div className="map-view">
@@ -1883,6 +1945,9 @@ export const MapView = forwardRef<
         </button>
         <button className={visibleCwas ? "selected" : ""} onClick={toggleCwaVisibility}>
           CWA
+        </button>
+        <button className={visibleRadar ? "selected" : ""} onClick={toggleRadarVisibility}>
+          Radar
         </button>
       </div>
     </div>
