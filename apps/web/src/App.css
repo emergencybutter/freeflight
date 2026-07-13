@@ -170,6 +170,29 @@
   }
 }
 
+/* Touch screens have no hover affordance to hint at the drag handle and
+   fingers are far less precise than a mouse pointer, so the hit box needs
+   to be much bigger than the thin visual grip suggests. */
+@media (pointer: coarse) {
+  .workspace-resizer {
+    flex-basis: 14px;
+  }
+  .workspace-resizer::after {
+    width: 3.5rem;
+    height: 5px;
+  }
+}
+
+@media (min-width: 900px) and (pointer: coarse) {
+  .workspace-resizer {
+    flex-basis: 14px;
+  }
+  .workspace-resizer::after {
+    width: 5px;
+    height: 3.5rem;
+  }
+}
+
 /* Narrow only: the Flight Plan view is full-screen (no map), matching the
    original phone-first layout. Wide keeps the map visible in both views. */
 @media (max-width: 899.98px) {
