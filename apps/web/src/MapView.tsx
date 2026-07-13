@@ -662,10 +662,24 @@ function procedureFixesGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollecti
   return { type: "FeatureCollection", features };
 }
 
-/** Below this zoom the map doesn't show airport markers at all — a
+/** Below this zoom the map doesn't show any airport markers at all — a
  * nationwide bundle has ~13k airports, and a CONUS-wide marker soup is
  * useless as well as slow. */
 const AIRPORT_MIN_ZOOM = 6;
+
+/** Below this (higher) zoom, only airports with a current METAR flight
+ * category show — airports with no weather station are the vast majority
+ * of the ~13k bundle and just add clutter until you're zoomed in enough
+ * to be looking at a specific area. */
+const AIRPORT_NO_WEATHER_MIN_ZOOM = 8;
+
+/** Shared by "airports-circle" and "airports-label" so the label for a
+ * marker never outlives (or outlasts) the marker itself. */
+const AIRPORT_DISPLAY_FILTER: maplibregl.FilterSpecification = [
+  "all",
+  [">=", ["zoom"], AIRPORT_MIN_ZOOM],
+  ["any", ["!=", ["get", "fltCat"], null], [">=", ["zoom"], AIRPORT_NO_WEATHER_MIN_ZOOM]],
+];
 
 /** Fetches the airports for the map's current view (bbox query, §4.1)
  * and refreshes the marker/winds-aloft sources, coloring markers by
@@ -1073,6 +1087,7 @@ export const MapView = forwardRef<
         id: "airports-circle",
         type: "circle",
         source: AIRPORTS_SOURCE,
+        filter: AIRPORT_DISPLAY_FILTER,
         paint: {
           "circle-radius": 5,
           "circle-color": [
@@ -1096,6 +1111,7 @@ export const MapView = forwardRef<
         id: "airports-label",
         type: "symbol",
         source: AIRPORTS_SOURCE,
+        filter: AIRPORT_DISPLAY_FILTER,
         layout: {
           "text-field": ["get", "icao"],
           "text-size": 11,
