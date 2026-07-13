@@ -1118,7 +1118,7 @@ export const MapView = forwardRef<
           "text-offset": [0, 1.1],
           "text-anchor": "top",
         },
-        paint: { "text-color": "#c8d6e5", "text-halo-color": "#0b1220", "text-halo-width": 1 },
+        paint: { "text-color": "#0b1220", "text-halo-color": "#c8d6e5", "text-halo-width": 1 },
       });
 
       map.addSource(RUNWAYS_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
