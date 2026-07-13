@@ -665,7 +665,7 @@ function procedureFixesGeoJson(detail: ProcedureDetail): GeoJSON.FeatureCollecti
 /** Below this zoom the map doesn't show any airport markers at all — a
  * nationwide bundle has ~13k airports, and a CONUS-wide marker soup is
  * useless as well as slow. */
-const AIRPORT_MIN_ZOOM = 6;
+const AIRPORT_MIN_ZOOM = 7;
 
 /** Below this (higher) zoom, only airports with a current METAR flight
  * category show — airports with no weather station are the vast majority
