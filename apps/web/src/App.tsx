@@ -71,6 +71,8 @@ export default function App() {
   const [sharedPlan] = useState(readSharedPlanFromUrl);
   const mapViewRef = useRef<MapViewHandle>(null);
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // The startup manifest fetch is a single quick request, so there's no
@@ -93,6 +95,24 @@ export default function App() {
   // in WaypointTab since that tab unmounts whenever another tap tab is
   // shown, which would otherwise reset the count.
   const [userWaypointCount, setUserWaypointCount] = useState(persisted.userWaypointCount ?? 0);
+
+  // Closes the share/about menu on an outside click or Escape — it has no
+  // other dismiss affordance since it's a plain popup, not a <dialog>.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   // Responsive layout: wide = map is the left column, info/flight-plan on
   // the right; narrow = the original stacked layout (map on top).
@@ -327,7 +347,27 @@ export default function App() {
           <button className={view === "plan" ? "selected" : ""} onClick={() => setView("plan")}>
             Flight Plan
           </button>
-          <button onClick={handleShare}>{shareStatus === "copied" ? "Copied!" : "Share"}</button>
+          <div className="menu-anchor" ref={menuRef}>
+            <button
+              className="icon-button"
+              aria-label="Share and more"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <ShareIcon />
+            </button>
+            {menuOpen && (
+              <div className="menu-popup" role="menu">
+                <button role="menuitem" onClick={handleShare}>
+                  {shareStatus === "copied" ? "Copied!" : "Share"}
+                </button>
+                <button role="menuitem" onClick={() => window.location.assign("/about")}>
+                  About
+                </button>
+              </div>
+            )}
+          </div>
         </span>
       </div>
       {/* The workspace is a two-pane split: the map, and the info/
@@ -461,6 +501,18 @@ export default function App() {
  * their own AirportDetail fetch, reset synchronously on every ident
  * change so a link never shows one airport's label pointing at the
  * previous airport's still-cached PDF while the new fetch is in flight. */
+function ShareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle cx="18" cy="5" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <circle cx="6" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <circle cx="18" cy="19" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <line x1="8.6" y1="10.5" x2="15.4" y2="6.5" stroke="currentColor" strokeWidth="2" />
+      <line x1="8.6" y1="13.5" x2="15.4" y2="17.5" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
 function QuickChartLinks({ route }: { route: RouteState }) {
   const [departureDiagramUrl, setDepartureDiagramUrl] = useState<string | null>(null);
   const [arrivalDiagramUrl, setArrivalDiagramUrl] = useState<string | null>(null);

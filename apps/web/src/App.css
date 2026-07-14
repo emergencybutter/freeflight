@@ -734,6 +734,49 @@ th {
   font-size: 0.75rem;
 }
 
+.menu-anchor {
+  position: relative;
+  display: inline-block;
+}
+
+.icon-button {
+  display: inline-flex;
+  width: auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.4rem;
+  color: #c8d6e5;
+}
+
+.menu-popup {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.3rem;
+  min-width: 8rem;
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: #131a2a;
+  border: 1px solid #232c40;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  z-index: 20;
+}
+
+.menu-popup button {
+  width: auto;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  border: none;
+  background: none;
+}
+
+.menu-popup button:hover {
+  background: #1d3a5f;
+}
+
 .flight-rules-toggle {
   display: flex;
   gap: 0.4rem;

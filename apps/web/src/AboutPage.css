@@ -1,0 +1,37 @@
+.about-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.about-card {
+  max-width: 34rem;
+  background: #131a2a;
+  border: 1px solid #232c40;
+  border-radius: 10px;
+  padding: 1.75rem 2rem;
+  line-height: 1.55;
+}
+
+.about-card h1 {
+  margin: 0 0 1rem;
+  font-size: 1.4rem;
+  color: #dbe4f0;
+}
+
+.about-card p {
+  margin: 0 0 1rem;
+  color: #c8d6e5;
+}
+
+.about-card a {
+  color: #5a9bd8;
+}
+
+.about-back {
+  display: inline-block;
+  margin-top: 0.25rem;
+  font-size: 0.9rem;
+}
