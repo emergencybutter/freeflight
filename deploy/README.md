@@ -79,10 +79,15 @@ so it and its data live under **one hostname**. nginx splits by path:
 |---|---|---|
 | `Dockerfile` | build context = workspace root | multi-stage Rust build of `ff-api` |
 | `compose.yml` | `/containers/freeflight/compose.yml` | runs the `freeflight-api` container |
-| `nginx-freeflight.conf` | `/containers/nginx/conf.d/freeflight.conf` | the vhost |
+| `ship-image.sh` | — | build the image locally and ship it to vya2 (see runbook step 1) |
 
-The nginx `docker-compose.yml` also gains one volume line:
-`- /var/www/freeflight:/srv/freeflight:ro`.
+The freeflight **nginx vhost** is *not* kept here — it lives in the
+separate `vya-ws/nginx` repo (`vya-ws/nginx/conf.d/freeflight.conf`),
+which is the source of truth for vya2's shared nginx and is deployed with
+its own `deploy.sh`. See "nginx config change" in the runbook below.
+
+The nginx `docker-compose.yml` (also in `vya-ws/nginx`) carries the
+static-root volume line: `- /var/www/freeflight:/srv/freeflight:ro`.
 
 ## Redeploy runbook
 
@@ -128,13 +133,18 @@ per-file `scp` loop works when `rsync` isn't available on the client
 cd /containers/freeflight && docker compose restart   # picks up new latest.json
 ```
 
-**4. nginx config change.** Edit `/containers/nginx/conf.d/freeflight.conf`,
-then:
+**4. nginx config change.** The vhost lives in the separate `vya-ws/nginx`
+repo, **not** here — edit `vya-ws/nginx/conf.d/freeflight.conf` and deploy
+it from that repo (Git Bash has no rsync, so go through WSL):
 
 ```sh
-docker exec nginx nginx -t        # validate
-cd /containers/nginx && docker compose up -d   # or: docker exec nginx nginx -s reload
+cd ../../vya-ws/nginx && wsl bash ./deploy.sh
 ```
+
+`deploy.sh` rsyncs `conf.d/` to `root@vya2:/containers/nginx/`, runs
+`docker exec nginx nginx -t`, and only reloads (`nginx -s reload`) if the
+config validates — so a bad config never goes live. Don't edit the file
+on the server directly; that drifts from the source of truth.
 
 ## Health checks
 
