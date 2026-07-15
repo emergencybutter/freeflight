@@ -88,15 +88,24 @@ The nginx `docker-compose.yml` also gains one volume line:
 
 All commands run as `root@vya2.flyvoyager.net` unless noted.
 
-**1. ff-api (code change).** From a local checkout, ship the Rust
-workspace source (no `target/`, `node_modules/`, `data/`) to
-`/containers/freeflight/build/src`, then on the server:
+**1. ff-api (code change).** Build the image **locally** and ship the
+image itself — vya2 no longer builds from source. One command from a
+local checkout:
 
 ```sh
-cd /containers/freeflight/build/src
-docker build -f deploy/Dockerfile -t ff-api:latest .   # ~20 min cold
-cd /containers/freeflight && docker compose up -d       # recreate container
+sh deploy/ship-image.sh
 ```
+
+It runs `docker build` locally (fast — the committed `.dockerignore`
+keeps the ~19 GB `data/` cycle out of the build context), then
+`docker save ff-api:latest | gzip | ssh root@vya2 'gunzip | docker load'`
+(~33 MB over the wire; there's no registry, `pull_policy: never`), and
+finally `docker compose up -d` on the server to recreate the container
+with the new image. Both ends are linux/amd64.
+
+The old flow (scp a `git archive` source tarball → `docker build` on the
+server, ~20 min cold) still works if you ever can't build locally, but
+the local-build-and-ship path is the default now.
 
 **2. Web client (UI change).** Locally:
 
