@@ -1842,7 +1842,8 @@ export const MapView = forwardRef<
       return;
     }
 
-    const { lat, lon, heading, alt, speed, callsign } = butterlogTelemetry;
+    const { lat, lon, heading, alt, speed, aircraftType, staleSecs } = butterlogTelemetry;
+    const isStale = staleSecs > BUTTERLOG_STALE_AFTER_SECS;
 
     let markerEl = document.getElementById("butterlog-plane-marker");
     if (!markerEl) {
@@ -1862,25 +1863,28 @@ export const MapView = forwardRef<
       const labelEl = document.createElement("div");
       labelEl.className = "butterlog-plane-label";
       labelEl.innerHTML = `
-        <div class="callsign"></div>
+        <div class="title"></div>
         <div class="specs"></div>
       `;
       markerEl.appendChild(labelEl);
     }
+
+    markerEl.classList.toggle("stale", isStale);
 
     const iconEl = markerEl.querySelector(".butterlog-plane-icon") as HTMLElement;
     if (iconEl) {
       iconEl.style.transform = `rotate(${heading}deg)`;
     }
 
-    const callsignEl = markerEl.querySelector(".callsign") as HTMLElement;
-    if (callsignEl) {
-      callsignEl.textContent = callsign;
+    const titleEl = markerEl.querySelector(".title") as HTMLElement;
+    if (titleEl) {
+      titleEl.textContent = aircraftType;
     }
 
     const specsEl = markerEl.querySelector(".specs") as HTMLElement;
     if (specsEl) {
-      specsEl.textContent = `${alt.toLocaleString()} ft • ${speed} kt`;
+      const base = `${Math.round(alt).toLocaleString()} ft • ${Math.round(speed)} kt`;
+      specsEl.textContent = isStale ? `${base} • ${staleSecs}s ago` : base;
     }
 
     if (!butterlogMarkerRef.current) {
@@ -2164,69 +2168,59 @@ export const MapView = forwardRef<
   );
 });
 
+// A position older than this (per Butterlog's `updated_ago_secs`) is shown
+// dimmed and time-stamped rather than as a live fix. Butterlog itself only
+// serves flights updated within 5 minutes, so this just distinguishes
+// "streaming now" from "last seen a bit ago".
+const BUTTERLOG_STALE_AFTER_SECS = 60;
+
 interface ParsedTelemetry {
   lat: number;
   lon: number;
-  alt: number; // in feet
-  heading: number; // in degrees
-  callsign: string;
-  speed: number; // in knots
+  alt: number; // MSL feet
+  heading: number; // degrees true
+  speed: number; // ground speed, knots
+  aircraftType: string;
+  staleSecs: number; // seconds since Butterlog last saw this position
 }
 
-function parseButterlogTelemetry(data: any): ParsedTelemetry | null {
+// The clean, typed contract from Butterlog's /api/v0/user/:id/current
+// (proxied by ff-api at /data/butterlog/...). `null` when the user isn't
+// flying; `position` is `null` until the flight reports a location. See
+// butterlog-service docs/API.md — the server now does the current_snapshot
+// extraction, so there's nothing to guess client-side.
+interface ButterlogCurrent {
+  aircraft_type?: unknown;
+  updated_ago_secs?: unknown;
+  position?: {
+    latitude?: unknown;
+    longitude?: unknown;
+    altitude?: unknown;
+    heading?: unknown;
+    speed?: unknown;
+  } | null;
+}
+
+const asNumber = (v: unknown, fallback = 0): number =>
+  typeof v === "number" && Number.isFinite(v) ? v : fallback;
+
+function parseButterlogTelemetry(data: unknown): ParsedTelemetry | null {
   if (!data || typeof data !== "object") return null;
-
-  let lat = getNumberField(data, ["latitude", "lat"]);
-  let lon = getNumberField(data, ["longitude", "lon", "lng"]);
-  let alt = getNumberField(data, ["altitude", "alt", "altitude_ft", "altitudeFt"]);
-  let heading = getNumberField(data, ["heading", "hdg", "track", "course", "true_heading", "trueHeading"]);
-  let speed = getNumberField(data, ["groundspeed", "speed", "velocity", "ground_speed"]);
-  let callsign = getStringField(data, ["callsign", "flight", "ident", "tailNumber", "tail_number"]);
-
-  if (lat === null || lon === null) {
-    for (const key of Object.keys(data)) {
-      const sub = data[key];
-      if (sub && typeof sub === "object") {
-        if (lat === null) lat = getNumberField(sub, ["latitude", "lat"]);
-        if (lon === null) lon = getNumberField(sub, ["longitude", "lon", "lng"]);
-        if (alt === null) alt = getNumberField(sub, ["altitude", "alt", "altitude_ft", "altitudeFt"]);
-        if (heading === null) heading = getNumberField(sub, ["heading", "hdg", "track", "course", "true_heading", "trueHeading"]);
-        if (speed === null) speed = getNumberField(sub, ["groundspeed", "speed", "velocity", "ground_speed"]);
-        if (callsign === null) callsign = getStringField(sub, ["callsign", "flight", "ident", "tailNumber", "tail_number"]);
-      }
-    }
-  }
-
-  if (lat === null || lon === null) {
-    return null;
-  }
+  const flight = data as ButterlogCurrent;
+  const pos = flight.position;
+  if (!pos || typeof pos !== "object") return null;
+  // Latitude/longitude are the only truly required fields — without a real
+  // fix there's nothing to place on the map.
+  if (typeof pos.latitude !== "number" || typeof pos.longitude !== "number") return null;
 
   return {
-    lat,
-    lon,
-    alt: alt !== null ? alt : 0,
-    heading: heading !== null ? heading : 0,
-    callsign: callsign !== null ? callsign : "Unknown",
-    speed: speed !== null ? speed : 0,
+    lat: pos.latitude,
+    lon: pos.longitude,
+    alt: asNumber(pos.altitude),
+    heading: asNumber(pos.heading),
+    speed: asNumber(pos.speed),
+    aircraftType: typeof flight.aircraft_type === "string" ? flight.aircraft_type : "Aircraft",
+    staleSecs: asNumber(flight.updated_ago_secs),
   };
-}
-
-function getNumberField(obj: any, keys: string[]): number | null {
-  for (const key of keys) {
-    if (key in obj && obj[key] !== null && obj[key] !== undefined) {
-      const val = Number(obj[key]);
-      if (!isNaN(val)) return val;
-    }
-  }
-  return null;
-}
-
-function getStringField(obj: any, keys: string[]): string | null {
-  for (const key of keys) {
-    if (key in obj && obj[key] !== null && obj[key] !== undefined) {
-      return String(obj[key]);
-    }
-  }
-  return null;
 }
 

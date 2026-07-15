@@ -1000,6 +1000,12 @@ th {
   pointer-events: none;
 }
 
+/* A position Butterlog hasn't refreshed recently — dim it so it doesn't
+   read as a live fix (the label also appends "Ns ago"). */
+.butterlog-plane-container.stale {
+  opacity: 0.45;
+}
+
 .butterlog-plane-icon {
   display: flex;
   align-items: center;
@@ -1023,7 +1029,7 @@ th {
   box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
 }
 
-.butterlog-plane-label .callsign {
+.butterlog-plane-label .title {
   font-weight: bold;
   font-size: 11px;
   color: #22d3ee;
