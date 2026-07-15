@@ -393,19 +393,13 @@ export default function App() {
                 <button role="menuitem" onClick={() => window.location.assign("/about")}>
                   About
                 </button>
-                {(user || authProviders.length > 0) && <div className="menu-divider" role="separator" />}
-                {/* Settings is always shown but disabled until signed in —
-                    it's the anchor for per-account preferences (Phase 4). */}
-                {(user || authProviders.length > 0) && (
-                  <button
-                    role="menuitem"
-                    disabled={!user}
-                    aria-disabled={!user}
-                    onClick={() => window.location.assign("/settings")}
-                  >
-                    Settings
-                  </button>
-                )}
+                <div className="menu-divider" role="separator" />
+                <button
+                  role="menuitem"
+                  onClick={() => window.location.assign("/settings")}
+                >
+                  Settings
+                </button>
                 {user ? (
                   <button role="menuitem" onClick={handleLogout}>
                     Log out{user.name ? ` (${user.name})` : ""}

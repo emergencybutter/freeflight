@@ -87,3 +87,26 @@ export function saveMapView(partial: PersistedMapView): void {
     // Storage full or unavailable — persistence is best-effort.
   }
 }
+
+const BUTTERLOG_USER_ID_KEY = "freeflight.butterlog_user_id";
+
+export function loadButterlogUserId(): string | null {
+  try {
+    return localStorage.getItem(BUTTERLOG_USER_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveButterlogUserId(userId: string | null): void {
+  try {
+    if (userId === null || userId.trim() === "") {
+      localStorage.removeItem(BUTTERLOG_USER_ID_KEY);
+    } else {
+      localStorage.setItem(BUTTERLOG_USER_ID_KEY, userId.trim());
+    }
+  } catch {
+    // ignore
+  }
+}
+

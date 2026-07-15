@@ -3,7 +3,7 @@ import maplibregl, { type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
-import { loadMapView, saveMapView } from "./persistence";
+import { loadMapView, saveMapView, loadButterlogUserId } from "./persistence";
 import {
   fetchAirportDetail,
   fetchAirportsInBbox,
@@ -953,6 +953,8 @@ export const MapView = forwardRef<
   // has unmounted this component and removed it.
   const unmountedRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
+  const [butterlogTelemetry, setButterlogTelemetry] = useState<ParsedTelemetry | null>(null);
+  const butterlogMarkerRef = useRef<maplibregl.Marker | null>(null);
   // Which chart-catalog `kind`s exist (for rendering toggle buttons) and
   // which layer ids belong to each (so a toggle click can flip every
   // layer of that kind) — populated once the chart-loading effect below
@@ -1796,6 +1798,114 @@ export const MapView = forwardRef<
   }, [route, loaded]);
 
   useEffect(() => {
+    const userId = loadButterlogUserId();
+    if (!userId) {
+      setButterlogTelemetry(null);
+      return;
+    }
+
+    const fetchTelemetry = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/data/butterlog/user/${userId}/current`);
+        if (!res.ok) {
+          throw new Error("HTTP error " + res.status);
+        }
+        const data = await res.json();
+        if (data && typeof data === "object") {
+          const parsed = parseButterlogTelemetry(data);
+          if (parsed) {
+            setButterlogTelemetry(parsed);
+            return;
+          }
+        }
+        setButterlogTelemetry(null);
+      } catch (err) {
+        console.error("Failed to fetch Butterlog telemetry:", err);
+        setButterlogTelemetry(null);
+      }
+    };
+
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+
+    if (!butterlogTelemetry) {
+      if (butterlogMarkerRef.current) {
+        butterlogMarkerRef.current.remove();
+        butterlogMarkerRef.current = null;
+      }
+      return;
+    }
+
+    const { lat, lon, heading, alt, speed, callsign } = butterlogTelemetry;
+
+    let markerEl = document.getElementById("butterlog-plane-marker");
+    if (!markerEl) {
+      markerEl = document.createElement("div");
+      markerEl.id = "butterlog-plane-marker";
+      markerEl.className = "butterlog-plane-container";
+      
+      const iconEl = document.createElement("div");
+      iconEl.className = "butterlog-plane-icon";
+      iconEl.innerHTML = `
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="#22d3ee">
+          <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L14 19v-5.5l8 2.5z"/>
+        </svg>
+      `;
+      markerEl.appendChild(iconEl);
+
+      const labelEl = document.createElement("div");
+      labelEl.className = "butterlog-plane-label";
+      labelEl.innerHTML = `
+        <div class="callsign"></div>
+        <div class="specs"></div>
+      `;
+      markerEl.appendChild(labelEl);
+    }
+
+    const iconEl = markerEl.querySelector(".butterlog-plane-icon") as HTMLElement;
+    if (iconEl) {
+      iconEl.style.transform = `rotate(${heading}deg)`;
+    }
+
+    const callsignEl = markerEl.querySelector(".callsign") as HTMLElement;
+    if (callsignEl) {
+      callsignEl.textContent = callsign;
+    }
+
+    const specsEl = markerEl.querySelector(".specs") as HTMLElement;
+    if (specsEl) {
+      specsEl.textContent = `${alt.toLocaleString()} ft • ${speed} kt`;
+    }
+
+    if (!butterlogMarkerRef.current) {
+      butterlogMarkerRef.current = new maplibregl.Marker({
+        element: markerEl,
+        anchor: "center"
+      })
+      .setLngLat([lon, lat])
+      .addTo(map);
+    } else {
+      butterlogMarkerRef.current.setLngLat([lon, lat]);
+    }
+  }, [butterlogTelemetry, loaded]);
+
+  useEffect(() => {
+    return () => {
+      if (butterlogMarkerRef.current) {
+        butterlogMarkerRef.current.remove();
+        butterlogMarkerRef.current = null;
+      }
+    };
+  }, []);
+
+
+  useEffect(() => {
     const map = mapRef.current;
     // Gated on `visible` (like the resize() above, and for the same
     // reason): a route built in the Flight Plan view never otherwise
@@ -2053,3 +2163,70 @@ export const MapView = forwardRef<
     </div>
   );
 });
+
+interface ParsedTelemetry {
+  lat: number;
+  lon: number;
+  alt: number; // in feet
+  heading: number; // in degrees
+  callsign: string;
+  speed: number; // in knots
+}
+
+function parseButterlogTelemetry(data: any): ParsedTelemetry | null {
+  if (!data || typeof data !== "object") return null;
+
+  let lat = getNumberField(data, ["latitude", "lat"]);
+  let lon = getNumberField(data, ["longitude", "lon", "lng"]);
+  let alt = getNumberField(data, ["altitude", "alt", "altitude_ft", "altitudeFt"]);
+  let heading = getNumberField(data, ["heading", "hdg", "track", "course", "true_heading", "trueHeading"]);
+  let speed = getNumberField(data, ["groundspeed", "speed", "velocity", "ground_speed"]);
+  let callsign = getStringField(data, ["callsign", "flight", "ident", "tailNumber", "tail_number"]);
+
+  if (lat === null || lon === null) {
+    for (const key of Object.keys(data)) {
+      const sub = data[key];
+      if (sub && typeof sub === "object") {
+        if (lat === null) lat = getNumberField(sub, ["latitude", "lat"]);
+        if (lon === null) lon = getNumberField(sub, ["longitude", "lon", "lng"]);
+        if (alt === null) alt = getNumberField(sub, ["altitude", "alt", "altitude_ft", "altitudeFt"]);
+        if (heading === null) heading = getNumberField(sub, ["heading", "hdg", "track", "course", "true_heading", "trueHeading"]);
+        if (speed === null) speed = getNumberField(sub, ["groundspeed", "speed", "velocity", "ground_speed"]);
+        if (callsign === null) callsign = getStringField(sub, ["callsign", "flight", "ident", "tailNumber", "tail_number"]);
+      }
+    }
+  }
+
+  if (lat === null || lon === null) {
+    return null;
+  }
+
+  return {
+    lat,
+    lon,
+    alt: alt !== null ? alt : 0,
+    heading: heading !== null ? heading : 0,
+    callsign: callsign !== null ? callsign : "Unknown",
+    speed: speed !== null ? speed : 0,
+  };
+}
+
+function getNumberField(obj: any, keys: string[]): number | null {
+  for (const key of keys) {
+    if (key in obj && obj[key] !== null && obj[key] !== undefined) {
+      const val = Number(obj[key]);
+      if (!isNaN(val)) return val;
+    }
+  }
+  return null;
+}
+
+function getStringField(obj: any, keys: string[]): string | null {
+  for (const key of keys) {
+    if (key in obj && obj[key] !== null && obj[key] !== undefined) {
+      return String(obj[key]);
+    }
+  }
+  return null;
+}
+

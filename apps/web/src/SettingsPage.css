@@ -50,3 +50,71 @@
 .settings-logout:hover {
   background: #244a78;
 }
+
+.settings-divider {
+  border-top: 1px solid #232c40;
+  margin: 1.5rem 0;
+}
+
+.settings-section h2 {
+  font-size: 1.15rem;
+  color: #dbe4f0;
+  margin: 0 0 0.5rem 0;
+  font-weight: 600;
+}
+
+.settings-help {
+  font-size: 0.85rem;
+  color: #9fb0c8;
+  margin-bottom: 1rem;
+  line-height: 1.45;
+}
+
+.settings-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.settings-form-group label {
+  font-size: 0.85rem;
+  color: #9fb0c8;
+  font-weight: 500;
+}
+
+.settings-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.settings-input-wrapper input {
+  flex: 1;
+  max-width: 15rem;
+  padding: 0.45rem 0.75rem;
+  background: #0c1220;
+  border: 1px solid #232c40;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 0.9rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.settings-input-wrapper input:focus {
+  border-color: #22d3ee;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
+}
+
+.settings-saved-indicator {
+  font-size: 0.8rem;
+  color: #3fa64a;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  font-weight: 500;
+}
+
+.settings-saved-indicator.visible {
+  opacity: 1;
+}
+

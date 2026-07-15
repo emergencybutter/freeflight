@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod butterlog;
 pub mod cycles;
 pub mod data;
 pub mod dtpp;
@@ -22,6 +23,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health::health))
+        .route("/data/butterlog/user/:user_id/current", get(butterlog::get_current))
         .route("/weather/metar", get(weather::get_metars))
         .route("/weather/flightcat", get(weather::get_flight_categories))
         .route("/weather/taf", get(weather::get_tafs))
