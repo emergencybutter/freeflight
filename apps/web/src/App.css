@@ -773,8 +773,32 @@ th {
   background: none;
 }
 
-.menu-popup button:hover {
+.menu-popup button:hover:not(:disabled) {
   background: #1d3a5f;
+}
+
+.menu-popup button:disabled {
+  color: #5a6a82;
+  cursor: default;
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 0.15rem 0.2rem;
+  background: #232c40;
+}
+
+.menu-beta {
+  margin-left: 0.35rem;
+  padding: 0.02rem 0.3rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9fc0e8;
+  background: #1d3a5f;
+  border-radius: 999px;
+  vertical-align: middle;
 }
 
 .flight-rules-toggle {

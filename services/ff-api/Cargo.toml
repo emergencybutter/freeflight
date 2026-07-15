@@ -20,3 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# OS randomness for opaque session/CSRF-state tokens in routes::auth. Kept
+# minimal (no oauth2/openidconnect crate) since the flow is a plain
+# authorization-code exchange we drive with the reqwest client above.
+getrandom = "0.2"

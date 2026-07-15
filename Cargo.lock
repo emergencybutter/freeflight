@@ -645,6 +645,7 @@ dependencies = [
  "ff-notam",
  "ff-sync",
  "ff-weather",
+ "getrandom 0.2.17",
  "reqwest",
  "rusqlite",
  "serde",

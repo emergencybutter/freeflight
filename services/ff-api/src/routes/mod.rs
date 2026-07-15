@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod cycles;
 pub mod data;
 pub mod dtpp;
@@ -6,7 +7,7 @@ pub mod notams;
 pub mod weather;
 
 use crate::state::AppState;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -47,6 +48,13 @@ pub fn router(state: AppState) -> Router {
         .route("/data/nearest_fix", get(data::nearest_fix))
         .route("/notams", get(notams::get_notams))
         .route("/dtpp/plate", get(dtpp::plate))
+        // OAuth sign-in (Google/Discord). `login`/`callback` are top-level
+        // browser redirects; `me`/`logout` are bearer-token XHR from the SPA.
+        .route("/auth/providers", get(auth::providers))
+        .route("/auth/login/:provider", get(auth::login))
+        .route("/auth/callback/:provider", get(auth::callback))
+        .route("/auth/me", get(auth::me))
+        .route("/auth/logout", post(auth::logout))
         .nest_service("/bundles", bundles)
         .with_state(state)
         // Permissive: this proxies only public FAA/NOAA data and takes no

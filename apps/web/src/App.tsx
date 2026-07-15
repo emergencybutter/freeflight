@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./api";
+import { beginLogin, captureAuthFromHash, fetchMe, fetchProviders, logout, type AuthProvider, type AuthUser } from "./auth";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { MapView, type MapViewHandle } from "./MapView";
 import { fetchNotams } from "./notams";
@@ -73,6 +74,11 @@ export default function App() {
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Sign-in state (see auth.ts). `user` null = signed out; `authProviders`
+  // is whatever OAuth providers ff-api has configured (empty ⇒ sign-in is
+  // off for this deployment, so the menu hides the login items entirely).
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authProviders, setAuthProviders] = useState<AuthProvider[]>([]);
   const [cycleId, setCycleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // The startup manifest fetch is a single quick request, so there's no
@@ -113,6 +119,28 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [menuOpen]);
+
+  // Sign-in bootstrap (see auth.ts): grab a token the OAuth callback may
+  // have left in the URL fragment, then resolve who (if anyone) we are and
+  // which providers this deployment offers. Runs once on mount.
+  useEffect(() => {
+    captureAuthFromHash();
+    let cancelled = false;
+    fetchProviders().then((p) => {
+      if (!cancelled) setAuthProviders(p);
+    });
+    fetchMe().then((u) => {
+      if (!cancelled) setUser(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLogout = () => {
+    setMenuOpen(false);
+    logout().finally(() => setUser(null));
+  };
 
   // Responsive layout: wide = map is the left column, info/flight-plan on
   // the right; narrow = the original stacked layout (map on top).
@@ -355,7 +383,7 @@ export default function App() {
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((open) => !open)}
             >
-              <ShareIcon />
+              <MenuIcon />
             </button>
             {menuOpen && (
               <div className="menu-popup" role="menu">
@@ -365,6 +393,30 @@ export default function App() {
                 <button role="menuitem" onClick={() => window.location.assign("/about")}>
                   About
                 </button>
+                {(user || authProviders.length > 0) && <div className="menu-divider" role="separator" />}
+                {/* Settings is always shown but disabled until signed in —
+                    it's the anchor for per-account preferences (Phase 4). */}
+                {(user || authProviders.length > 0) && (
+                  <button
+                    role="menuitem"
+                    disabled={!user}
+                    aria-disabled={!user}
+                    onClick={() => window.location.assign("/settings")}
+                  >
+                    Settings
+                  </button>
+                )}
+                {user ? (
+                  <button role="menuitem" onClick={handleLogout}>
+                    Log out{user.name ? ` (${user.name})` : ""}
+                  </button>
+                ) : (
+                  authProviders.map((p) => (
+                    <button key={p.id} role="menuitem" onClick={() => beginLogin(p.id)}>
+                      Log in with {p.display_name} <span className="menu-beta">beta</span>
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -501,14 +553,12 @@ export default function App() {
  * their own AirportDetail fetch, reset synchronously on every ident
  * change so a link never shows one airport's label pointing at the
  * previous airport's still-cached PDF while the new fetch is in flight. */
-function ShareIcon() {
+function MenuIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-      <circle cx="18" cy="5" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
-      <circle cx="6" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
-      <circle cx="18" cy="19" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
-      <line x1="8.6" y1="10.5" x2="15.4" y2="6.5" stroke="currentColor" strokeWidth="2" />
-      <line x1="8.6" y1="13.5" x2="15.4" y2="17.5" stroke="currentColor" strokeWidth="2" />
+      <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }

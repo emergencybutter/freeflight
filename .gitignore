@@ -17,6 +17,10 @@ apps/web/node_modules/
 apps/web/dist/
 apps/web/*.tsbuildinfo
 
+# server-only secrets (see deploy/.env.example); the .example template is tracked
+.env
+deploy/.env
+
 # android app
 apps/android/.gradle/
 apps/android/local.properties

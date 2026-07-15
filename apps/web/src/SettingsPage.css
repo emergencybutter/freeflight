@@ -1,0 +1,52 @@
+.settings-account {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.settings-avatar {
+  border-radius: 50%;
+  flex: none;
+}
+
+.settings-name {
+  font-size: 1.05rem;
+  color: #dbe4f0;
+  font-weight: 600;
+}
+
+.settings-email {
+  font-size: 0.85rem;
+  color: #9fb0c8;
+}
+
+.settings-provider {
+  font-size: 0.8rem;
+  color: #7f90a8;
+  text-transform: capitalize;
+}
+
+.settings-login-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.settings-login-buttons button,
+.settings-logout {
+  width: auto;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  background: #1d3a5f;
+  border: 1px solid #2a4a72;
+  border-radius: 6px;
+  color: #dbe4f0;
+  cursor: pointer;
+}
+
+.settings-login-buttons button:hover,
+.settings-logout:hover {
+  background: #244a78;
+}

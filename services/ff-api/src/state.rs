@@ -1,3 +1,4 @@
+use crate::routes::auth::AuthState;
 use ff_notam::{NotamClient, DEFAULT_API_BASE_URL, DEFAULT_AUTH_URL};
 use ff_weather::WeatherClient;
 use std::collections::HashMap;
@@ -40,6 +41,11 @@ pub struct AppState {
     /// (cheap — internally `Arc`-backed) rather than per-request, so
     /// connections to aeronav.faa.gov can be reused.
     pub http: reqwest::Client,
+    /// OAuth sign-in config + in-memory session store (see `routes::auth`).
+    /// Sign-in is off unless provider credentials are set in the
+    /// environment; `AuthState` is always present so the routes can report
+    /// "no providers configured" cleanly.
+    pub auth: Arc<AuthState>,
 }
 
 impl Default for AppState {
@@ -69,6 +75,7 @@ impl Default for AppState {
             notam,
             data_dir,
             http: reqwest::Client::new(),
+            auth: Arc::new(AuthState::from_env()),
         }
     }
 }
