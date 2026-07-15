@@ -1,0 +1,23 @@
+# The ff-api image (deploy/Dockerfile) is a Rust build of the workspace
+# only. Keep the build context tiny — the server deploy builds from a clean
+# `git archive` so it never sees these, but a local `docker build .` would
+# otherwise upload the entire working tree, including the ~19 GB on-disk
+# data cycle. Excluded here so the local and server builds match.
+
+# On-disk data cycles / bundles (charts pmtiles + cycle.sqlite, tens of GB)
+data/
+
+# Build outputs
+target/
+apps/web/node_modules/
+apps/web/dist/
+**/*.tsbuildinfo
+
+# Android
+apps/android/.gradle/
+apps/android/**/build/
+
+# VCS / editor / local secrets
+.git/
+.env
+deploy/.env
