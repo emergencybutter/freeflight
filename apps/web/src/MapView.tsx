@@ -302,6 +302,30 @@ function pirepGeoJson(records: Pirep[]): GeoJSON.FeatureCollection {
   };
 }
 
+function formatLimit(limit: string): string {
+  if (limit === "SFC") return "SFC";
+  if (limit === "UNLTD") return "UNLTD";
+  if (limit.startsWith("MSL:")) {
+    return limit.slice(4);
+  }
+  if (limit.startsWith("AGL:")) {
+    return `${limit.slice(4)} AGL`;
+  }
+  return limit;
+}
+
+function makeAirspaceLabel(cls: string, floor: string, ceiling: string): string {
+  let prefix = cls;
+  if (cls === "RESTRICTED") prefix = "R";
+  else if (cls === "PROHIBITED") prefix = "P";
+  else if (cls === "WARNING") prefix = "W";
+  else if (cls === "ALERT") prefix = "A";
+
+  const f = formatLimit(floor);
+  const c = formatLimit(ceiling);
+  return `${prefix}: ${f} ${c}`;
+}
+
 /** `boundary_geojson` is a GeoJSON `Polygon` geometry object (not a
  * whole `Feature`), stored/served as an unparsed string — see
  * `AirspaceVolume`'s doc comment in types.ts. */
@@ -311,7 +335,14 @@ function airspaceGeoJson(volumes: AirspaceVolume[]): GeoJSON.FeatureCollection {
     features: volumes.map((v) => ({
       type: "Feature",
       geometry: JSON.parse(v.boundary_geojson) as GeoJSON.Geometry,
-      properties: { id: v.id, name: v.name, class: v.class, floor: v.floor, ceiling: v.ceiling },
+      properties: {
+        id: v.id,
+        name: v.name,
+        class: v.class,
+        floor: v.floor,
+        ceiling: v.ceiling,
+        label: makeAirspaceLabel(v.class, v.floor, v.ceiling),
+      },
     })),
   };
 }
@@ -1298,6 +1329,7 @@ export const MapView = forwardRef<
         AIRSPACE_CLASS_COLORS.ALERT,
         DEFAULT_AIRSPACE_COLOR,
       ];
+
       map.addSource(AIRSPACE_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
       map.addLayer(
         {
@@ -1314,6 +1346,58 @@ export const MapView = forwardRef<
           type: "line",
           source: AIRSPACE_SOURCE,
           paint: { "line-color": airspaceColorExpr, "line-width": 1.5 },
+        },
+        "airports-circle",
+      );
+      map.addLayer(
+        {
+          id: "airspace-label-border",
+          type: "symbol",
+          source: AIRSPACE_SOURCE,
+          layout: {
+            "symbol-placement": "line",
+            "symbol-spacing": 800,
+            "text-field": ["get", "label"],
+            "text-size": 12.5,
+            "text-justify": "center",
+            "text-anchor": "center",
+            "text-line-height": 1.0,
+            "text-keep-upright": true,
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+            "text-rotation-alignment": "map",
+          },
+          paint: {
+            "text-color": airspaceColorExpr,
+            "text-halo-color": airspaceColorExpr,
+            "text-halo-width": 7.5,
+          },
+        },
+        "airports-circle",
+      );
+      map.addLayer(
+        {
+          id: "airspace-label",
+          type: "symbol",
+          source: AIRSPACE_SOURCE,
+          layout: {
+            "symbol-placement": "line",
+            "symbol-spacing": 800,
+            "text-field": ["get", "label"],
+            "text-size": 12.5,
+            "text-justify": "center",
+            "text-anchor": "center",
+            "text-line-height": 1.0,
+            "text-keep-upright": true,
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+            "text-rotation-alignment": "map",
+          },
+          paint: {
+            "text-color": airspaceColorExpr,
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 4.5,
+          },
         },
         "airports-circle",
       );
@@ -1687,7 +1771,7 @@ export const MapView = forwardRef<
   // through the toggle handlers as before.
   useEffect(() => {
     if (!loaded) return;
-    if (!visibleAirspace) setLayersVisibility(["airspace-fill", "airspace-line"], false);
+    if (!visibleAirspace) setLayersVisibility(["airspace-fill", "airspace-line", "airspace-label", "airspace-label-border"], false);
     if (!visibleWeatherHazards)
       setLayersVisibility(["gairmet-fill", "gairmet-line", "sigmet-fill", "sigmet-line"], false);
     if (!visibleAirports) setLayersVisibility(["airports-circle", "airports-label"], false);
@@ -1874,7 +1958,7 @@ export const MapView = forwardRef<
   };
   const toggleAirspaceVisibility = () =>
     setVisibleAirspace((prev) => {
-      setLayersVisibility(["airspace-fill", "airspace-line"], !prev);
+      setLayersVisibility(["airspace-fill", "airspace-line", "airspace-label", "airspace-label-border"], !prev);
       return !prev;
     });
   const toggleWeatherHazardsVisibility = () =>
