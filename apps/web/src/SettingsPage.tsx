@@ -102,9 +102,18 @@ export function SettingsPage() {
 
         <div className="settings-section">
           <h2>Integrations</h2>
-          <p className="settings-help">
-            Enter your Butterlog User ID to display your current flight simulator location and flight telemetry on the map.
-          </p>
+          {user?.provider === "discord" ? (
+            <p className="settings-help">
+              ✓ Your Butterlog flights are linked automatically through your Discord sign-in — your
+              live simulator position shows on the map with nothing to configure. Only enter an ID
+              below to watch a different account (it overrides the auto-link).
+            </p>
+          ) : (
+            <p className="settings-help">
+              Enter your Butterlog User ID to show your live flight-simulator position and telemetry on
+              the map. Tip: sign in with Discord to link this automatically.
+            </p>
+          )}
           <div className="settings-form-group">
             <label htmlFor="butterlog-userid">Butterlog User ID</label>
             <div className="settings-input-wrapper">

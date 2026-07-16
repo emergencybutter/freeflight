@@ -435,6 +435,7 @@ export default function App() {
             route={routePoints}
             preferredAltitudeFt={profile.cruise_altitude_ft}
             initialView={sharedPlan?.map}
+            butterlogDiscordId={user?.provider === "discord" ? user.subject : null}
           />
         </div>
         <div

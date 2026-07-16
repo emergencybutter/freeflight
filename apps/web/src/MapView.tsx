@@ -909,9 +909,15 @@ export const MapView = forwardRef<
      * every existing default; `chartKind: null` means "no chart" was
      * itself the shared selection, distinct from "unspecified". */
     initialView?: { chartKind: string | null; center: { lat: number; lon: number }; zoom: number };
+    /** The signed-in user's Discord id, when they authenticated with
+     * Discord. Butterlog keys pilots by Discord id, so this auto-links
+     * their live flight with no manual "Butterlog User ID" entry; when
+     * absent (Google login / signed out) the manual id from Settings is
+     * used instead. */
+    butterlogDiscordId?: string | null;
   }
 >(function MapView(
-  { selectedAirport, onSelectAirport, onMapTap, selectedProcedureId, visible, route, preferredAltitudeFt, initialView },
+  { selectedAirport, onSelectAirport, onMapTap, selectedProcedureId, visible, route, preferredAltitudeFt, initialView, butterlogDiscordId },
   handleRef,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1798,37 +1804,46 @@ export const MapView = forwardRef<
   }, [route, loaded]);
 
   useEffect(() => {
-    const userId = loadButterlogUserId();
-    if (!userId) {
+    // An explicitly-entered Butterlog User ID (Settings) wins — it's a
+    // deliberate choice and lets a Discord-signed-in user watch a different
+    // account. Otherwise auto-link: a Discord-authenticated user is
+    // resolved to their own flight by Discord id, with nothing to enter.
+    const manualId = loadButterlogUserId();
+    const endpoint = manualId
+      ? `/data/butterlog/user/${manualId}/current`
+      : butterlogDiscordId
+        ? `/data/butterlog/by-discord/${butterlogDiscordId}/current`
+        : null;
+
+    if (!endpoint) {
       setButterlogTelemetry(null);
       return;
     }
 
+    let cancelled = false;
     const fetchTelemetry = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/data/butterlog/user/${userId}/current`);
+        const res = await fetch(`${API_BASE_URL}${endpoint}`);
         if (!res.ok) {
           throw new Error("HTTP error " + res.status);
         }
         const data = await res.json();
-        if (data && typeof data === "object") {
-          const parsed = parseButterlogTelemetry(data);
-          if (parsed) {
-            setButterlogTelemetry(parsed);
-            return;
-          }
-        }
-        setButterlogTelemetry(null);
+        if (cancelled) return;
+        // `null` (not flying) or an unparseable payload clears the marker.
+        setButterlogTelemetry(parseButterlogTelemetry(data));
       } catch (err) {
         console.error("Failed to fetch Butterlog telemetry:", err);
-        setButterlogTelemetry(null);
+        if (!cancelled) setButterlogTelemetry(null);
       }
     };
 
     fetchTelemetry();
     const interval = setInterval(fetchTelemetry, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [butterlogDiscordId]);
 
   useEffect(() => {
     const map = mapRef.current;
