@@ -15,6 +15,12 @@
 //!   FF_CYCLE_DATE    cycle id, e.g. "2026-07-09"
 //!   FF_TILE_IFR      "1" to also re-tile the IFR Enroute Low/High panels
 //!                    (e.g. to re-crop ones originally tiled uncropped)
+//!   FF_CHART_FILTER  optional comma-separated substrings; a source chart is
+//!                    processed if its name contains any of them (e.g. "TAC"
+//!                    for the whole TAC/Flyway family, "Atlanta,Boston" for a
+//!                    subset, "Philadelphia" to smoke-test one). Catalog rows
+//!                    are cleared per-id as each chart is re-created, so a
+//!                    filtered run never drops the rows it isn't regenerating.
 
 use ff_charts::ChartKind;
 use ff_etl::bundle::{add_chart, ChartSource};
@@ -33,27 +39,37 @@ fn main() {
     }
 }
 
+/// Removes one catalog row so `add_chart`'s plain INSERT can recreate it —
+/// per-id (not a bulk kind-wide wipe) so a filtered re-tile only clears the
+/// charts it's actually regenerating, leaving every other row intact. The
+/// PMTiles file itself is overwritten in place by `add_chart`.
+fn clear_catalog_id(sqlite: &Path, id: &str) -> rusqlite::Result<()> {
+    let conn = rusqlite::Connection::open(sqlite)?;
+    conn.execute("DELETE FROM chart_catalog WHERE id = ?1", [id])?;
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let sqlite = std::env::var("FF_CYCLE_SQLITE")?;
     let out_dir = PathBuf::from(std::env::var("FF_CYCLE_DIR")?);
     let cycle_date = std::env::var("FF_CYCLE_DATE")?;
     let tile_ifr = std::env::var("FF_TILE_IFR").is_ok_and(|v| v == "1");
-
-    // Idempotent: drop the rows this run will re-create so re-running
-    // doesn't trip add_chart's plain INSERT on a duplicate id. (The
-    // PMTiles files themselves are overwritten in place.)
-    let kinds_clause = if tile_ifr {
-        "('TerminalAreaChart','VfrFlyway','HelicopterRoute','IfrEnrouteLow','IfrEnrouteHigh')"
-    } else {
-        "('TerminalAreaChart','VfrFlyway','HelicopterRoute')"
-    };
-    let conn = rusqlite::Connection::open(&sqlite)?;
-    let deleted = conn.execute(
-        &format!("DELETE FROM chart_catalog WHERE kind IN {kinds_clause}"),
-        [],
-    )?;
-    drop(conn);
-    tracing::info!(deleted, tile_ifr, "cleared existing catalog rows for the kinds being re-tiled");
+    // Comma-separated substrings; a chart is processed if its name contains
+    // any of them (e.g. "Atlanta,Boston" or just "TAC" for the whole family).
+    let filter: Option<Vec<String>> = std::env::var("FF_CHART_FILTER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect()
+        });
+    if let Some(f) = &filter {
+        tracing::info!(filter = ?f, "only processing charts whose name contains one of these");
+    }
+    let matches_filter =
+        |name: &str| filter.as_ref().is_none_or(|fs| fs.iter().any(|f| name.contains(f.as_str())));
 
     let sqlite_path = Path::new(&sqlite);
     let mut added = 0usize;
@@ -69,6 +85,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ("Heli_files", &cycle.heli_names),
     ] {
         for name in names {
+            if !matches_filter(name) {
+                continue;
+            }
             let workdir = tempfile::tempdir()?;
             let parts = match fetch_terminal_chart_zip(workdir.path(), name, subdir, &cycle) {
                 Ok(p) => p,
@@ -79,7 +98,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             for part in parts {
                 let rgb = expand_palette_to_rgb(&part.tif_path, workdir.path())?;
-                let rgb = crop_to_neatline(&rgb, workdir.path(), &part.label)?.unwrap_or(rgb);
+                let rgb = crop_to_neatline(&rgb, workdir.path(), part.kind, &part.label)?.unwrap_or(rgb);
                 let (slug_suffix, name_suffix) = match part.kind {
                     ChartKind::TerminalAreaChart => ("tac", "TAC"),
                     ChartKind::VfrFlyway => ("fly", "VFR Flyway"),
@@ -88,10 +107,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let slug = format!("{}-{slug_suffix}", part.label.to_lowercase());
                 let pmtiles_filename = format!("chart-{slug}.pmtiles");
+                let id = format!("{cycle_date}-{slug}");
+                clear_catalog_id(sqlite_path, &id)?;
                 add_chart(
                     sqlite_path,
                     &ChartSource {
-                        id: format!("{cycle_date}-{slug}"),
+                        id,
                         geotiff_path: rgb,
                         pmtiles_out: out_dir.join(&pmtiles_filename),
                         cycle_id: cycle_date.clone(),
@@ -129,6 +150,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ];
         for (panel_names, kind, series_label) in series {
             for panel_name in panel_names {
+                if !matches_filter(panel_name) {
+                    continue;
+                }
                 let workdir = tempfile::tempdir()?;
                 let parts = match fetch_ifr_enroute_panel(workdir.path(), panel_name, &ifr_cycle) {
                     Ok(p) => p,
@@ -139,13 +163,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 for part in parts {
                     let rgb = expand_palette_to_rgb(&part.tif_path, workdir.path())?;
-                    let rgb = crop_to_neatline(&rgb, workdir.path(), &part.label)?.unwrap_or(rgb);
+                    let rgb = crop_to_neatline(&rgb, workdir.path(), kind, &part.label)?.unwrap_or(rgb);
                     let slug = part.label.to_lowercase();
                     let pmtiles_filename = format!("chart-{slug}.pmtiles");
+                    let id = format!("{cycle_date}-{slug}");
+                    clear_catalog_id(sqlite_path, &id)?;
                     add_chart(
                         sqlite_path,
                         &ChartSource {
-                            id: format!("{cycle_date}-{slug}"),
+                            id,
                             geotiff_path: rgb,
                             pmtiles_out: out_dir.join(&pmtiles_filename),
                             cycle_id: cycle_date.clone(),

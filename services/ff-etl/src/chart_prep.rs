@@ -9,6 +9,7 @@
 //! source — corrupting every color. Expanding to RGB first (nearest by
 //! definition — `gdal_translate -expand rgb` is a direct palette lookup,
 //! no resampling involved) fixes that.
+use ff_charts::ChartKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
@@ -437,9 +438,33 @@ fn detect_neatline(rgb: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
 /// detection preview in [`crop_to_neatline`] is rendered at a fixed
 /// width with proportional height, a fraction measured on that preview
 /// applies unchanged to the full-res source.
-const HARDCODED_NEATLINE_FRACTIONS: &[(&str, (f64, f64, f64, f64))] = &[
-    ("New_York", (0.35, 0.4313, 1.0, 0.9565)),
-    ("Downtown_Manhattan", (0.215, 0.068, 0.776, 0.909)),
+//
+// Keyed by (kind, label) — not label alone — because a city's TAC and its
+// Helicopter chart share a label (both "New York TAC.tif" and "New York
+// HEL.tif" reduce to "New_York"), and they need different crop boxes.
+const HARDCODED_NEATLINE_FRACTIONS: &[(ChartKind, &str, (f64, f64, f64, f64))] = &[
+    // Helicopter route charts whose legend has no drawn border (see above).
+    (ChartKind::HelicopterRoute, "New_York", (0.35, 0.4313, 1.0, 0.9565)),
+    (ChartKind::HelicopterRoute, "Downtown_Manhattan", (0.215, 0.068, 0.776, 0.909)),
+    // Terminal Area Charts: their map-body neatline is a thin line broken by
+    // graticule tick labels, which detect_neatline can't read, and the body's
+    // content (rural land / near-white ocean) is too heterogeneous for a
+    // density heuristic — so the box is hand-measured per chart from the
+    // 4000px preview. Major Class B metros only for now; the rest tile
+    // uncropped via the None fallback below. Labels are classify_chart_tif's
+    // output (the tif basename minus " TAC", spaces → underscores).
+    (ChartKind::TerminalAreaChart, "Atlanta", (0.171, 0.072, 0.993, 0.996)),
+    (ChartKind::TerminalAreaChart, "Boston", (0.128, 0.033, 0.955, 0.990)),
+    (ChartKind::TerminalAreaChart, "Chicago", (0.171, 0.086, 0.862, 0.993)),
+    (ChartKind::TerminalAreaChart, "Dallas-Ft_Worth", (0.133, 0.012, 0.990, 0.995)),
+    (ChartKind::TerminalAreaChart, "Denver", (0.170, 0.036, 0.992, 0.840)),
+    (ChartKind::TerminalAreaChart, "Los_Angeles", (0.283, 0.016, 0.902, 0.991)),
+    (ChartKind::TerminalAreaChart, "Miami", (0.149, 0.008, 0.992, 0.996)),
+    (ChartKind::TerminalAreaChart, "New_York", (0.254, 0.088, 0.995, 0.985)),
+    (ChartKind::TerminalAreaChart, "Philadelphia", (0.170, 0.074, 0.749, 0.763)),
+    (ChartKind::TerminalAreaChart, "Phoenix", (0.290, 0.077, 0.995, 0.992)),
+    (ChartKind::TerminalAreaChart, "San_Francisco", (0.292, 0.048, 0.996, 0.912)),
+    (ChartKind::TerminalAreaChart, "Seattle", (0.180, 0.070, 0.816, 0.983)),
 ];
 
 fn crop_to_fraction(
@@ -494,9 +519,13 @@ fn crop_to_fraction(
 pub fn crop_to_neatline(
     source_tif: &Path,
     workdir: &Path,
+    kind: ChartKind,
     label: &str,
 ) -> Result<Option<PathBuf>, ChartPrepError> {
-    if let Some(&(_, frac)) = HARDCODED_NEATLINE_FRACTIONS.iter().find(|(l, _)| *l == label) {
+    if let Some(&(_, _, frac)) = HARDCODED_NEATLINE_FRACTIONS
+        .iter()
+        .find(|(k, l, _)| *k == kind && *l == label)
+    {
         return Ok(Some(crop_to_fraction(source_tif, workdir, frac)?));
     }
 
