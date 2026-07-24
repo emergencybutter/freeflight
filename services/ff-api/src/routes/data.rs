@@ -259,6 +259,52 @@ pub async fn airports(State(state): State<AppState>, Query(query): Query<BboxQue
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct DataSourceRow {
+    pub name: String,
+    pub effective_date: Option<String>,
+    pub licence: Option<String>,
+    pub url: Option<String>,
+    pub attribution: String,
+}
+
+/// Data-source attributions shipped in the current cycle bundle — e.g. the
+/// French SIA credit + AIRAC effective date, required by the Licence
+/// Ouverte. Returns `[]` for older bundles that predate the `data_source`
+/// table (opened raw here, without migrations), rather than erroring.
+pub async fn attributions(State(state): State<AppState>) -> Response {
+    let result = with_bundle(&state, move |conn| {
+        let has_table: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='data_source')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_table {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn.prepare(
+            "SELECT name, effective_date, licence, url, attribution FROM data_source ORDER BY name",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(DataSourceRow {
+                    name: row.get(0)?,
+                    effective_date: row.get(1)?,
+                    licence: row.get(2)?,
+                    url: row.get(3)?,
+                    attribution: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await;
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
     pub q: String,

@@ -10,6 +10,7 @@ description = "Batch job that builds versioned data-cycle bundles from FAA/NOAA 
 ff-cifp.workspace = true
 ff-core.workspace = true
 ff-nasr.workspace = true
+ff-aixm.workspace = true
 ff-charts.workspace = true
 ff-storage.workspace = true
 rusqlite.workspace = true

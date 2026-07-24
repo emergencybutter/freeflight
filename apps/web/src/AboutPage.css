@@ -26,6 +26,22 @@
   color: #c8d6e5;
 }
 
+.about-card h2 {
+  margin: 1.5rem 0 0.75rem;
+  font-size: 1.05rem;
+  color: #dbe4f0;
+}
+
+.about-sources {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+  color: #c8d6e5;
+}
+
+.about-sources li {
+  margin-bottom: 0.6rem;
+}
+
 .about-card a {
   color: #5a9bd8;
 }

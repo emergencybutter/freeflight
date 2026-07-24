@@ -1,6 +1,6 @@
 use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
 use crate::bundle::{
-    add_airspace, add_chart, add_dtpp_charts, build_bundle, BundleSource, ChartSource,
+    add_airspace, add_aixm, add_chart, add_dtpp_charts, build_bundle, BundleSource, ChartSource,
 };
 use crate::chart_prep::{crop_legend_and_collar, crop_to_neatline, expand_palette_to_rgb};
 use crate::dtpp::{discover_dtpp_cycle, fetch_and_match_dtpp_charts};
@@ -24,6 +24,8 @@ pub enum EtlError {
     ChartPrep(#[from] crate::chart_prep::ChartPrepError),
     #[error(transparent)]
     Airspace(#[from] crate::airspace::AirspaceError),
+    #[error(transparent)]
+    Aixm(#[from] crate::aixm::AixmLoadError),
     #[error(transparent)]
     Dtpp(#[from] crate::dtpp::DtppError),
     #[error(transparent)]
@@ -66,7 +68,7 @@ pub fn run() -> Result<(), EtlError> {
     tracing::info!("fetched NASR");
 
     let bundle_path = workdir.path().join("cycle.sqlite");
-    let stats = build_bundle(
+    let mut stats = build_bundle(
         &BundleSource {
             cifp_path: cifp.cifp_path,
             nasr_dir: Some(nasr_dir),
@@ -84,6 +86,45 @@ pub fn run() -> Result<(), EtlError> {
     airspace_volumes.extend(fetch_special_use_airspace()?);
     add_airspace(&bundle_path, &airspace_volumes)?;
     tracing::info!(count = airspace_volumes.len(), "added airspace boundaries");
+
+    // Non-US data from a national AIXM export (DESIGN.md §3.1), first
+    // target France/SIA. Gated on FF_AIXM_FR_PATH (a locally-downloaded
+    // SIA export — the file is cart-gated, not fetchable unattended);
+    // unset means a US-only cycle, unaffected. Best-effort: a bad/absent
+    // non-US file must not sink the whole US cycle, so a load error is
+    // logged and skipped (same policy as the d-TPP step below).
+    //
+    // ATTRIBUTION: SIA data is Licence Ouverte — any published cycle that
+    // includes it MUST display "Service de l'Information Aéronautique
+    // (SIA)" + the export's effective date in the clients (§3.1). That
+    // client-side surfacing is still TODO.
+    if let Some(aixm_path) = crate::aixm::configured_source() {
+        match crate::aixm::load(&aixm_path) {
+            Ok(data) => {
+                let added = add_aixm(&bundle_path, &data)?;
+                // Airspace volumes go through the same inserter the FAA
+                // airspace uses (bbox-indexed).
+                add_airspace(&bundle_path, &data.airspaces)?;
+                // Fold the non-US airport count into `stats` so validation's
+                // cycle-to-cycle airport-count check compares like with like.
+                stats.airports += added.airports;
+                tracing::info!(
+                    source = %aixm_path.display(),
+                    airports = added.airports,
+                    runways = added.runways,
+                    navaids = added.navaids,
+                    waypoints = added.waypoints,
+                    airways = added.airways,
+                    airway_legs = added.airway_legs,
+                    airspaces = data.airspaces.len(),
+                    "added France/SIA AIXM data to bundle (Licence Ouverte — attribution required in clients)"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, source = %aixm_path.display(), "couldn't load AIXM data this cycle — skipping")
+            }
+        }
+    }
 
     // d-TPP SID/STAR/Approach chart links — best-effort, matching every
     // procedure that could be, not something the whole cycle publish

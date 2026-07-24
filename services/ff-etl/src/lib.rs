@@ -1,6 +1,7 @@
 //! Batch job that builds versioned data-cycle bundles from FAA/NOAA
 //! sources (DESIGN.md §7).
 
+pub mod aixm;
 pub mod airspace;
 pub mod bundle;
 pub mod chart_prep;

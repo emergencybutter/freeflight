@@ -119,6 +119,66 @@ Notes:
   ADS-B/FlightAware/ADSBExchange dependency, which keeps post-flight
   analysis usable with zero external accounts.
 
+### 3.1 Non-US data (Phase 2): National eAIP / AIXM, starting with France
+
+Phase 1 is US-only because every source above is US-federal public
+domain. For non-US airports, navaids, waypoints, airways, and airspace the
+chosen source is each state's **official AIS publication** — its **AIXM**
+dataset (the ICAO-standard XML aeronautical exchange format), the same
+data its own charts are cut from. Brought online **a state at a time**;
+the first is **France (SIA)**.
+
+(An earlier draft adopted OpenAIP; reverted. OpenAIP is community-
+maintained, CC BY-NC — a licensing exception we didn't want — and,
+decisively, doesn't carry enroute RNAV fixes/airways at official
+completeness. National AIXM does.)
+
+**AIXM version — 4.5, not 5.1, and why.** The obvious target was AIXM 5.1
+(GML-based, current). But France's SIA publishes its **operational** export
+in **AIXM 4.5**; its only 5.1 is a frozen 2017 EUROCONTROL *demo*
+("not for operational use", unmaintained, no airways). Since France is the
+first region, we build the 4.5 parser: it's the real, maintained, free
+feed. 4.5 is also structurally simpler than 5.1 (flat feature XML — no GML
+geometry, timeslices, or xlink), so it's the pragmatic start. A future
+state that ships operational 5.1 will need a 5.1 reader alongside; the two
+formats are different enough to be separate parsers, not a version flag.
+
+| Data | Source | Format | Licence | Update cycle | Status |
+|---|---|---|---|---|---|
+| Non-US airports, navaids, waypoints (designated points), runways, airways — then airspace | National AIS AIXM; first target **France / SIA** (`AIXM4.5_all_FR_OM_*.xml`, in `export_xml_bd_SIA*.zip`) | AIXM 4.5 (flat feature XML, UTF-8) | France: **Licence Ouverte** (Etalab) — redistribution + commercial OK, attribution required | 28-day AIRAC | `ff-aixm` implemented + **validated against the real SIA export** (AIRAC 07/26, full 43 MB file: 878 airports / 394 navaids / 4285 waypoints / 779 runways / 425 airways·1895 legs, golden test in `tests/real_sia.rs`): `Ahp`→airport, `Vor/Ndb/Dme/Tcn`→navaid, `Dpn`→waypoint, `Rwy`+`Rdn`→runway, `Rte`+`Rsg`→airway (segments chained), `Ase`+`Abd`→airspace (arc/circle borders expanded; joined by feature `mid`; single-point non-area zones skipped). **`ff-etl` integration done**: `aixm` module loads a locally-provided export (SIA is cart-gated, not auto-fetchable) gated on `FF_AIXM_FR_PATH`, `bundle::add_aixm` + the shared `add_airspace` persist it into the same tables the FAA sources use — verified end-to-end (real zip → bundle: 878/779/394/4285/425/1895/**1541 airspaces**). Still to do: per-feature `region`, **client-side Licence Ouverte attribution surfacing** (About page done; needs the SIA cycle date) |
+
+**Licence (France).** The SIA AIXM 4.5 export is under the **Licence
+Ouverte** (French open licence): free, worldwide, **redistribution and
+commercial use explicitly permitted**. So — unlike OpenAIP — it needs **no
+§12 exception**; the only obligations are **attribution** ("Service de
+l'Information Aéronautique (SIA)" + the data's update date) and not
+distorting the data (already covered by the "not for navigation"
+disclaimer). This licence is France's alone — see the per-country caveat.
+
+**The two standing costs:**
+
+- **Fragmentation.** No single global feed. Each state's AIS publishes on
+  its own portal/schedule/access method (open download, registration-
+  gated, or only eAIP HTML/PDF with no machine-readable AIXM).
+  EUROCONTROL's EAD aggregates Europe but is access-controlled. So this is
+  genuinely *per-country ETL*, widened region by region — not one parser
+  that lights up the world.
+- **Licensing is per-country.** National AIP terms range from open
+  licences (France's Licence Ouverte) to Crown-copyright / explicit reuse
+  restrictions. Each state's terms are checked before its data enters a
+  published bundle (§12); a state that forbids redistribution is accessed
+  but not re-hosted, or dropped.
+
+Pipeline fit: the `ff-aixm` crate (parallel to `ff-cifp`/`ff-nasr`) streams
+the AIXM 4.5 `<AIXM-Snapshot>` → `ff-core` types; `ff-etl` will fetch the
+SIA export per AIRAC cycle and write it into the same bundle tables the FAA
+sources use. AIXM carries no FAA-style region code, so navaid/waypoint
+`region` is stamped from the dataset's ICAO region (`"LF"` for France).
+The AIXM 4.5→`ff-core` feature mapping: `AirportHeliport (Ahp)`→`Airport`,
+`Runway (Rwy)`+`RunwayDirection (Rdn)`→`Runway`, `Vor/Ndb/Dme/Tcn`→
+`Navaid`, `DesignatedPoint (Dpn)`→`Waypoint`, `Route (Rte)`+`RouteSegment
+(Rsg)`→`Airway`, `Airspace (Ase)`+`AirspaceBorder (Abd)`→airspace volumes.
+
 ## 4. Architecture Overview
 
 ```
@@ -732,6 +792,10 @@ Consequences:
 - **Legal/compliance**: prominent "not for navigation, VFR/IFR
   supplemental use only" disclaimer; FAA/NOAA data attribution per each
   source's terms of use; no redistribution of any non-public-domain data.
+  The Phase 2 non-US source (national eAIP/AIXM, §3.1) has **per-country**
+  terms — each state's AIP licence is reviewed before its data is included
+  in a published bundle; a state that forbids redistribution is not
+  re-hosted.
 - **Abuse resistance** (currently unmet): `ff-api` is an unauthenticated
   public proxy with permissive CORS — as-is, anyone can use it as a free
   METAR relay, and once NOTAM credentials are configured, anonymous
@@ -874,6 +938,8 @@ document survive insertions/removals.
   aircraft profiles, and flight logs follow them between web and Android
   — still no server-side flight-plan filing.
 - **Phase 5 — Expand beyond Phase 1 scope**: broader leg-type/procedure
-  coverage, non-US airspace (would require different, likely non-free,
-  data sources per country), evaluate paid data partnerships if the
-  product justifies it.
+  coverage, non-US airports/navaids/waypoints/airways/airspace via national
+  AIS AIXM (France/SIA 4.5 first; see §3.1 for the source, version, and
+  per-country licensing decision, and the `ff-aixm` crate — brought online
+  a region at a time), evaluate paid data partnerships if the product
+  justifies it.

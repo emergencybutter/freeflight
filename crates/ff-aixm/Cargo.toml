@@ -1,0 +1,15 @@
+[package]
+name = "ff-aixm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Parser for AIXM 4.5 aeronautical data (national AIS exports, e.g. France/SIA) → ff-core types (DESIGN.md §3.1)."
+
+[dependencies]
+ff-core.workspace = true
+thiserror.workspace = true
+# `encoding` feature: quick-xml transcodes per the XML declaration. France's
+# SIA export is UTF-8 (confirmed against the real file), but other states'
+# AIXM exports are declared ISO-8859-1 (Latin-1); this keeps both correct.
+quick-xml = { version = "0.36", features = ["encoding"] }

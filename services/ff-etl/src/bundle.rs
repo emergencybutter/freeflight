@@ -17,6 +17,7 @@ use ff_core::{
     Frequency, FrequencyKind, Navaid, NavaidType, PathAndTerm, Polygon, ProcedureKind, Runway,
     RunwaySurface, SpecialUseKind, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
+use ff_aixm::AixmData;
 use ff_nasr::{
     frequencies_for_airport, parse_apt_base, parse_apt_runway, parse_apt_runway_end, parse_frq,
 };
@@ -478,6 +479,160 @@ pub fn add_dtpp_charts(
     Ok(())
 }
 
+#[derive(Debug, Default)]
+pub struct AixmStats {
+    /// Net-new airports inserted (ICAOs already present are `INSERT OR
+    /// IGNORE`d and not counted).
+    pub airports: usize,
+    pub runways: usize,
+    pub navaids: usize,
+    pub waypoints: usize,
+    pub airways: usize,
+    pub airway_legs: usize,
+}
+
+/// Inserts parsed non-US AIXM data (`crate::aixm::load`) into an existing
+/// bundle — the non-US analog of the FAA inserts in [`build_bundle`], run
+/// as a post-build step like `add_airspace` (DESIGN.md §3.1).
+///
+/// Same integrity discipline as the FAA path: airports use `INSERT OR
+/// IGNORE` on the `airport(icao)` primary key (non-US and US ICAO spaces
+/// are disjoint, so this is a guard, not an expected collision); runways
+/// are filtered to airports present in this batch to keep the foreign key
+/// satisfied. Navaids/waypoints append (their `region` column
+/// disambiguates same-ident fixes across regions). Airways append with
+/// their legs remapped to the freshly-assigned `airway` rowid — a non-US
+/// airway ident that happens to match a US one becomes its own row, which
+/// the schema allows (no unique constraint on `airway.ident`).
+///
+/// AIXM carries no airport comm frequencies in the base export (those are
+/// separate `Fqy` features, not parsed), so no frequency rows are added.
+pub fn add_aixm(bundle_path: &Path, data: &AixmData) -> Result<AixmStats, BundleError> {
+    let mut conn = rusqlite::Connection::open(bundle_path)?;
+    let tx = conn.transaction()?;
+
+    let mut inserted_airports = 0usize;
+    for a in &data.airports {
+        inserted_airports += tx.execute(
+            "INSERT OR IGNORE INTO airport
+                 (icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type, fuel_types)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                a.icao,
+                a.faa_id,
+                a.iata,
+                a.name,
+                a.lat,
+                a.lon,
+                a.elevation_ft,
+                airport_type_str(a.airport_type),
+                a.fuel_types.join(","),
+            ],
+        )?;
+    }
+
+    let present: HashSet<&str> = data.airports.iter().map(|a| a.icao.as_str()).collect();
+
+    let mut runways = 0usize;
+    for r in &data.runways {
+        if !present.contains(r.airport_icao.as_str()) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO runway (airport_icao, ident, length_ft, width_ft, surface,
+                                  le_ident, le_lat, le_lon, le_heading_deg,
+                                  he_ident, he_lat, he_lon, he_heading_deg)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                r.airport_icao,
+                r.ident,
+                r.length_ft,
+                r.width_ft,
+                surface_str(r.surface),
+                r.low_end.ident,
+                r.low_end.lat,
+                r.low_end.lon,
+                r.low_end.heading_deg,
+                r.high_end.ident,
+                r.high_end.lat,
+                r.high_end.lon,
+                r.high_end.heading_deg,
+            ],
+        )?;
+        runways += 1;
+    }
+
+    for n in &data.navaids {
+        tx.execute(
+            "INSERT INTO navaid (ident, navaid_type, lat, lon, elevation_ft, freq_khz, region)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                n.ident,
+                navaid_type_str(n.navaid_type),
+                n.lat,
+                n.lon,
+                n.elevation_ft,
+                n.freq_khz,
+                n.region
+            ],
+        )?;
+    }
+
+    for w in &data.waypoints {
+        tx.execute(
+            "INSERT INTO waypoint (ident, lat, lon, region) VALUES (?1,?2,?3,?4)",
+            params![w.ident, w.lat, w.lon, w.region],
+        )?;
+    }
+
+    // Legs reference airway by rowid, so record each AIXM airway's id as
+    // it's inserted (independent of any US airways already in the table).
+    let mut airway_ids: HashMap<&str, i64> = HashMap::new();
+    for a in &data.airways {
+        tx.execute(
+            "INSERT INTO airway (ident, kind) VALUES (?1,?2)",
+            params![a.ident, airway_kind_str(a.kind)],
+        )?;
+        airway_ids.insert(a.ident.as_str(), tx.last_insert_rowid());
+    }
+    let mut airway_legs = 0usize;
+    for l in &data.airway_legs {
+        if let Some(&airway_id) = airway_ids.get(l.airway_ident.as_str()) {
+            tx.execute(
+                "INSERT INTO airway_leg (airway_id, seq, fix_ident, min_altitude_ft, max_altitude_ft)
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![airway_id, l.seq, l.fix_ident, l.min_altitude_ft, l.max_altitude_ft],
+            )?;
+            airway_legs += 1;
+        }
+    }
+
+    // Record the SIA attribution (Licence Ouverte requires the source name
+    // + the data's effective date) so clients can display it. Idempotent.
+    tx.execute(
+        "INSERT OR REPLACE INTO data_source (name, effective_date, licence, url, attribution)
+         VALUES (?1,?2,?3,?4,?5)",
+        params![
+            "France (SIA)",
+            data.effective,
+            "Licence Ouverte",
+            "https://www.sia.aviation-civile.gouv.fr",
+            "Service de l'Information Aéronautique (SIA)",
+        ],
+    )?;
+
+    tx.commit()?;
+
+    Ok(AixmStats {
+        airports: inserted_airports,
+        runways,
+        navaids: data.navaids.len(),
+        waypoints: data.waypoints.len(),
+        airways: data.airways.len(),
+        airway_legs,
+    })
+}
+
 /// Parses the NASR extract at `dir` and returns real runway surfaces
 /// (keyed by `(airport_icao, runway_ident)`) and communication
 /// frequencies for just the requested `icaos`, merging on top of what
@@ -725,5 +880,105 @@ fn turn_direction_str(t: TurnDirection) -> &'static str {
         TurnDirection::Left => "L",
         TurnDirection::Right => "R",
         TurnDirection::Either => "E",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ff_core::{Airport, Airway, AirwayLeg, Runway, RunwayEnd};
+
+    fn airport(icao: &str, lat: f64, lon: f64) -> Airport {
+        Airport {
+            icao: icao.into(),
+            faa_id: None,
+            iata: None,
+            name: format!("{icao} TEST"),
+            lat,
+            lon,
+            elevation_ft: 100,
+            airport_type: AirportType::Airport,
+            fuel_types: vec![],
+        }
+    }
+    fn count(conn: &rusqlite::Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn add_aixm_inserts_with_fk_integrity_and_ordered_airway_legs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cycle.sqlite");
+        // Pre-existing FAA airport, to exercise INSERT OR IGNORE.
+        {
+            let conn = ff_storage::open(path.to_str().unwrap()).unwrap();
+            conn.execute(
+                "INSERT INTO airport (icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type, fuel_types)
+                 VALUES ('LFRC', NULL, NULL, 'EXISTING', 49.6, -1.4, 100, 'Airport', '')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let data = AixmData {
+            airports: vec![airport("LFRC", 49.6, -1.4), airport("LFPG", 49.0, 2.5)],
+            runways: vec![
+                Runway {
+                    airport_icao: "LFPG".into(),
+                    ident: "09/27".into(),
+                    length_ft: 8000,
+                    width_ft: 148,
+                    surface: RunwaySurface::Concrete,
+                    low_end: RunwayEnd { ident: "09".into(), lat: 49.0, lon: 2.5, heading_deg: 90.0 },
+                    high_end: RunwayEnd { ident: "27".into(), lat: 49.0, lon: 2.55, heading_deg: 270.0 },
+                },
+                // References an airport NOT in this batch → skipped (FK).
+                Runway {
+                    airport_icao: "ZZZZ".into(),
+                    ident: "01/19".into(),
+                    length_ft: 3000,
+                    width_ft: 75,
+                    surface: RunwaySurface::Turf,
+                    low_end: RunwayEnd { ident: "01".into(), lat: 0.0, lon: 0.0, heading_deg: 10.0 },
+                    high_end: RunwayEnd { ident: "19".into(), lat: 0.0, lon: 0.0, heading_deg: 190.0 },
+                },
+            ],
+            airways: vec![Airway { ident: "L615".into(), kind: AirwayKind::RnavLow }],
+            airway_legs: vec![
+                AirwayLeg { airway_ident: "L615".into(), seq: 1, fix_ident: "DJL".into(), min_altitude_ft: None, max_altitude_ft: None },
+                AirwayLeg { airway_ident: "L615".into(), seq: 2, fix_ident: "LUREN".into(), min_altitude_ft: Some(6500), max_altitude_ft: Some(34500) },
+                // Orphan leg (no matching airway) → skipped.
+                AirwayLeg { airway_ident: "GHOST".into(), seq: 1, fix_ident: "X".into(), min_altitude_ft: None, max_altitude_ft: None },
+            ],
+            ..Default::default()
+        };
+
+        let stats = add_aixm(&path, &data).unwrap();
+        assert_eq!(stats.airports, 1, "only LFPG is net-new; LFRC ignored");
+        assert_eq!(stats.runways, 1, "ZZZZ runway dropped for FK integrity");
+        assert_eq!(stats.airways, 1);
+        assert_eq!(stats.airway_legs, 2, "GHOST leg has no airway, skipped");
+
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(count(&conn, "airport"), 2);
+        assert_eq!(count(&conn, "runway"), 1);
+        assert_eq!(count(&conn, "airway"), 1);
+        assert_eq!(count(&conn, "airway_leg"), 2);
+        // The collided airport kept its original FAA row.
+        let name: String = conn
+            .query_row("SELECT name FROM airport WHERE icao='LFRC'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "EXISTING");
+        // Legs joined to the right airway rowid, in order.
+        let first_fix: String = conn
+            .query_row(
+                "SELECT fix_ident FROM airway_leg JOIN airway ON airway.id = airway_leg.airway_id
+                 WHERE airway.ident='L615' AND seq=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_fix, "DJL");
     }
 }

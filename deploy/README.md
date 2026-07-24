@@ -133,6 +133,63 @@ per-file `scp` loop works when `rsync` isn't available on the client
 cd /containers/freeflight && docker compose restart   # picks up new latest.json
 ```
 
+**3a. Cycle with non-US (France / SIA AIXM) data.** The pipeline folds in
+French airports/navaids/waypoints/runways/airways/airspace from the SIA
+AIXM 4.5 export when `FF_AIXM_FR_PATH` points at it (DESIGN.md §3.1). This
+is opt-in — a normal cycle build (step 3) omits it. To publish an
+**up-to-date** France-inclusive cycle:
+
+1. **Match the AIRAC cycle.** The FAA and SIA both follow the global ICAO
+   AIRAC calendar (28-day, synchronized effective dates), so the France
+   data must be from the **same cycle** the FAA pipeline pulls. The
+   pipeline auto-discovers the current FAA CIFP cycle; the SIA export you
+   feed it has to have the matching effective date, or the bundle will
+   label itself with the FAA date while carrying stale France data.
+
+2. **Download the matching SIA export.** From
+   <https://www.sia.aviation-civile.gouv.fr> → *Produits numériques en
+   libre disposition* → *Bases de données SIA*, add the current
+   *Données aéronautiques XML AIRAC* product to the cart (free, 0,00 €),
+   check out, and download `export_xml_bd_SIA<date>.zip`. Confirm its
+   validity dates cover the FAA cycle. Licence: **Licence Ouverte** —
+   redistribution OK, **attribution required** (see step 5).
+
+3. **Build the cycle** on a GDAL-capable host (vya2 has no GDAL; WSL/Debian
+   does — that's where this was validated). GDAL's `gdal_translate`/
+   `gdalwarp`/`gdaladdo` must be on `PATH`:
+
+   ```sh
+   export FF_AIXM_FR_PATH=/path/to/export_xml_bd_SIA<date>.zip
+   export FF_ETL_DATA_DIR=/path/to/output          # NOT the repo data/ unless intended
+   export RUST_LOG=info
+   cargo run --release -p ff-etl --bin ff-etl      # note: --bin ff-etl (crate has several)
+   ```
+
+   Same run as step 3, plus one early log line to check:
+   `added France/SIA AIXM data to bundle ... airports=… airspaces=…`.
+
+4. **Verify AIRAC alignment.** In the log, confirm `fetched CIFP
+   cycle=<date>` matches your SIA export's cycle. (Observed once: the FAA
+   rolled to `2026-08-06` while the SIA file on hand was `2026-07-09` — a
+   one-cycle mismatch. Re-download the matching SIA export rather than
+   publish that.)
+
+5. **Attribution prerequisite (Licence Ouverte).** Before a France-
+   inclusive cycle goes live, the web client must display
+   "Service de l'Information Aéronautique (SIA)" **and the export's
+   effective date**. The About page already credits the SIA (`apps/web`),
+   but the per-cycle date is not wired through yet — finish that first, or
+   you're shipping the data without meeting the licence's attribution
+   condition.
+
+6. **Publish** exactly as step 3: copy `data/cycles/<id>/` (~19 GB) +
+   `data/latest.json` to `/containers/freeflight/data/`, then
+   `docker compose restart`.
+
+Known limitation: navaid/waypoint `region` is stamped `LF` for the whole
+`FR_OM` export, which actually spans several ICAO regions (metropolitan,
+New Caledonia, Antilles, …) — cosmetic; per-feature region is a TODO.
+
 **4. nginx config change.** The vhost lives in the separate `vya-ws/nginx`
 repo, **not** here — edit `vya-ws/nginx/conf.d/freeflight.conf` and deploy
 it from that repo (Git Bash has no rsync, so go through WSL):
