@@ -26,6 +26,8 @@ pub enum EtlError {
     Airspace(#[from] crate::airspace::AirspaceError),
     #[error(transparent)]
     Aixm(#[from] crate::aixm::AixmLoadError),
+    #[error("AIXM effective date {sia} does not match the CIFP cycle {cifp}; use the matching-AIRAC SIA export, or set FF_AIXM_ALLOW_CYCLE_MISMATCH=1 to build anyway")]
+    AixmCycleMismatch { sia: String, cifp: String },
     #[error(transparent)]
     Dtpp(#[from] crate::dtpp::DtppError),
     #[error(transparent)]
@@ -94,13 +96,30 @@ pub fn run() -> Result<(), EtlError> {
     // non-US file must not sink the whole US cycle, so a load error is
     // logged and skipped (same policy as the d-TPP step below).
     //
-    // ATTRIBUTION: SIA data is Licence Ouverte — any published cycle that
-    // includes it MUST display "Service de l'Information Aéronautique
-    // (SIA)" + the export's effective date in the clients (§3.1). That
-    // client-side surfacing is still TODO.
+    // ATTRIBUTION: SIA data is Licence Ouverte — a published cycle that
+    // includes it must display "Service de l'Information Aéronautique
+    // (SIA)" + the export's effective date. `add_aixm` records that in the
+    // `data_source` table; the web About page renders it (§3.1).
     if let Some(aixm_path) = crate::aixm::configured_source() {
         match crate::aixm::load(&aixm_path) {
             Ok(data) => {
+                // Guardrail: the SIA export must be the same AIRAC cycle as
+                // the FAA data, or the bundle would carry stale non-US data
+                // under the FAA cycle id (a silent, easy mistake). Refuse
+                // unless explicitly overridden. A file without an effective
+                // date can't be checked, so it's allowed through.
+                if let Some(eff) = data.effective.as_deref() {
+                    if eff != cifp.cycle_date {
+                        if std::env::var("FF_AIXM_ALLOW_CYCLE_MISMATCH").is_ok() {
+                            tracing::warn!(sia_effective = %eff, cifp_cycle = %cifp.cycle_date, "AIXM effective date != CIFP cycle — proceeding because FF_AIXM_ALLOW_CYCLE_MISMATCH is set");
+                        } else {
+                            return Err(EtlError::AixmCycleMismatch {
+                                sia: eff.to_string(),
+                                cifp: cifp.cycle_date.clone(),
+                            });
+                        }
+                    }
+                }
                 let added = add_aixm(&bundle_path, &data)?;
                 // Airspace volumes go through the same inserter the FAA
                 // airspace uses (bbox-indexed).
