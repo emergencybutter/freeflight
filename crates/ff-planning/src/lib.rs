@@ -2,11 +2,13 @@
 //! (DESIGN.md §5, §9.3).
 
 pub mod geo;
+pub mod magvar;
 pub mod route;
 pub mod weight_balance;
 pub mod wind;
 
 pub use geo::{distance_nm, initial_bearing_deg};
+pub use magvar::declination_deg;
 pub use route::{
     plan_leg, plan_route, AircraftProfile, RouteLegPlan, RoutePlanSummary, RoutePoint,
 };

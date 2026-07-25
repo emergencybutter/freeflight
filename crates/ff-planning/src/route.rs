@@ -1,6 +1,17 @@
 use crate::geo::{distance_nm, initial_bearing_deg};
+use crate::magvar::declination_deg;
 use crate::wind::{solve as solve_wind_triangle, Wind};
 use serde::{Deserialize, Serialize};
+
+/// Normalize a bearing to `[0, 360)` degrees.
+fn norm360(deg: f64) -> f64 {
+    let d = deg % 360.0;
+    if d < 0.0 {
+        d + 360.0
+    } else {
+        d
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AircraftProfile {
@@ -34,20 +45,29 @@ pub struct RouteLegPlan {
     pub distance_nm: f64,
     pub true_course_deg: f64,
     pub true_heading_deg: f64,
+    /// Magnetic declination at the leg midpoint, positive East (WMM, see
+    /// [`crate::magvar`]).
+    pub magnetic_variation_deg: f64,
+    /// True course/heading converted to magnetic (= true − variation) —
+    /// what the pilot flies off the compass/DG.
+    pub magnetic_course_deg: f64,
+    pub magnetic_heading_deg: f64,
     pub ground_speed_kt: f64,
     pub ete_hours: f64,
     pub fuel_gal: f64,
 }
 
-/// Plan a single leg: distance/course from great-circle geometry, then
-/// (if wind is known) a heading/groundspeed/time/fuel estimate. Without
-/// wind, TAS is assumed to equal groundspeed (DESIGN.md §9.3 — a "simple"
-/// nav log, not a certified performance tool).
+/// Plan a single leg: distance/course from great-circle geometry, a
+/// wind-triangle heading/groundspeed (if wind is known; without it TAS is
+/// assumed to equal groundspeed — DESIGN.md §9.3), and magnetic
+/// course/heading from the WMM variation at the leg midpoint.
+/// `decimal_year` (e.g. 2026.5) dates the magnetic model.
 pub fn plan_leg(
     from: RoutePoint,
     to: RoutePoint,
     profile: &AircraftProfile,
     wind: Option<Wind>,
+    decimal_year: f64,
 ) -> RouteLegPlan {
     let distance_nm = distance_nm((from.lat, from.lon), (to.lat, to.lon));
     let true_course_deg = initial_bearing_deg((from.lat, from.lon), (to.lat, to.lon));
@@ -59,6 +79,14 @@ pub fn plan_leg(
         }
         None => (true_course_deg, profile.cruise_tas_kt),
     };
+
+    // Variation at the leg midpoint (short VFR legs — a single value per
+    // leg is plenty). Magnetic = true − variation ("east is least").
+    let mid_lat = (from.lat + to.lat) / 2.0;
+    let mid_lon = (from.lon + to.lon) / 2.0;
+    let magnetic_variation_deg = declination_deg(mid_lat, mid_lon, 0.0, decimal_year);
+    let magnetic_course_deg = norm360(true_course_deg - magnetic_variation_deg);
+    let magnetic_heading_deg = norm360(true_heading_deg - magnetic_variation_deg);
 
     let ete_hours = if ground_speed_kt > 0.0 {
         distance_nm / ground_speed_kt
@@ -75,6 +103,9 @@ pub fn plan_leg(
         distance_nm,
         true_course_deg,
         true_heading_deg,
+        magnetic_variation_deg,
+        magnetic_course_deg,
+        magnetic_heading_deg,
         ground_speed_kt,
         ete_hours,
         fuel_gal,
@@ -96,13 +127,14 @@ pub fn plan_route(
     points: &[RoutePoint],
     profile: &AircraftProfile,
     winds: Option<&[Option<Wind>]>,
+    decimal_year: f64,
 ) -> RoutePlanSummary {
     let legs: Vec<RouteLegPlan> = points
         .windows(2)
         .enumerate()
         .map(|(i, pair)| {
             let wind = winds.and_then(|w| w.get(i).copied().flatten());
-            plan_leg(pair[0], pair[1], profile, wind)
+            plan_leg(pair[0], pair[1], profile, wind, decimal_year)
         })
         .collect();
 
@@ -150,9 +182,31 @@ mod tests {
                 lon: -121.8429,
             }, // KMRY
         ];
-        let summary = plan_route(&points, &cessna_172(), None);
+        let summary = plan_route(&points, &cessna_172(), None, 2026.5);
         assert_eq!(summary.legs.len(), 2);
         assert!(summary.total_distance_nm > 0.0);
         assert!((summary.total_ete_hours - summary.total_distance_nm / 110.0).abs() < 1e-6);
+        // California has ~12-13° east variation, so magnetic course is
+        // ~12° less than true (and heading == course with no wind).
+        let leg = &summary.legs[0];
+        assert!(leg.magnetic_variation_deg > 10.0 && leg.magnetic_variation_deg < 15.0);
+        assert!((leg.magnetic_heading_deg - super::norm360(leg.true_heading_deg - leg.magnetic_variation_deg)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn magnetic_course_is_true_minus_east_variation() {
+        // A due-north true course in a +10° (east) variation region gives
+        // a magnetic course of 350°.
+        let leg = plan_leg(
+            RoutePoint { lat: 34.0, lon: -118.0 },
+            RoutePoint { lat: 35.0, lon: -118.0 }, // due north
+            &cessna_172(),
+            None,
+            2026.5,
+        );
+        assert!((leg.true_course_deg - 0.0).abs() < 0.5 || (leg.true_course_deg - 360.0).abs() < 0.5);
+        assert!(leg.magnetic_variation_deg > 8.0, "expected east var, got {}", leg.magnetic_variation_deg);
+        // MC = 360 - var  ≈ 349-351
+        assert!(leg.magnetic_course_deg > 347.0 && leg.magnetic_course_deg < 353.0, "MC {}", leg.magnetic_course_deg);
     }
 }

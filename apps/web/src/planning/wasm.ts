@@ -51,9 +51,23 @@ export interface RouteLegPlan {
   distance_nm: number;
   true_course_deg: number;
   true_heading_deg: number;
+  /** WMM magnetic declination at the leg midpoint, +East. */
+  magnetic_variation_deg: number;
+  /** True course/heading converted to magnetic (what the pilot flies). */
+  magnetic_course_deg: number;
+  magnetic_heading_deg: number;
   ground_speed_kt: number;
   ete_hours: number;
   fuel_gal: number;
+}
+
+/** Current date as a decimal year (e.g. 2026.54) for the magnetic model. */
+function currentDecimalYear(): number {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const start = Date.UTC(y, 0, 1);
+  const end = Date.UTC(y + 1, 0, 1);
+  return y + (now.getTime() - start) / (end - start);
 }
 
 export interface RoutePlanSummary {
@@ -73,7 +87,12 @@ export async function planRoute(
   winds: (PlanningWind | null)[],
 ): Promise<RoutePlanSummary> {
   await ensureReady();
-  const json = plan_route_json(JSON.stringify(points), JSON.stringify(profile), JSON.stringify(winds));
+  const json = plan_route_json(
+    JSON.stringify(points),
+    JSON.stringify(profile),
+    JSON.stringify(winds),
+    currentDecimalYear(),
+  );
   return JSON.parse(json) as RoutePlanSummary;
 }
 

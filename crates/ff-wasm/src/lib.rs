@@ -33,13 +33,15 @@ pub fn initial_bearing_deg(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 /// `plan_route`'s own per-leg fallback. Picking which real winds-aloft
 /// station/altitude applies to each leg happens client-side (see
 /// apps/web/src/planning/windsAloft.ts) — this binding just forwards
-/// whatever was resolved. Returns a JSON `RoutePlanSummary`, or throws a
-/// JS exception on malformed input.
+/// whatever was resolved. `decimal_year` (e.g. 2026.5) dates the WMM
+/// magnetic model for the magnetic course/heading columns. Returns a JSON
+/// `RoutePlanSummary`, or throws a JS exception on malformed input.
 #[wasm_bindgen]
 pub fn plan_route_json(
     points_json: &str,
     profile_json: &str,
     winds_json: &str,
+    decimal_year: f64,
 ) -> Result<String, JsValue> {
     let points: Vec<RoutePoint> = serde_json::from_str(points_json)
         .map_err(|e| JsValue::from_str(&format!("invalid points JSON: {e}")))?;
@@ -47,7 +49,7 @@ pub fn plan_route_json(
         .map_err(|e| JsValue::from_str(&format!("invalid profile JSON: {e}")))?;
     let winds: Vec<Option<Wind>> = serde_json::from_str(winds_json)
         .map_err(|e| JsValue::from_str(&format!("invalid winds JSON: {e}")))?;
-    let summary = plan_route(&points, &profile, Some(&winds));
+    let summary = plan_route(&points, &profile, Some(&winds), decimal_year);
     serde_json::to_string(&summary)
         .map_err(|e| JsValue::from_str(&format!("failed to serialize result: {e}")))
 }

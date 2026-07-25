@@ -48,6 +48,13 @@ function formatWind(wind: PlanningWind | null): string {
   return `${wind.direction_true_deg.toFixed(0)}°/${wind.speed_kt.toFixed(0)}`;
 }
 
+/** Magnetic variation as e.g. "13°E" / "8°W" (positive = East). */
+function formatVar(deg: number): string {
+  const r = Math.round(Math.abs(deg));
+  if (r === 0) return "0°";
+  return `${r}°${deg >= 0 ? "E" : "W"}`;
+}
+
 interface WeightRow {
   label: string;
   weight_lb: string;
@@ -186,9 +193,10 @@ export function FlightPlanning({
                 <tr>
                   <th>Leg</th>
                   <th>Dist (nm)</th>
-                  <th>Course</th>
+                  <th title="Magnetic course (true course − variation)">MC</th>
                   <th>Wind</th>
-                  <th>Heading</th>
+                  <th title="Magnetic variation (WMM 2025)">Var</th>
+                  <th title="Magnetic heading — steer this">MH</th>
                   <th>GS (kt)</th>
                   <th>ETE</th>
                   <th>Fuel (gal)</th>
@@ -201,9 +209,12 @@ export function FlightPlanning({
                       {points[i].ident} → {points[i + 1].ident}
                     </td>
                     <td>{leg.distance_nm.toFixed(1)}</td>
-                    <td>{leg.true_course_deg.toFixed(0)}°</td>
+                    <td>{leg.magnetic_course_deg.toFixed(0)}°</td>
                     <td>{formatWind(legWinds[i] ?? null)}</td>
-                    <td>{leg.true_heading_deg.toFixed(0)}°</td>
+                    <td>{formatVar(leg.magnetic_variation_deg)}</td>
+                    <td>
+                      <strong>{leg.magnetic_heading_deg.toFixed(0)}°</strong>
+                    </td>
                     <td>{leg.ground_speed_kt.toFixed(0)}</td>
                     <td>{formatHours(leg.ete_hours)}</td>
                     <td>{leg.fuel_gal.toFixed(1)}</td>
@@ -218,6 +229,8 @@ export function FlightPlanning({
                   <td>
                     <strong>{navLog.total_distance_nm.toFixed(1)}</strong>
                   </td>
+                  {/* MC, Wind, Var, MH, GS — no meaningful total */}
+                  <td />
                   <td />
                   <td />
                   <td />
