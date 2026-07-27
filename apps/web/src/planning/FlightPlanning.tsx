@@ -147,8 +147,26 @@ export function FlightPlanning({
   // (App.tsx always computes it) — an IFR flight is already on an ATC
   // clearance through controlled airspace, so a "you're entering Class B"
   // heads-up isn't the same kind of actionable warning it is for VFR.
-  // Defaults to VFR since this is a GA-first tool.
-  const [flightRules, setFlightRules] = useState<"VFR" | "IFR">("VFR");
+  // Also gates the SID/STAR pickers in RouteBuilder.
+  //
+  // Defaults to VFR since this is a GA-first tool, but seeds from the
+  // route: a plan carrying a SID or STAR is an instrument plan by
+  // definition, and this state is not persisted while the route is
+  // (localStorage, and shared links). Without the seed, refreshing an
+  // IFR plan would drop it to VFR and hide the pickers while the
+  // procedure kept feeding routePoints in App.tsx.
+  const [flightRules, setFlightRules] = useState<"VFR" | "IFR">(
+    route.sid || route.star ? "IFR" : "VFR",
+  );
+
+  // The seed above only catches a route present on first render; a
+  // shared link resolves its procedures asynchronously (share.ts) and
+  // lands after. Re-asserting IFR here cannot fight the pilot, because
+  // VFR hides the only controls that can set a procedure — so sid/star
+  // appearing while VFR always means a load, never a choice.
+  useEffect(() => {
+    if (route.sid || route.star) setFlightRules("IFR");
+  }, [route.sid, route.star]);
 
   // Fetched once — same "low" (3,000-39,000ft) product MapView already
   // uses for its own overlay, now also the source for nav-log wind
@@ -248,14 +266,31 @@ export function FlightPlanning({
   return (
     <div className="planning-layout">
       <div className="flight-rules-toggle">
-        <button className={flightRules === "VFR" ? "selected" : ""} onClick={() => setFlightRules("VFR")}>
+        <button
+          className={flightRules === "VFR" ? "selected" : ""}
+          /* Dropping to VFR clears any procedure already resolved. It is
+             what lets the pickers be hidden rather than disabled: a SID
+             left set here would go on contributing its points to the
+             route, the map line and the chart links with no control on
+             screen to show it, and the pilot would be flying a plan they
+             could no longer see the shape of. */
+          onClick={() => {
+            setFlightRules("VFR");
+            if (route.sid || route.star) onRouteChange({ ...route, sid: null, star: null });
+          }}
+        >
           VFR
         </button>
         <button className={flightRules === "IFR" ? "selected" : ""} onClick={() => setFlightRules("IFR")}>
           IFR
         </button>
       </div>
-      <RouteBuilder route={route} onChange={onRouteChange} warnings={warnings} />
+      <RouteBuilder
+        route={route}
+        onChange={onRouteChange}
+        warnings={warnings}
+        flightRules={flightRules}
+      />
       <div className="panel nav-log">
         <h2>Nav Log</h2>
         {points.length < 2 && <p className="hint">Add at least two points to the route to see a nav log.</p>}
@@ -1008,10 +1043,12 @@ function RouteBuilder({
   route,
   onChange,
   warnings,
+  flightRules,
 }: {
   route: RouteState;
   onChange: (route: RouteState) => void;
   warnings: string[];
+  flightRules: "VFR" | "IFR";
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<IdentSearchRow[]>([]);
@@ -1089,22 +1126,30 @@ function RouteBuilder({
         value={route.arrival}
         onChange={(arrival) => onChange({ ...route, arrival, star: null })}
       />
-      <div className="procedure-buttons">
-        <ProcedurePickerButton
-          label="SID"
-          kind="SID"
-          airport={route.departure}
-          resolved={route.sid}
-          onResolve={(sid) => onChange({ ...route, sid })}
-        />
-        <ProcedurePickerButton
-          label="STAR"
-          kind="STAR"
-          airport={route.arrival}
-          resolved={route.star}
-          onResolve={(star) => onChange({ ...route, star })}
-        />
-      </div>
+      {/* IFR only: a SID/STAR is an instrument clearance, so offering
+          them on a VFR plan invites a route the flight will not be given.
+          Safe to hide rather than disable because the VFR switch clears
+          any that were already set (see the toggle in FlightPlanning) —
+          a hidden procedure would otherwise keep contributing its points
+          to routePoints in App.tsx with nothing on screen saying so. */}
+      {flightRules === "IFR" && (
+        <div className="procedure-buttons">
+          <ProcedurePickerButton
+            label="SID"
+            kind="SID"
+            airport={route.departure}
+            resolved={route.sid}
+            onResolve={(sid) => onChange({ ...route, sid })}
+          />
+          <ProcedurePickerButton
+            label="STAR"
+            kind="STAR"
+            airport={route.arrival}
+            resolved={route.star}
+            onResolve={(star) => onChange({ ...route, star })}
+          />
+        </div>
+      )}
 
       <h3>Fixes / Airways</h3>
       <input
