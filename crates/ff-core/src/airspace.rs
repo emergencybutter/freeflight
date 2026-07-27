@@ -2,15 +2,39 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AirspaceClass {
+    /// IFR only — VFR traffic may not enter. Absent from US airspace
+    /// below FL180 so the FAA sources never produce it, but common
+    /// outside the US: 107 UK volumes are Class A (the London TMA and
+    /// most CTAs). Omitting it would hide precisely the airspace a VFR
+    /// pilot most needs to be warned about, so it is modelled even though
+    /// no US source emits it.
+    A,
     B,
     C,
     D,
     E,
+    /// Class F — advisory, not separated. Unused in the US and the UK,
+    /// but 85 Canadian volumes are Class F.
+    F,
     G,
     /// Special use airspace (MOA, restricted, prohibited, warning, alert).
     SpecialUse(SpecialUseKind),
 }
 
+/// Everything that is *not* an ICAO airspace class but still has to be
+/// shown to a pilot.
+///
+/// The first five are the FAA's special-use categories, which is all the
+/// US sources produce. The rest are European/ICAO constructs that appear
+/// once non-US data is imported (DESIGN.md §3.1.2) — without them a third
+/// of German and UK airspace has no faithful representation and gets
+/// dropped, which is worse than showing it.
+///
+/// Note that RMZ/TMZ/ATZ are not "special use" in the narrow FAA sense —
+/// an RMZ is an equipment requirement laid over otherwise ordinary
+/// airspace. They live here because this is the "not an ICAO class"
+/// bucket, and each serializes to its own name, so nothing is presented
+/// to a pilot as something it isn't.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpecialUseKind {
     Moa,
@@ -18,6 +42,18 @@ pub enum SpecialUseKind {
     Prohibited,
     Warning,
     Alert,
+    /// Radio mandatory zone — entry requires two-way radio.
+    Rmz,
+    /// Transponder mandatory zone.
+    Tmz,
+    /// Aerodrome traffic zone.
+    Atz,
+    /// Glider/soaring sector (German `UGR`, UK national soaring areas).
+    Glider,
+    /// Parachute jumping area.
+    Parachute,
+    /// Military low flying area.
+    LowFlying,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

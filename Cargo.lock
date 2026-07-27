@@ -712,6 +712,7 @@ dependencies = [
  "ff-cifp",
  "ff-core",
  "ff-nasr",
+ "ff-openaip",
  "ff-storage",
  "image",
  "pmtiles2",
@@ -741,6 +742,18 @@ dependencies = [
 name = "ff-notam"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "ff-openaip"
+version = "0.1.0"
+dependencies = [
+ "ff-core",
  "reqwest",
  "serde",
  "serde_json",

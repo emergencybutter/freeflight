@@ -2,6 +2,7 @@
 //! sources (DESIGN.md §7).
 
 pub mod aixm;
+pub mod openaip;
 pub mod airspace;
 pub mod bundle;
 pub mod chart_prep;

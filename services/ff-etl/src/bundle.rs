@@ -6,6 +6,7 @@
 //! and was validated against a real CIFP cycle file and NASR subscription
 //! (see git history) before this module existed, so it's moved here
 //! unchanged rather than rewritten.
+use ff_aixm::AixmData;
 use ff_charts::{geotiff_to_pmtiles, ChartCatalogEntry, ChartKind, GeoTiffSource};
 use ff_cifp::{
     build_airways, build_procedures, classify_line, extract_airport, extract_airway_leg_row,
@@ -17,7 +18,6 @@ use ff_core::{
     Frequency, FrequencyKind, Navaid, NavaidType, PathAndTerm, Polygon, ProcedureKind, Runway,
     RunwaySurface, SpecialUseKind, SpeedConstraint, TransitionKind, TurnDirection, Waypoint,
 };
-use ff_aixm::AixmData;
 use ff_nasr::{
     frequencies_for_airport, parse_apt_base, parse_apt_runway, parse_apt_runway_end, parse_frq,
 };
@@ -479,6 +479,75 @@ pub fn add_dtpp_charts(
     Ok(())
 }
 
+/// Inserts openAIP-sourced airports and navaids (DESIGN.md §3.1.2).
+///
+/// Separate from [`add_aixm`] because openAIP carries no runways,
+/// waypoints or airways — deliberately, since it does not have them at
+/// official completeness. Airspace goes through `add_airspace`, the same
+/// bbox-indexed inserter the FAA and AIXM data use.
+///
+/// `INSERT OR IGNORE` on airports means an ICAO already present from a
+/// higher-priority source wins. That is the tier rule holding at the
+/// database level as well as in configuration: official data is never
+/// overwritten by community data.
+pub fn add_openaip(
+    bundle_path: &Path,
+    airports: &[ff_core::airport::Airport],
+    navaids: &[ff_core::navaid::Navaid],
+) -> Result<OpenAipStats, BundleError> {
+    let mut conn = rusqlite::Connection::open(bundle_path)?;
+    let tx = conn.transaction()?;
+
+    let mut inserted_airports = 0usize;
+    for a in airports {
+        inserted_airports += tx.execute(
+            "INSERT OR IGNORE INTO airport
+                 (icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type, fuel_types)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                a.icao,
+                a.faa_id,
+                a.iata,
+                a.name,
+                a.lat,
+                a.lon,
+                a.elevation_ft,
+                airport_type_str(a.airport_type),
+                a.fuel_types.join(",")
+            ],
+        )?;
+    }
+
+    let mut inserted_navaids = 0usize;
+    for n in navaids {
+        inserted_navaids += tx.execute(
+            "INSERT INTO navaid (ident, navaid_type, lat, lon, elevation_ft, freq_khz, region)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                n.ident,
+                navaid_type_str(n.navaid_type),
+                n.lat,
+                n.lon,
+                n.elevation_ft,
+                n.freq_khz,
+                n.region
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(OpenAipStats {
+        airports: inserted_airports,
+        navaids: inserted_navaids,
+    })
+}
+
+#[derive(Debug, Default)]
+pub struct OpenAipStats {
+    pub airports: usize,
+    pub navaids: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct AixmStats {
     /// Net-new airports inserted (ICAOs already present are `INSERT OR
@@ -802,16 +871,26 @@ fn speed_str(s: SpeedConstraint) -> String {
 
 fn airspace_class_str(c: &AirspaceClass) -> &'static str {
     match c {
+        AirspaceClass::A => "A",
         AirspaceClass::B => "B",
         AirspaceClass::C => "C",
         AirspaceClass::D => "D",
         AirspaceClass::E => "E",
+        AirspaceClass::F => "F",
         AirspaceClass::G => "G",
         AirspaceClass::SpecialUse(SpecialUseKind::Moa) => "MOA",
         AirspaceClass::SpecialUse(SpecialUseKind::Restricted) => "RESTRICTED",
         AirspaceClass::SpecialUse(SpecialUseKind::Prohibited) => "PROHIBITED",
         AirspaceClass::SpecialUse(SpecialUseKind::Warning) => "WARNING",
         AirspaceClass::SpecialUse(SpecialUseKind::Alert) => "ALERT",
+        // Non-US kinds (DESIGN.md §3.1.2). Each gets its own string so a
+        // client shows what it actually is, never a generic label.
+        AirspaceClass::SpecialUse(SpecialUseKind::Rmz) => "RMZ",
+        AirspaceClass::SpecialUse(SpecialUseKind::Tmz) => "TMZ",
+        AirspaceClass::SpecialUse(SpecialUseKind::Atz) => "ATZ",
+        AirspaceClass::SpecialUse(SpecialUseKind::Glider) => "GLIDER",
+        AirspaceClass::SpecialUse(SpecialUseKind::Parachute) => "PARACHUTE",
+        AirspaceClass::SpecialUse(SpecialUseKind::LowFlying) => "LOW FLYING",
     }
 }
 
@@ -930,8 +1009,18 @@ mod tests {
                     length_ft: 8000,
                     width_ft: 148,
                     surface: RunwaySurface::Concrete,
-                    low_end: RunwayEnd { ident: "09".into(), lat: 49.0, lon: 2.5, heading_deg: 90.0 },
-                    high_end: RunwayEnd { ident: "27".into(), lat: 49.0, lon: 2.55, heading_deg: 270.0 },
+                    low_end: RunwayEnd {
+                        ident: "09".into(),
+                        lat: 49.0,
+                        lon: 2.5,
+                        heading_deg: 90.0,
+                    },
+                    high_end: RunwayEnd {
+                        ident: "27".into(),
+                        lat: 49.0,
+                        lon: 2.55,
+                        heading_deg: 270.0,
+                    },
                 },
                 // References an airport NOT in this batch → skipped (FK).
                 Runway {
@@ -940,16 +1029,47 @@ mod tests {
                     length_ft: 3000,
                     width_ft: 75,
                     surface: RunwaySurface::Turf,
-                    low_end: RunwayEnd { ident: "01".into(), lat: 0.0, lon: 0.0, heading_deg: 10.0 },
-                    high_end: RunwayEnd { ident: "19".into(), lat: 0.0, lon: 0.0, heading_deg: 190.0 },
+                    low_end: RunwayEnd {
+                        ident: "01".into(),
+                        lat: 0.0,
+                        lon: 0.0,
+                        heading_deg: 10.0,
+                    },
+                    high_end: RunwayEnd {
+                        ident: "19".into(),
+                        lat: 0.0,
+                        lon: 0.0,
+                        heading_deg: 190.0,
+                    },
                 },
             ],
-            airways: vec![Airway { ident: "L615".into(), kind: AirwayKind::RnavLow }],
+            airways: vec![Airway {
+                ident: "L615".into(),
+                kind: AirwayKind::RnavLow,
+            }],
             airway_legs: vec![
-                AirwayLeg { airway_ident: "L615".into(), seq: 1, fix_ident: "DJL".into(), min_altitude_ft: None, max_altitude_ft: None },
-                AirwayLeg { airway_ident: "L615".into(), seq: 2, fix_ident: "LUREN".into(), min_altitude_ft: Some(6500), max_altitude_ft: Some(34500) },
+                AirwayLeg {
+                    airway_ident: "L615".into(),
+                    seq: 1,
+                    fix_ident: "DJL".into(),
+                    min_altitude_ft: None,
+                    max_altitude_ft: None,
+                },
+                AirwayLeg {
+                    airway_ident: "L615".into(),
+                    seq: 2,
+                    fix_ident: "LUREN".into(),
+                    min_altitude_ft: Some(6500),
+                    max_altitude_ft: Some(34500),
+                },
                 // Orphan leg (no matching airway) → skipped.
-                AirwayLeg { airway_ident: "GHOST".into(), seq: 1, fix_ident: "X".into(), min_altitude_ft: None, max_altitude_ft: None },
+                AirwayLeg {
+                    airway_ident: "GHOST".into(),
+                    seq: 1,
+                    fix_ident: "X".into(),
+                    min_altitude_ft: None,
+                    max_altitude_ft: None,
+                },
             ],
             ..Default::default()
         };
@@ -967,7 +1087,9 @@ mod tests {
         assert_eq!(count(&conn, "airway_leg"), 2);
         // The collided airport kept its original FAA row.
         let name: String = conn
-            .query_row("SELECT name FROM airport WHERE icao='LFRC'", [], |r| r.get(0))
+            .query_row("SELECT name FROM airport WHERE icao='LFRC'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(name, "EXISTING");
         // Legs joined to the right airway rowid, in order.

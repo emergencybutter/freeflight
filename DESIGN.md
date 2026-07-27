@@ -128,10 +128,15 @@ dataset (the ICAO-standard XML aeronautical exchange format), the same
 data its own charts are cut from. Brought online **a state at a time**;
 the first is **France (SIA)**.
 
-(An earlier draft adopted OpenAIP; reverted. OpenAIP is community-
-maintained, CC BY-NC — a licensing exception we didn't want — and,
-decisively, doesn't carry enroute RNAV fixes/airways at official
-completeness. National AIXM does.)
+(An earlier draft adopted OpenAIP; reverted, because it is
+community-maintained and, decisively, doesn't carry enroute RNAV
+fixes/airways at official completeness. National AIXM does. That revert
+still stands for the question it answered — OpenAIP is not a substitute
+for official AIXM. It is revisited in **§3.1.2** for the narrower case it
+does not cover: states whose official data may not be re-hosted at all,
+where the real comparison is OpenAIP versus no coverage. The revert also
+cited a CC BY-NC licence; that reading was **wrong** and is corrected in
+§3.1.2 — commercial use is permitted.)
 
 **AIXM version — 4.5, not 5.1, and why.** The obvious target was AIXM 5.1
 (GML-based, current). But France's SIA publishes its **operational** export
@@ -168,6 +173,255 @@ disclaimer). This licence is France's alone — see the per-country caveat.
   restrictions. Each state's terms are checked before its data enters a
   published bundle (§12); a state that forbids redistribution is accessed
   but not re-hosted, or dropped.
+
+#### 3.1.1 Per-state status
+
+Two independent gates decide whether a state is cheap, expensive, or
+impossible, and they are not correlated:
+
+1. **Licence** — may we *re-host* it? §12 forbids bundling anything that
+   isn't redistributable, so a "no" here ends it regardless of format.
+2. **AIXM version** — `ff-aixm` parses **4.5** only (flat snapshot). A
+   5.1/5.1.1 state needs GML geometry, TimeSlice temporality and xlink
+   resolution: a second parser, not a flag. France is the fortunate case
+   where both gates open at once.
+
+> **Finding (checked 2026-07-26): freely redistributable national AIS data
+> is rare.** Surveying EUROCONTROL's AIXM data-source inventory, France is
+> the only state found so far publishing a full AIP dataset under a licence
+> that permits redistribution. Most of ECAC reaches the public only through
+> **EAD**, which is access-controlled; the states that do publish directly
+> tend to assert copyright. The non-US roadmap should therefore be planned
+> as "France plus a slow, per-state legal effort", not "France first, then
+> Europe falls out cheaply".
+
+| State / provider | AIXM | Access | Redistribution | Status |
+|---|---|---|---|---|
+| **US — FAA** (NASR/CIFP, not AIXM) | n/a | open download | **public domain** | ✅ in use |
+| **France — SIA/DSNA** | **4.5** (also a 5.1 dataset) | direct, cart-gated | **Licence Ouverte** — redistribution + commercial OK, attribution required | ✅ implemented |
+| **Germany — DFS** | 5.1.1 (SNAPSHOT/BASELINE TimeSlices) | public download, `aip.dfs.de/datasets` | **prohibited** without prior written permission (AIS portal terms); automated access *is* carved out for AIXM downloads | ❌ blocked — **ask DFS** (below) |
+| **Norway — Avinor** | 5.1 | AIS portal | AIP Norway asserted under the Copyright Act | ❌ likely blocked ⚠️ |
+| **Finland — AIS Finland** | 5.1 | AIP SUP attachments only | — | ⚠️ not a full AIP dataset; partial/temporary airspace only |
+| **Brazil — DECEA** | 5.1 | published dataset | unverified | ⚠️ worth checking |
+| **Latvia** | 5.1 | EAD, registered users | access-controlled | ❌ |
+| **Most of ECAC** (Austria, Belgium, Croatia, Cyprus, …) | via EAD | **EAD**, access-controlled | not redistributable by default | ❌ |
+| **UK — NATS** | — | AIP portal | Crown copyright | ✅ served via openAIP (§3.1.2) |
+| **Canada — NAV CANADA** | — | commercial licensing | not redistributable | ✅ served via openAIP (§3.1.2) — note thin navaid coverage |
+| **Greenland / Denmark / Faroes — Naviair** | **none published** | eAIP documents only | not publicly stated | ✅ served via openAIP (§3.1.2) — no official alternative exists |
+
+⚠️ = lead, not a conclusion. Only the France, Germany and Denmark rows
+have been read against the provider's own material; the rest come from
+EUROCONTROL's inventory and secondary statements. **Nothing here is a
+licence review** — §12 still requires reading a state's actual terms
+before its data enters a bundle.
+
+**Naviair (Denmark, Greenland, Faroe Islands) — checked 2026-07-26.**
+There is nothing to license, because there is nothing published:
+EUROCONTROL's AIXM inventory entry for Denmark reads *"No information
+available yet"*, and Naviair's own AIM portal offers eAIP documents with
+no machine-readable dataset and **no stated terms of use** at all. So for
+Greenland the licence question is moot — the official-AIXM tier has no
+input to consume, and openAIP is not a fallback but the only route. If
+Naviair later publishes a dataset, the terms will need asking for
+directly (`aim@naviair.dk`), since they are not on the site.
+
+#### 3.1.2 OpenAIP as a fallback tier (`ff-openaip` implemented)
+
+An earlier draft adopted **OpenAIP** as *the* non-US source and reverted
+it (see above). That decision stands for what it decided — OpenAIP is not
+a substitute for official national AIXM. It does **not** decide the
+different question §3.1.1 raises: what to do for a state whose official
+data we may not re-host at all. There the comparison is not "OpenAIP vs
+France's Licence Ouverte" but **"OpenAIP vs no coverage"**.
+
+**Why it clears the gate that blocks Germany.** The §12 rule is about
+*redistribution rights*, and OpenAIP grants them: re-hosting is permitted
+with attribution, where DFS's terms forbid it outright. On the one axis
+that blocks Germany, OpenAIP is the *more* permissive source.
+
+**Licence position — corrected 2026-07-26.** This document previously
+recorded OpenAIP as **CC BY-NC**, and the original revert cited that as a
+reason. That is **not** the operative restriction: OpenAIP data **may be
+included in paid or commercial software**, provided the underlying data
+stays free to use and the product is not simply reselling the data
+itself. freeflight — a planning tool that happens to bundle the data, not
+a data vendor — sits inside that condition, and Phase 5's "paid data
+partnerships" ambition is **not** foreclosed. The earlier NC reading was
+the weaker of the revert's two reasons; the completeness reason below is
+the one that actually survives.
+
+**The price:**
+
+- **Completeness.** The revert's decisive finding was that OpenAIP
+  "doesn't carry enroute RNAV fixes/airways at official completeness".
+  Nothing here disputes that. So **scope it to what it does well —
+  airports, airspace, navaids — and do not import airways or enroute
+  fixes from it.** A German route with no airways is honest; one with
+  half an airway network is worse than none, because the gaps are
+  invisible until a leg silently fails to expand.
+- **Mixed provenance is a presentation problem, not just a data one.**
+  France would be official AIS; Germany community-maintained. Rendered
+  identically, a pilot cannot tell which is which. freeflight already has
+  the pattern for this: §9.5.3's `verified_at`, where unverified aircraft
+  figures are flagged wherever they feed a plan. Apply the same shape —
+  a **per-feature source** on the bundle rows, surfaced in the UI
+  ("community data — not an official AIS source") anywhere OpenAIP-derived
+  features appear, and in the About page's attribution list.
+
+**Attribution and the standing obligation.** Permission to bundle is
+conditional, so the conditions are load-bearing: attribute OpenAIP
+wherever its data appears (About page alongside the SIA attribution,
+§3.1), and never present the extract as a product in itself. Worth
+holding the exact wording of the terms in the repo rather than in
+memory — the licence has already been mis-recorded here once.
+
+**Status: `ff-openaip` implemented and wired into `ff-etl`**, validated
+against the live API for four states. Configuration:
+
+- `FF_OPENAIP_API_KEY` — required; unset skips the step entirely, leaving
+  a US-only (or US+France) cycle unaffected.
+- `FF_OPENAIP_STATES` — `CC:REGION` pairs, default `DE:ED,GB:EG,CA:CY,
+  GL:BG`. Note `CC` is openAIP's country code and `REGION` the ICAO
+  region, which differ (Canada is `CA` but `CY`).
+
+**The one-tier-per-state rule is enforced twice.** Configuring a state
+that the official-AIXM tier already serves (France) fails the run rather
+than silently producing two versions of every airport; and the openAIP
+step runs *after* the AIXM step, so `INSERT OR IGNORE` gives official
+data priority on any ICAO both could supply. Individual state fetch
+failures are logged and skipped — one unreachable country must not sink a
+cycle — but a tier conflict is a config error and propagates.
+
+Still to do: per-feature source provenance in the bundle + UI, and the
+reporting-points import.
+
+| State | Region | Airports | Navaids | Airspace | of which controlled |
+|---|---|---|---|---|---|
+| Germany | `ED` | 1364 / 1364 | 79 | 509 / 745 | 342 |
+| United Kingdom | `EG` | 469 / 469 | 136 | 794 / 1185 | 388 |
+| Canada | `CY` | 1452 / 1452 | 22 | 2264 / 2264 | 2010 |
+| Greenland | `BG` | 77 / 77 | 19 | 26 / 27 | 10 |
+
+**`ff-core` gained Class A and Class F** to make this correct. Neither
+occurs in US airspace the FAA sources describe, so neither was modelled —
+but **107 UK volumes are Class A** (the CTAs, including London's), and
+Class A is precisely the airspace VFR traffic may not enter. Dropping it
+would have removed the most important warning in a VFR tool for an entire
+country. Canada contributes 85 Class F advisory volumes.
+
+**Canada's 22 navaids is a coverage warning, not a bug.** Germany has 79
+and the UK 136 for far smaller areas; 22 for Canada means openAIP's
+navaid coverage there is thin. Airports (1452) and airspace (2264, all
+converting) are healthy. Worth surfacing to the user rather than
+presenting sparse data as complete.
+
+**Known gap — airspace types `ff-core` cannot describe** are skipped
+rather than mislabelled: 236 in Germany (86 parachute areas, 90 glider
+sectors, 31 RMZ, ~29 FIS/LFA/ATZ) and 391 in the UK. An RMZ is airspace
+you may not enter without a radio, so these are not junk — but forcing
+them into `Alert` would put a wrong label in front of a pilot. Closing it
+means extending `ff-core` with the European kinds. **This must not be
+quietly skipped when these states ship.**
+
+**Shape.** A `ff-openaip` crate parallel to `ff-aixm` (OpenAIP publishes
+its own JSON/GeoJSON, not AIXM, so it is a separate reader either way),
+feeding the same `ff-core` types and the same bundle tables, gated
+per-state: a state is served by official AIXM *or* by OpenAIP, never
+both, so features never silently conflict. `ff-etl` picks the tier from a
+per-state config rather than a `FF_AIXM_FR_PATH`-style single env var
+(see §3.1.1's note that the current wiring is France-shaped).
+
+Data is split per country and object type — `apt` airports, `asp`
+airspace, `nav` navaids, plus runways — as GeoJSON `FeatureCollection`s
+(points for everything except airspace polygons; `[lon, lat]` decimal
+degrees, elevations in **metres**, frequencies in MHz). Note the unit
+difference from every other source in this project, which is feet.
+
+**Access is not anonymous — checked 2026-07-26.** Both documented routes
+now require credentials:
+
+- The daily-export bucket
+  (`storage.googleapis.com/29f98e10-…/{cc}_{type}.{fmt}`, e.g.
+  `de_apt.geojson`) answers **`UserProjectMissing — Bucket is a requester
+  pays bucket`**. It is downloadable only with a Google Cloud project to
+  bill egress to; the widely-cited "just fetch this URL" recipe no longer
+  works, including the documented `at_apt.xml` example.
+- The REST API (`api.core.openaip.net`) returns **403
+  `auth/forbidden`** — "No authenticated user found" — so it needs an
+  account and API key.
+
+So `ff-etl` needs a credential either way. That fits the existing
+locally-provided-export pattern (SIA is cart-gated and already manual),
+but it means OpenAIP is **not** a zero-setup source.
+
+**Chosen route: the REST API with a key**, read from `FF_OPENAIP_API_KEY`
+(consumed by `ff-etl`, where cycles are built — *not* by `ff-api`, which
+never talks to OpenAIP). Auth is the header `x-openaip-api-key`; a query
+param also works but keeps the secret in URLs and logs, so the header is
+used. The key is a secret: it belongs in the ETL environment, never in
+the repo or a bundle.
+
+#### 3.1.3 OpenAIP data shape (verified against live DE data, 2026-07-26)
+
+Responses are paged (`{limit, totalCount, totalPages, nextPage, page,
+items}`); geometry is GeoJSON (`[lon, lat]` decimal degrees). German
+coverage: **1364 airports, 79 navaids, 745 airspaces, 336 reporting
+points**.
+
+Five things that shape the importer:
+
+- **Units are metric, and encoded as enums.** `elevation: {value, unit,
+  referenceDatum}` with `unit: 0` = metres — confirmed against EDDF
+  runway 18, whose 3999 m matches its real 4000 m length. Every other
+  source in this project is feet. Convert at the crate boundary, with a
+  test, or the mistake is invisible.
+- **Everything is a numeric enum** — `type`, `icaoClass`, `activity`,
+  `surface.composition`, frequency `type`, `unit`. There is **no schema
+  or enum endpoint** (`/api/{docs,schema,enums,openapi.json}` all 404).
+- **Many airports have no ICAO code.** Of 1364 German entries, small
+  fields carry `name` only (no `icaoCode`/`iataCode`) — "FRANKFURT BGU"
+  is one. Anything keyed on ICAO identity must tolerate its absence, or
+  silently drop most of the country.
+- **Runways are per-direction**, like AIXM's `Rdn`: EDDF returns 7 runway
+  entries for 4 physical runways, each with `designator`, `trueHeading`
+  and metric `dimension`. They need the same pairing `ff-aixm` does.
+- **No waypoints and no airways** — confirming the revert's decisive
+  objection first-hand, and why §3.1.2 scopes this to airports/airspace/
+  navaids. There *are* **reporting points** (336 for Germany), which are
+  the VFR entry/exit points German VFR flying is actually organized
+  around — a genuine bonus the FAA sources have no equivalent of.
+
+**`icaoClass` is safety-relevant and undocumented — derived, not
+guessed.** It drives §9.3's Class B/C/D VFR warnings, so a wrong mapping
+mislabels airspace in a planning tool. Derived by correlating against
+real-world German airspace whose class is independently known:
+
+| Value | Reading | Evidence |
+|---|---|---|
+| 2 | C | 87 entries, all `type: 7` (TMA); German TMAs are Class C |
+| 3 | D | `CTR ANSBACH`/`AUGSBURG`/`BERLIN` — German CTRs are Class D |
+| 4 | E | 110 entries; Class E is Germany's bulk controlled airspace |
+| 6 | G | 6 entries |
+| 8 | *unclassified* | 397 entries — `ED-R` restricted, `ED-D` danger, `RMZ`, glider sectors: things with no ICAO class |
+
+Consistent with the obvious `0=A … 6=G` ordering, but **inference from
+data, not documentation**. The importer must therefore encode this
+mapping with its evidence and assert it in tests against named real
+airspace (`CTR BERLIN` ⇒ Class D, `ED-R…` ⇒ unclassified), so a wrong or
+changed mapping fails loudly instead of quietly mislabelling a Class C
+TMA. Unknown values map to "unclassified", never to a guessed class.
+
+**Action — approach the German authorities.** DFS is the most valuable
+non-French target (large, dense, adjacent airspace, and it already
+publishes a clean 5.1.1 dataset with automated download explicitly
+permitted). The only blocker is re-hosting rights, which is a
+conversation, not an engineering problem: contact `data@dfs.de` and ask
+whether a "not for navigation" VFR planning tool may bundle their AIP
+dataset into a client-side cycle, with attribution. Worth doing *before*
+any AIXM 5.1 parser work — there is no point building the parser for data
+we cannot ship. If permission is refused, the §3.1 fallback applies:
+accessed live but not re-hosted, which conflicts with Android's
+offline-first design (§8) and would likely mean dropping Germany.
 
 Pipeline fit: the `ff-aixm` crate (parallel to `ff-cifp`/`ff-nasr`) streams
 the AIXM 4.5 `<AIXM-Snapshot>` → `ff-core` types; `ff-etl` will fetch the

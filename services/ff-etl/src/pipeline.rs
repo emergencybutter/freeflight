@@ -1,6 +1,7 @@
 use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
 use crate::bundle::{
-    add_airspace, add_aixm, add_chart, add_dtpp_charts, build_bundle, BundleSource, ChartSource,
+    add_airspace, add_aixm, add_chart, add_dtpp_charts, add_openaip, build_bundle, BundleSource,
+    ChartSource,
 };
 use crate::chart_prep::{crop_legend_and_collar, crop_to_neatline, expand_palette_to_rgb};
 use crate::dtpp::{discover_dtpp_cycle, fetch_and_match_dtpp_charts};
@@ -26,6 +27,8 @@ pub enum EtlError {
     Airspace(#[from] crate::airspace::AirspaceError),
     #[error(transparent)]
     Aixm(#[from] crate::aixm::AixmLoadError),
+    #[error(transparent)]
+    OpenAip(#[from] crate::openaip::OpenAipLoadError),
     #[error("AIXM effective date {sia} does not match the CIFP cycle {cifp}; use the matching-AIRAC SIA export, or set FF_AIXM_ALLOW_CYCLE_MISMATCH=1 to build anyway")]
     AixmCycleMismatch { sia: String, cifp: String },
     #[error(transparent)]
@@ -143,6 +146,46 @@ pub fn run() -> Result<(), EtlError> {
                 tracing::warn!(error = %err, source = %aixm_path.display(), "couldn't load AIXM data this cycle — skipping")
             }
         }
+    }
+
+    // The openAIP fallback tier (DESIGN.md §3.1.2): states whose official
+    // AIS may not be re-hosted (Germany, UK, Canada) or publishes no
+    // dataset at all (Greenland). Runs *after* the AIXM step so that
+    // `INSERT OR IGNORE` gives official data priority on any ICAO both
+    // could supply — the tier rule holding at the database level, not
+    // just in configuration. Gated on FF_OPENAIP_API_KEY; unset leaves
+    // the cycle exactly as it was.
+    //
+    // ATTRIBUTION: bundling openAIP obliges crediting it in the clients,
+    // alongside the SIA attribution above.
+    if let Some(api_key) = crate::openaip::configured_key() {
+        // A tier conflict is a config error that would corrupt the
+        // bundle, so it propagates; individual state fetch failures are
+        // logged and skipped inside `load_configured`.
+        let loaded = crate::openaip::load_configured(&api_key)?;
+        for s in &loaded.per_state {
+            tracing::info!(
+                country = %s.country,
+                region = %s.region,
+                airports = s.airports,
+                navaids = s.navaids,
+                airspaces = s.airspaces,
+                skipped_airspaces = s.skipped_airspaces,
+                "openAIP state loaded"
+            );
+        }
+        let added = add_openaip(&bundle_path, &loaded.airports, &loaded.navaids)?;
+        add_airspace(&bundle_path, &loaded.airspaces)?;
+        // Fold into `stats` so validation's cycle-to-cycle airport-count
+        // check compares like with like, exactly as the AIXM step does.
+        stats.airports += added.airports;
+        tracing::info!(
+            states = loaded.per_state.len(),
+            airports = added.airports,
+            navaids = added.navaids,
+            airspaces = loaded.airspaces.len(),
+            "added openAIP data to bundle (attribution required in clients)"
+        );
     }
 
     // d-TPP SID/STAR/Approach chart links — best-effort, matching every
@@ -299,8 +342,9 @@ pub fn run() -> Result<(), EtlError> {
             let parts = fetch_terminal_chart_zip(chart_workdir.path(), name, subdir, &chart_cycle)?;
             for part in parts {
                 let rgb_tif = expand_palette_to_rgb(&part.tif_path, chart_workdir.path())?;
-                let rgb_tif = crop_to_neatline(&rgb_tif, chart_workdir.path(), part.kind, &part.label)?
-                    .unwrap_or(rgb_tif);
+                let rgb_tif =
+                    crop_to_neatline(&rgb_tif, chart_workdir.path(), part.kind, &part.label)?
+                        .unwrap_or(rgb_tif);
                 // Kind-specific slug suffix keeps these from colliding with
                 // the same city's sectional (e.g. `chart-los_angeles`) or
                 // each other (`-tac`/`-fly`/`-heli`).

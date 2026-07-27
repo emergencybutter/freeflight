@@ -5,6 +5,7 @@ members = [
     "crates/ff-cifp",
     "crates/ff-nasr",
     "crates/ff-aixm",
+    "crates/ff-openaip",
     "crates/ff-charts",
     "crates/ff-weather",
     "crates/ff-notam",
@@ -31,6 +32,7 @@ ff-core = { path = "crates/ff-core" }
 ff-cifp = { path = "crates/ff-cifp" }
 ff-nasr = { path = "crates/ff-nasr" }
 ff-aixm = { path = "crates/ff-aixm" }
+ff-openaip = { path = "crates/ff-openaip" }
 ff-charts = { path = "crates/ff-charts" }
 ff-weather = { path = "crates/ff-weather" }
 ff-notam = { path = "crates/ff-notam" }

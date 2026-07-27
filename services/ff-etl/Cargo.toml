@@ -11,6 +11,8 @@ ff-cifp.workspace = true
 ff-core.workspace = true
 ff-nasr.workspace = true
 ff-aixm.workspace = true
+# `blocking`: ff-etl is synchronous, so the openAIP client must be too.
+ff-openaip = { workspace = true, features = ["blocking"] }
 ff-charts.workspace = true
 ff-storage.workspace = true
 rusqlite.workspace = true

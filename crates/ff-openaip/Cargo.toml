@@ -1,0 +1,22 @@
+[package]
+name = "ff-openaip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Reader for openAIP community aeronautical data → ff-core types, the fallback tier for states whose official AIS may not be re-hosted (DESIGN.md §3.1.2)."
+
+[dependencies]
+ff-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+
+[features]
+# ff-etl is synchronous; this exposes a blocking client so it never has
+# to host an async runtime for one data source.
+blocking = ["reqwest/blocking"]
+
+[dev-dependencies]
+tokio.workspace = true
