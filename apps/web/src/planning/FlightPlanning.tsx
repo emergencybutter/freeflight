@@ -233,10 +233,17 @@ export function FlightPlanning({
     onVerticalProfileChange,
   ]);
 
+  // Read from `effectiveProfile`, not `profile`: with an aircraft
+  // selected the planner flies that aircraft's envelope
+  // (fromAircraft.ts takes W&B straight off the record), so gating and
+  // checking against the *session* envelope asked the wrong question —
+  // it could hide the panel for an aircraft that has limits, or worse,
+  // pass a loading against the session's limits while the plan flew the
+  // aircraft's.
   const hasWbEnvelope =
-    profile.max_gross_weight_lb !== null &&
-    profile.forward_cg_limit_in !== null &&
-    profile.aft_cg_limit_in !== null;
+    effectiveProfile.max_gross_weight_lb !== null &&
+    effectiveProfile.forward_cg_limit_in !== null &&
+    effectiveProfile.aft_cg_limit_in !== null;
 
   return (
     <div className="planning-layout">
@@ -366,9 +373,9 @@ export function FlightPlanning({
       {hasWbEnvelope && (
         <WeightBalancePanel
           envelope={{
-            max_gross_weight_lb: profile.max_gross_weight_lb as number,
-            forward_cg_limit_in: profile.forward_cg_limit_in as number,
-            aft_cg_limit_in: profile.aft_cg_limit_in as number,
+            max_gross_weight_lb: effectiveProfile.max_gross_weight_lb as number,
+            forward_cg_limit_in: effectiveProfile.forward_cg_limit_in as number,
+            aft_cg_limit_in: effectiveProfile.aft_cg_limit_in as number,
           }}
         />
       )}
@@ -628,6 +635,23 @@ function AircraftProfileForm({
   });
   const powerOptions = selectedAircraft ? cruisePowerSettings(selectedAircraft) : [];
 
+  /* With an aircraft selected the plan is built from the record, so most
+     of the session fields below do nothing and are hidden rather than
+     left on screen with a caption explaining that they are inert.
+
+     "Unused" is per-field, not wholesale, which is why this is two flags
+     and not one: `aircraftToProfile` falls back to the session cruise
+     TAS and fuel burn when the aircraft itself leaves them blank
+     (fromAircraft.ts), so in exactly that case those two are live inputs
+     to the plan and have to stay editable. Everything else — name,
+     climb/descent, W&B envelope — comes off the record unconditionally. */
+  const usesSessionCruiseTas = selectedAircraft !== null && selectedAircraft.cruise_tas_kt === null;
+  const usesSessionFuelBurn = selectedAircraft !== null && selectedAircraft.cruise_fuel_gph === null;
+  const borrowed = [
+    usesSessionCruiseTas ? "a cruise TAS" : null,
+    usesSessionFuelBurn ? "a fuel burn" : null,
+  ].filter((v): v is string => v !== null);
+
   return (
     <div className="panel aircraft-profile">
       <h2>Aircraft</h2>
@@ -698,64 +722,78 @@ function AircraftProfileForm({
         </>
       )}
 
-      {selectedAircraft && (
+      {borrowed.length > 0 && selectedAircraft && (
         <p className="hint">
-          The fields below are the session profile, kept for when no aircraft is selected — they are not
-          used while {selectedAircraft.registration} is.
+          {selectedAircraft.registration} does not record {borrowed.join(" or ")}, so the{" "}
+          {borrowed.length > 1 ? "session figures" : "session figure"} below still{" "}
+          {borrowed.length > 1 ? "feed" : "feeds"} this plan. Set{" "}
+          {borrowed.length > 1 ? "them" : "it"} on the aircraft to plan entirely from the record.
         </p>
       )}
-      <label>
-        Name
-        <input
-          type="text"
-          value={profile.name}
-          onChange={(e) => onChange({ ...profile, name: e.target.value })}
-        />
-      </label>
-      <label>
-        Cruise TAS (kt)
-        <input type="number" {...numberField("cruise_tas_kt")} />
-      </label>
-      <label>
-        Fuel burn (gal/hr)
-        <input type="number" {...numberField("fuel_burn_gph")} />
-      </label>
+      {selectedAircraft === null && (
+        <label>
+          Name
+          <input
+            type="text"
+            value={profile.name}
+            onChange={(e) => onChange({ ...profile, name: e.target.value })}
+          />
+        </label>
+      )}
+      {(selectedAircraft === null || usesSessionCruiseTas) && (
+        <label>
+          Cruise TAS (kt)
+          <input type="number" {...numberField("cruise_tas_kt")} />
+        </label>
+      )}
+      {(selectedAircraft === null || usesSessionFuelBurn) && (
+        <label>
+          Fuel burn (gal/hr)
+          <input type="number" {...numberField("fuel_burn_gph")} />
+        </label>
+      )}
+      {/* Stays whatever is selected: cruise altitude belongs to the
+          flight and is still shown above. */}
       <p className="hint">
         The cruise altitude above corrects the nav log for real winds aloft (nearest station/level) and
         drives the top of climb/descent.
       </p>
-      <h3>Climb &amp; descent</h3>
-      <p className="hint">Drives the top of climb/descent above — rates from your POH, TAS as you actually fly them.</p>
-      <label>
-        Climb rate (ft/min)
-        <input type="number" {...numberField("climb_rate_fpm")} />
-      </label>
-      <label>
-        Climb TAS (kt)
-        <input type="number" {...numberField("climb_tas_kt")} />
-      </label>
-      <label>
-        Descent rate (ft/min)
-        <input type="number" {...numberField("descent_rate_fpm")} />
-      </label>
-      <label>
-        Descent TAS (kt)
-        <input type="number" {...numberField("descent_tas_kt")} />
-      </label>
-      <h3>Weight &amp; Balance envelope (optional)</h3>
-      <p className="hint">Fill these in to enable the W&amp;B check below.</p>
-      <label>
-        Max gross weight (lb)
-        <input type="number" {...numberField("max_gross_weight_lb")} />
-      </label>
-      <label>
-        Forward CG limit (in)
-        <input type="number" {...numberField("forward_cg_limit_in")} />
-      </label>
-      <label>
-        Aft CG limit (in)
-        <input type="number" {...numberField("aft_cg_limit_in")} />
-      </label>
+      {selectedAircraft === null && (
+        <>
+          <h3>Climb &amp; descent</h3>
+          <p className="hint">Drives the top of climb/descent above — rates from your POH, TAS as you actually fly them.</p>
+          <label>
+            Climb rate (ft/min)
+            <input type="number" {...numberField("climb_rate_fpm")} />
+          </label>
+          <label>
+            Climb TAS (kt)
+            <input type="number" {...numberField("climb_tas_kt")} />
+          </label>
+          <label>
+            Descent rate (ft/min)
+            <input type="number" {...numberField("descent_rate_fpm")} />
+          </label>
+          <label>
+            Descent TAS (kt)
+            <input type="number" {...numberField("descent_tas_kt")} />
+          </label>
+          <h3>Weight &amp; Balance envelope (optional)</h3>
+          <p className="hint">Fill these in to enable the W&amp;B check below.</p>
+          <label>
+            Max gross weight (lb)
+            <input type="number" {...numberField("max_gross_weight_lb")} />
+          </label>
+          <label>
+            Forward CG limit (in)
+            <input type="number" {...numberField("forward_cg_limit_in")} />
+          </label>
+          <label>
+            Aft CG limit (in)
+            <input type="number" {...numberField("aft_cg_limit_in")} />
+          </label>
+        </>
+      )}
     </div>
   );
 }
