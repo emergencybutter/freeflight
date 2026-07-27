@@ -20,14 +20,23 @@
 //! dance against the existing permissive layer.
 //!
 //! ## Persistence
-//! Sessions live in an in-memory map — a server restart logs everyone out.
-//! That's an accepted first-cut limitation; a durable store lands with the
-//! rest of Phase 4 (the `ff-sync` account tables), not here.
+//! Sessions are stored in PostgreSQL via `ff-accounts` when
+//! `FF_DATABASE_URL` is configured (DESIGN.md §9.5.5): a restart no
+//! longer signs everyone out, and there is an `app_user` row for aircraft
+//! records to belong to.
+//!
+//! Without a database it falls back to the original in-memory map, which
+//! keeps sign-in working on a fresh checkout, in local dev, and if the
+//! database is unreachable at boot — at the cost of sessions dying with
+//! the process, exactly as before. The three `*_session` helpers below
+//! are the only places that know which of the two is in play.
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
+use chrono::{Duration as ChronoDuration, Utc};
+use ff_accounts::{Accounts, StoredUser};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -187,6 +196,150 @@ fn is_localhost_origin(origin: &str) -> bool {
         .unwrap_or(origin);
     let host = host.split(&['/', ':'][..]).next().unwrap_or("");
     host == "localhost" || host == "127.0.0.1" || host == "[::1]"
+}
+
+// ---- session storage: database when configured, memory otherwise --------
+
+/// Maps a provider name read back out of the database to the `&'static
+/// str` the rest of this module uses. A row naming a provider this build
+/// doesn't know is treated as no session rather than trusted — the value
+/// is echoed to the client and compared against elsewhere (the web app
+/// checks `provider == "discord"` to auto-link Butterlog), so it should
+/// only ever be one of the values we mint.
+fn known_provider(name: &str) -> Option<&'static str> {
+    match name {
+        "google" => Some("google"),
+        "discord" => Some("discord"),
+        _ => None,
+    }
+}
+
+/// Persist a new session for `user`, returning false if it could not be
+/// stored (the caller then fails the login rather than handing out a
+/// token that will not work).
+async fn store_session(state: &AppState, token: &str, user: &User) -> bool {
+    let Some(accounts) = &state.accounts else {
+        let mut sessions = state.auth.sessions.write().await;
+        sweep_expired(&mut sessions, |s| s.expires);
+        sessions.insert(
+            token.to_string(),
+            Session {
+                user: user.clone(),
+                expires: SystemTime::now() + SESSION_TTL,
+            },
+        );
+        return true;
+    };
+    let user_id = match accounts
+        .upsert_user(
+            user.provider,
+            &user.subject,
+            &user.name,
+            user.email.as_deref(),
+            user.avatar_url.as_deref(),
+        )
+        .await
+    {
+        Ok(id) => id,
+        Err(err) => {
+            tracing::error!("could not record the signed-in user: {err}");
+            return false;
+        }
+    };
+    let expires = Utc::now() + ChronoDuration::seconds(SESSION_TTL.as_secs() as i64);
+    if let Err(err) = accounts.create_session(token, user_id, expires).await {
+        tracing::error!("could not store the session: {err}");
+        return false;
+    }
+    true
+}
+
+/// The user a bearer token is currently signed in as, if any.
+async fn load_session(state: &AppState, token: &str) -> Option<User> {
+    let Some(accounts) = &state.accounts else {
+        let sessions = state.auth.sessions.read().await;
+        return sessions
+            .get(token)
+            .filter(|s| s.expires > SystemTime::now())
+            .map(|s| s.user.clone());
+    };
+    match accounts.session_user(token).await {
+        Ok(Some(stored)) => Some(User {
+            provider: known_provider(&stored.provider)?,
+            subject: stored.subject,
+            name: stored.display_name,
+            email: stored.email,
+            avatar_url: stored.avatar_url,
+        }),
+        Ok(None) => None,
+        Err(err) => {
+            // A database blip must read as "not signed in" for this
+            // request, not as a 500 — the client already handles an
+            // unauthenticated /auth/me by showing the sign-in button.
+            tracing::warn!("session lookup failed: {err}");
+            None
+        }
+    }
+}
+
+/// Sign out of this one session, leaving the user's other devices alone.
+async fn drop_session(state: &AppState, token: &str) {
+    let Some(accounts) = &state.accounts else {
+        state.auth.sessions.write().await.remove(token);
+        return;
+    };
+    if let Err(err) = accounts.delete_session(token).await {
+        tracing::warn!("could not delete the session: {err}");
+    }
+}
+
+/// The signed-in user for an endpoint that needs the account database,
+/// together with a handle on it.
+///
+/// Distinguishes the two ways such a request can fail, because they mean
+/// different things to a client: **503** if this deployment has no
+/// account database at all (the feature is off — no amount of signing in
+/// will help), **401** if it does but you are not signed in.
+///
+/// Returns `StoredUser` rather than `User` because everything owned by an
+/// account is keyed on `app_user.id`, which the public shape omits.
+pub async fn require_account_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(Accounts, StoredUser), Response> {
+    let Some(accounts) = state.accounts.clone() else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "accounts are not configured on this server",
+        )
+            .into_response());
+    };
+    let Some(token) = bearer_token(headers) else {
+        return Err((StatusCode::UNAUTHORIZED, "not signed in").into_response());
+    };
+    match accounts.session_user(&token).await {
+        Ok(Some(user)) => Ok((accounts, user)),
+        Ok(None) => Err((StatusCode::UNAUTHORIZED, "not signed in").into_response()),
+        Err(err) => {
+            tracing::warn!("session lookup failed: {err}");
+            Err((StatusCode::SERVICE_UNAVAILABLE, "account storage unavailable").into_response())
+        }
+    }
+}
+
+/// Drop every expired session. Called periodically from `main` — the
+/// in-memory map self-swept on each write, but rows do not.
+pub async fn sweep_expired_sessions(state: &AppState) {
+    let Some(accounts) = &state.accounts else {
+        let mut sessions = state.auth.sessions.write().await;
+        sweep_expired(&mut sessions, |s| s.expires);
+        return;
+    };
+    match accounts.sweep_expired_sessions().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("swept {n} expired session(s)"),
+        Err(err) => tracing::warn!("could not sweep expired sessions: {err}"),
+    }
 }
 
 /// 32 bytes of OS randomness, hex-encoded — used for both opaque session
@@ -355,16 +508,11 @@ pub async fn callback(
     };
 
     let token = random_token();
-    {
-        let mut sessions = auth.sessions.write().await;
-        sweep_expired(&mut sessions, |s| s.expires);
-        sessions.insert(
-            token.clone(),
-            Session {
-                user,
-                expires: SystemTime::now() + SESSION_TTL,
-            },
-        );
+    if !store_session(&state, &token, &user).await {
+        // The identity checked out but we could not persist the session,
+        // so the token would be dead on arrival. Report it as a failed
+        // login rather than handing over one that silently doesn't work.
+        return Redirect::to(&format!("{return_origin}/#ff_auth_error=storage")).into_response();
     }
 
     // Hand the token to the SPA via the fragment (never leaves the browser).
@@ -479,18 +627,15 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(token) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "not signed in").into_response();
     };
-    let sessions = state.auth.sessions.read().await;
-    match sessions.get(&token) {
-        Some(session) if session.expires > SystemTime::now() => {
-            Json(session.user.clone()).into_response()
-        }
-        _ => (StatusCode::UNAUTHORIZED, "not signed in").into_response(),
+    match load_session(&state, &token).await {
+        Some(user) => Json(user).into_response(),
+        None => (StatusCode::UNAUTHORIZED, "not signed in").into_response(),
     }
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> StatusCode {
     if let Some(token) = bearer_token(&headers) {
-        state.auth.sessions.write().await.remove(&token);
+        drop_session(&state, &token).await;
     }
     StatusCode::NO_CONTENT
 }

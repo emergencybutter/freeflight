@@ -10,6 +10,9 @@ use std::time::{Duration, SystemTime};
 /// `FF_WEATHER_METAR_CACHE_REFRESH_SECS`.
 const DEFAULT_METAR_CACHE_REFRESH_SECS: u64 = 300;
 
+/// How often expired sessions are cleared out (see `spawn_session_sweep`).
+const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -20,8 +23,12 @@ async fn main() {
         .unwrap_or(8080);
     let addr = format!("0.0.0.0:{port}");
 
-    let state = AppState::default();
+    let mut state = AppState::default();
+    // Optional (FF_DATABASE_URL); logs and carries on if absent or
+    // unreachable — see AppState::connect_accounts.
+    state.connect_accounts().await;
     spawn_flight_category_refresh(state.clone());
+    spawn_session_sweep(state.clone());
     let app = routes::router(state);
 
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -63,6 +70,21 @@ fn spawn_flight_category_refresh(state: AppState) {
                 }
             }
             tokio::time::sleep(refresh).await;
+        }
+    });
+}
+
+/// Drops expired sessions periodically. The old in-memory map swept
+/// itself on every write and lost everything on restart anyway; rows
+/// persist, so something has to clear them out. Hourly is plenty for a
+/// 30-day TTL — this is housekeeping, not a security boundary, since
+/// expiry is enforced in the lookup query regardless of whether the row
+/// has been collected yet.
+fn spawn_session_sweep(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            routes::auth::sweep_expired_sessions(&state).await;
+            tokio::time::sleep(SESSION_SWEEP_INTERVAL).await;
         }
     });
 }

@@ -1,0 +1,18 @@
+[package]
+name = "ff-accounts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "PostgreSQL-backed accounts, sessions, and aircraft records for ff-api (DESIGN.md §9.5)."
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+# Session tokens are stored only as a digest (see sessions.rs).
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio.workspace = true

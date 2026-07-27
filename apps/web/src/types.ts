@@ -130,6 +130,14 @@ export interface RouteWaypoint {
   name: string | null;
   lat: number;
   lon: number;
+  /** Field elevation, for points that come from an airport — the top of
+   * climb/descent is computed against the real departure/arrival field
+   * elevations rather than sea level (see planning/wasm.ts's
+   * `planVertical`). Absent for fixes/navaids, which have no elevation,
+   * and for airports restored from an older persisted plan or share
+   * link; the vertical profile just leaves that end out when it's
+   * missing. */
+  elevation_ft?: number;
 }
 
 /** A resolved SID/STAR — see planning/procedureLookup.ts. `points` is

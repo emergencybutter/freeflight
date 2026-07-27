@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./api";
 import { beginLogin, captureAuthFromHash, fetchMe, fetchProviders, logout, type AuthProvider, type AuthUser } from "./auth";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
+import { fetchAircraft, fetchFleet, type Aircraft, type AircraftDetail } from "./aircraft";
+import { AircraftManager } from "./AircraftManager";
 import { MapView, type MapViewHandle } from "./MapView";
 import { fetchNotams } from "./notams";
 import { loadPlan, savePlan } from "./persistence";
@@ -9,7 +11,7 @@ import { findCrossedAirspace } from "./planning/airspaceCrossing";
 import { expandRoute } from "./planning/expandRoute";
 import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
 import { buildResolvedProcedure, transitionOptions } from "./planning/procedureLookup";
-import type { AircraftProfile } from "./planning/wasm";
+import type { AircraftProfile, VerticalProfile } from "./planning/wasm";
 import { PlateViewer } from "./PlateViewer";
 import { buildShareUrl, clearSharedPlanFromUrl, hydrateSharedRoute, readSharedPlanFromUrl } from "./share";
 import { airspaceInfoHtml, cwaInfoHtml, gairmetInfoHtml, pirepInfoHtml, sigmetInfoHtml } from "./tapInfo";
@@ -88,7 +90,11 @@ export default function App() {
   const [loadSlow, setLoadSlow] = useState(false);
   const [selectedAirport, setSelectedAirport] = useState<Airport | null>(null);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
-  const [view, setView] = useState<"map" | "plan">("map");
+  // In-app views rather than URL routes: `/aircraft` is the API prefix
+  // nginx proxies to ff-api (DESIGN.md §9.5.8), so a route there would
+  // break on refresh. Map/Flight Plan were already state for the same
+  // kind of reason.
+  const [view, setView] = useState<"map" | "plan" | "aircraft">("map");
   // Which of the map tap tabs is showing, and the data from the most
   // recent tap (airspace/PIREP/AIRMET/SIGMET/CWA features at the point,
   // plus the nearest waypoint/navaid) — airport selection itself is
@@ -196,6 +202,67 @@ export default function App() {
   // profile.cruise_altitude_ft to default its own winds-aloft altitude
   // selector to whatever the flight plan is actually using.
   const [profile, setProfile] = useState<AircraftProfile>(persisted.profile ?? DEFAULT_PROFILE);
+  // Top of climb/descent, computed by FlightPlanning (it owns the winds
+  // the vertical profile shares with the nav log) and reported back up
+  // here so MapView can mark both points on the drawn route. Not
+  // persisted — it's derived from the route and profile, which are.
+  const [verticalProfile, setVerticalProfile] = useState<VerticalProfile | null>(null);
+  // The signed-in pilot's fleet, and which aircraft the Flight Plan view
+  // is planning with (null = the session-only profile, which is also the
+  // signed-out path). Held here because both the Aircraft view and the
+  // planner need it, and the detail — including performance tables — is
+  // fetched once per selection rather than per render.
+  const [fleet, setFleet] = useState<Aircraft[]>([]);
+  const [selectedAircraftId, setSelectedAircraftId] = useState<number | null>(null);
+  const [selectedAircraft, setSelectedAircraft] = useState<AircraftDetail | null>(null);
+  const [fleetVersion, setFleetVersion] = useState(0);
+  // Stable identity: this is a dependency of AircraftManager's own
+  // callbacks, and an inline arrow here re-created them every render.
+  const bumpFleetVersion = useCallback(() => setFleetVersion((v) => v + 1), []);
+
+  useEffect(() => {
+    if (!user) {
+      setFleet([]);
+      setSelectedAircraftId(null);
+      return;
+    }
+    let cancelled = false;
+    fetchFleet()
+      .then((list) => {
+        if (!cancelled) setFleet(list);
+      })
+      .catch(() => {
+        if (!cancelled) setFleet([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, fleetVersion]);
+
+  // Re-fetched on every fleet change too, so edits made in the Aircraft
+  // view flow straight into the plan without re-selecting.
+  useEffect(() => {
+    if (selectedAircraftId === null) {
+      setSelectedAircraft(null);
+      return;
+    }
+    let cancelled = false;
+    fetchAircraft(selectedAircraftId)
+      .then((detail) => {
+        if (!cancelled) setSelectedAircraft(detail);
+      })
+      .catch(() => {
+        // Deleted or no longer ours: fall back to the session profile
+        // rather than planning against a stale copy.
+        if (!cancelled) {
+          setSelectedAircraft(null);
+          setSelectedAircraftId(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAircraftId, fleetVersion]);
   // Persist the plan whenever it changes so a refresh restores it. Cheap
   // (one small JSON blob) and best-effort — see persistence.ts.
   useEffect(() => {
@@ -283,13 +350,14 @@ export default function App() {
   };
 
   // Same Airport -> RouteWaypoint shape AirportSlot/addResult already
-  // use in FlightPlanning.tsx (ident/name/lat/lon) — kept in sync with
-  // that rather than introducing a second conversion.
+  // use in FlightPlanning.tsx (ident/name/lat/lon/elevation) — kept in
+  // sync with that rather than introducing a second conversion.
   const airportToWaypoint = (airport: Airport): RouteWaypoint => ({
     ident: airport.icao,
     name: airport.name,
     lat: airport.lat,
     lon: airport.lon,
+    elevation_ft: airport.elevation_ft,
   });
   const setSelectedAirportAsDeparture = () => {
     if (!selectedAirport) return;
@@ -375,6 +443,9 @@ export default function App() {
           <button className={view === "plan" ? "selected" : ""} onClick={() => setView("plan")}>
             Flight Plan
           </button>
+          <button className={view === "aircraft" ? "selected" : ""} onClick={() => setView("aircraft")}>
+            Aircraft
+          </button>
           <div className="menu-anchor" ref={menuRef}>
             <button
               className="icon-button"
@@ -433,6 +504,7 @@ export default function App() {
             selectedProcedureId={selectedProcedureId}
             visible={isWide || view === "map"}
             route={routePoints}
+            verticalProfile={verticalProfile}
             preferredAltitudeFt={profile.cruise_altitude_ft}
             initialView={sharedPlan?.map}
             butterlogDiscordId={user?.provider === "discord" ? user.subject : null}
@@ -511,6 +583,9 @@ export default function App() {
               <TapInfoTab items={mapTap?.cwas ?? []} formatter={cwaInfoHtml} emptyText="No CWA at the last tap." />
             )}
           </div>
+          <div className="aircraft-pane" style={{ display: view === "aircraft" ? "flex" : "none" }}>
+            <AircraftManager signedIn={user !== null} onFleetChanged={bumpFleetVersion} />
+          </div>
           <div className="flight-plan-pane" style={{ display: view === "plan" ? "flex" : "none" }}>
             <FlightPlanning
               route={route}
@@ -520,6 +595,10 @@ export default function App() {
               airspaceCrossings={airspaceCrossings}
               profile={profile}
               onProfileChange={setProfile}
+              onVerticalProfileChange={setVerticalProfile}
+              fleet={fleet}
+              selectedAircraft={selectedAircraft}
+              onSelectAircraft={setSelectedAircraftId}
             />
           </div>
         </div>

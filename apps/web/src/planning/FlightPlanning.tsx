@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchAirwayDetail, fetchProcedureDetail, searchAirports, searchIdents } from "../data";
 import { fetchWindsAloft } from "../weather";
 import { buildResolvedProcedure, fetchProcedureOptions, transitionOptions } from "./procedureLookup";
@@ -16,12 +16,17 @@ import type {
   RouteWaypoint,
   WindsAloftBulletin,
 } from "../types";
+import type { Aircraft, AircraftDetail } from "../aircraft";
+import { aircraftToProfile, cruisePowerSettings } from "./fromAircraft";
 import {
   checkWeightBalance,
-  planRoute,
+  planFlight,
   type AircraftProfile,
+  type FlightPlanSummary,
+  type FuelSummary,
   type PlanningWind,
-  type RoutePlanSummary,
+  type ValueSource,
+  type VerticalProfile,
   type WeightAtStation,
   type WeightBalanceResult,
 } from "./wasm";
@@ -29,7 +34,11 @@ import {
 /** A default profile shaped like a real Cessna 172 (same numbers used in
  * ff-planning's own tests) so the nav log/W&B sections have something
  * sensible to show before the user has typed anything in. No cruise
- * altitude by default — wind correction only kicks in once one's set.
+ * altitude by default — wind correction only kicks in once one's set,
+ * and so does the vertical profile. Climb/descent performance is filled
+ * in (a 172 climbs ~700 fpm at Vy and comes down comfortably at 500 fpm)
+ * so that setting a cruise altitude is the only thing standing between a
+ * fresh session and a top of climb/descent.
  * Exported since App.tsx now owns this state (lifted so MapView can
  * default its own winds-aloft altitude selector to it — see
  * App.tsx/MapView.tsx). */
@@ -41,6 +50,10 @@ export const DEFAULT_PROFILE: AircraftProfile = {
   forward_cg_limit_in: 35,
   aft_cg_limit_in: 47.3,
   cruise_altitude_ft: null,
+  climb_rate_fpm: 700,
+  climb_tas_kt: 75,
+  descent_rate_fpm: 500,
+  descent_tas_kt: 110,
 };
 
 function formatWind(wind: PlanningWind | null): string {
@@ -98,6 +111,10 @@ export function FlightPlanning({
   airspaceCrossings,
   profile,
   onProfileChange,
+  onVerticalProfileChange,
+  fleet,
+  selectedAircraft,
+  onSelectAircraft,
 }: {
   route: RouteState;
   onRouteChange: (route: RouteState) => void;
@@ -106,10 +123,25 @@ export function FlightPlanning({
   airspaceCrossings: AirspaceVolume[];
   profile: AircraftProfile;
   onProfileChange: (profile: AircraftProfile) => void;
+  /** Reports the computed top of climb/descent back up to App.tsx so
+   * MapView can mark them on the route — the same lift `route` and
+   * `profile` already do, in the other direction. */
+  onVerticalProfileChange?: (vertical: VerticalProfile | null) => void;
+  /** The signed-in pilot's fleet (empty when signed out), the one
+   * currently planned with, and how to change it. Aircraft live on the
+   * server (§9.5.2); `selectedAircraft` null means "this session only",
+   * which is the pre-accounts behaviour and still the signed-out path. */
+  fleet: Aircraft[];
+  selectedAircraft: AircraftDetail | null;
+  onSelectAircraft: (id: number | null) => void;
 }) {
-  const [navLog, setNavLog] = useState<RoutePlanSummary | null>(null);
+  const [plan, setPlan] = useState<FlightPlanSummary | null>(null);
   const [navLogError, setNavLogError] = useState<string | null>(null);
   const [legWinds, setLegWinds] = useState<(PlanningWind | null)[]>([]);
+  // Which cruise power setting to plan at. A property of the *flight*,
+  // not the aeroplane — the same aircraft is flown at different settings
+  // on different days — so it lives here rather than on the record.
+  const [powerSetting, setPowerSetting] = useState<string | null>(null);
   const [windsBulletin, setWindsBulletin] = useState<WindsAloftBulletin | null>(null);
   // Gates whether airspaceCrossings gets shown, not whether it's computed
   // (App.tsx always computes it) — an IFR flight is already on an ATC
@@ -126,30 +158,64 @@ export function FlightPlanning({
     fetchWindsAloft("low").then(setWindsBulletin).catch(() => setWindsBulletin(null));
   }, []);
 
+  // Real field elevations for the two ends, when the airports came from
+  // a search that carried them (see RouteWaypoint in types.ts). The
+  // vertical profile climbs from / descends to these rather than
+  // assuming sea level, and simply omits an end it doesn't know.
+  const departureElevationFt = route.departure?.elevation_ft ?? null;
+  const arrivalElevationFt = route.arrival?.elevation_ft ?? null;
+
+  // What the planner actually flies. A selected aircraft supplies the
+  // performance; the cruise altitude and power setting stay with the
+  // plan, since they change flight to flight (see fromAircraft.ts).
+  const effectiveProfile = useMemo<AircraftProfile>(
+    () =>
+      selectedAircraft
+        ? aircraftToProfile(selectedAircraft, profile, profile.cruise_altitude_ft, powerSetting)
+        : profile,
+    [selectedAircraft, profile, powerSetting],
+  );
+
+  // Reset the power choice when the aircraft changes, and pre-select it
+  // when there is only one — asking the pilot to choose between one
+  // option is noise.
+  useEffect(() => {
+    const settings = selectedAircraft ? cruisePowerSettings(selectedAircraft) : [];
+    setPowerSetting(settings.length === 1 ? settings[0] : null);
+  }, [selectedAircraft]);
+
   useEffect(() => {
     if (points.length < 2) {
-      setNavLog(null);
+      setPlan(null);
       setNavLogError(null);
+      onVerticalProfileChange?.(null);
       setLegWinds([]);
       return;
     }
     let cancelled = false;
     (async () => {
       const winds =
-        profile.cruise_altitude_ft !== null && windsBulletin
-          ? await windsForRoute(points, profile.cruise_altitude_ft, windsBulletin)
+        effectiveProfile.cruise_altitude_ft !== null && windsBulletin
+          ? await windsForRoute(points, effectiveProfile.cruise_altitude_ft, windsBulletin)
           : points.map(() => null).slice(1);
       if (cancelled) return;
       setLegWinds(winds);
+      const coordinates = points.map((p) => ({ lat: p.lat, lon: p.lon }));
       try {
-        const summary = await planRoute(
-          points.map((p) => ({ lat: p.lat, lon: p.lon })),
-          profile,
+        // One pass: the nav log, the vertical profile and the fuel total
+        // have to agree with each other, and fuel is only phase-aware if
+        // the same call knows the climb/descent times (§9.5.6).
+        const summary = await planFlight(
+          coordinates,
+          effectiveProfile,
           winds,
+          departureElevationFt,
+          arrivalElevationFt,
         );
         if (!cancelled) {
-          setNavLog(summary);
+          setPlan(summary);
           setNavLogError(null);
+          onVerticalProfileChange?.(summary.vertical);
         }
       } catch (err: unknown) {
         if (!cancelled) setNavLogError(err instanceof Error ? err.message : String(err));
@@ -158,7 +224,14 @@ export function FlightPlanning({
     return () => {
       cancelled = true;
     };
-  }, [points, profile, windsBulletin]);
+  }, [
+    points,
+    effectiveProfile,
+    windsBulletin,
+    departureElevationFt,
+    arrivalElevationFt,
+    onVerticalProfileChange,
+  ]);
 
   const hasWbEnvelope =
     profile.max_gross_weight_lb !== null &&
@@ -186,7 +259,7 @@ export function FlightPlanning({
             old, longer navLog can still be around for one render. Guard
             against indexing `points` with a stale navLog's leg count
             rather than relying on the effect always winning the race. */}
-        {navLog && navLog.legs.length === points.length - 1 && (
+        {plan && plan.legs.length === points.length - 1 && (
           <>
             <table>
               <thead>
@@ -203,7 +276,7 @@ export function FlightPlanning({
                 </tr>
               </thead>
               <tbody>
-                {navLog.legs.map((leg, i) => (
+                {plan.legs.map((leg, i) => (
                   <tr key={i}>
                     <td>
                       {points[i].ident} → {points[i + 1].ident}
@@ -227,7 +300,7 @@ export function FlightPlanning({
                     <strong>Total</strong>
                   </td>
                   <td>
-                    <strong>{navLog.total_distance_nm.toFixed(1)}</strong>
+                    <strong>{plan.total_distance_nm.toFixed(1)}</strong>
                   </td>
                   {/* MC, Wind, Var, MH, GS — no meaningful total */}
                   <td />
@@ -236,10 +309,10 @@ export function FlightPlanning({
                   <td />
                   <td />
                   <td>
-                    <strong>{formatHours(navLog.total_ete_hours)}</strong>
+                    <strong>{formatHours(plan.total_ete_hours)}</strong>
                   </td>
                   <td>
-                    <strong>{navLog.total_fuel_gal.toFixed(1)}</strong>
+                    <strong>{plan.fuel.trip_gal.toFixed(1)}</strong>
                   </td>
                 </tr>
               </tfoot>
@@ -262,7 +335,34 @@ export function FlightPlanning({
             </p>
           ))}
       </div>
-      <AircraftProfileForm profile={profile} onChange={onProfileChange} />
+      {plan && points.length >= 2 && (
+        <FuelPanel
+          fuel={plan.fuel}
+          cruiseFuelSource={plan.cruise_fuel_source}
+          aircraftName={selectedAircraft?.registration ?? null}
+          unverified={selectedAircraft !== null && selectedAircraft.verified_at === null}
+        />
+      )}
+      {points.length >= 2 && (
+        <VerticalProfilePanel
+          vertical={plan?.vertical ?? null}
+          points={points}
+          profile={effectiveProfile}
+          hasDepartureElevation={departureElevationFt !== null}
+          hasArrivalElevation={arrivalElevationFt !== null}
+        />
+      )}
+      <AircraftProfileForm
+        profile={profile}
+        onChange={onProfileChange}
+        fleet={fleet}
+        selectedAircraft={selectedAircraft}
+        onSelectAircraft={onSelectAircraft}
+        powerSetting={powerSetting}
+        onPowerSettingChange={setPowerSetting}
+        cruiseTasKt={plan?.cruise_tas_kt ?? null}
+        cruiseTasSource={plan?.cruise_tas_source ?? null}
+      />
       {hasWbEnvelope && (
         <WeightBalancePanel
           envelope={{
@@ -276,24 +376,334 @@ export function FlightPlanning({
   );
 }
 
+/** Fuel required, decomposed by phase (DESIGN.md §9.5.6).
+ *
+ * The old nav-log total was cruise burn × total time, which under-counts
+ * a climb and over-counts a descent. This shows the four phases so the
+ * number is auditable rather than a single figure to trust — and flags
+ * when it had to fall back to the old whole-flight-at-cruise-burn model. */
+function FuelPanel({
+  fuel,
+  cruiseFuelSource,
+  aircraftName,
+  unverified,
+}: {
+  fuel: FuelSummary;
+  cruiseFuelSource: ValueSource;
+  aircraftName: string | null;
+  unverified: boolean;
+}) {
+  const overCapacity = fuel.within_capacity === false;
+  return (
+    <div className="panel fuel-summary">
+      <h2>Fuel</h2>
+      {unverified && aircraftName && (
+        <p className="hint route-warning">
+          ⚠ {aircraftName}'s figures are unverified — book numbers, not this aeroplane. Check them
+          against the POH before relying on this.
+        </p>
+      )}
+      <table>
+        <tbody>
+          <tr>
+            <td>Taxi</td>
+            <td>{fuel.taxi_gal.toFixed(1)}</td>
+            <td className="hint">allowance</td>
+          </tr>
+          <tr>
+            <td>Climb</td>
+            <td>{fuel.climb_gal.toFixed(1)}</td>
+            <td className="hint">{formatMinutes(fuel.climb_minutes)}</td>
+          </tr>
+          <tr>
+            <td>Cruise</td>
+            <td>{fuel.cruise_gal.toFixed(1)}</td>
+            <td className="hint">{formatHours(fuel.cruise_hours)}</td>
+          </tr>
+          <tr>
+            <td>Descent</td>
+            <td>{fuel.descent_gal.toFixed(1)}</td>
+            <td className="hint">{formatMinutes(fuel.descent_minutes)}</td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Trip</strong>
+            </td>
+            <td>
+              <strong>{fuel.trip_gal.toFixed(1)}</strong>
+            </td>
+            <td />
+          </tr>
+          <tr>
+            <td>Reserve</td>
+            <td>{fuel.reserve_gal.toFixed(1)}</td>
+            <td className="hint">at cruise burn</td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Required</strong>
+            </td>
+            <td>
+              <strong>{fuel.required_gal.toFixed(1)} gal</strong>
+            </td>
+            <td className="hint">
+              {fuel.capacity_gal !== null ? `of ${fuel.capacity_gal.toFixed(0)} usable` : "no capacity set"}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {overCapacity && (
+        <p className="wb-fail">
+          ⚠ Needs {fuel.required_gal.toFixed(1)} gal but the tanks hold {fuel.capacity_gal?.toFixed(0)} —
+          this flight does not fit without a stop.
+        </p>
+      )}
+      {!fuel.phase_aware && (
+        <p className="hint">
+          Whole flight charged at cruise burn — set a cruise altitude and both field elevations to split
+          it by phase.
+        </p>
+      )}
+      <p className="hint">
+        Burn is{" "}
+        {cruiseFuelSource === "table"
+          ? "interpolated from the aircraft's cruise table"
+          : "the profile's single cruise figure"}
+        . Phase times come from the climb/descent profile, so they won't match the nav log's ETE exactly
+        — leg times are still flown at cruise TAS (DESIGN.md §9.5.6).
+      </p>
+    </div>
+  );
+}
+
+function formatMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes)) return "—";
+  return `${Math.round(minutes)} min`;
+}
+
+function formatAltitude(ft: number): string {
+  return `${Math.round(ft).toLocaleString("en-US")} ft`;
+}
+
+/** Top of climb / top of descent (DESIGN.md §9.3): where the climb levels
+ * off and where to start down, computed against the real departure/
+ * arrival field elevations and the same per-leg winds as the nav log
+ * (`planVertical` in ./wasm.ts). Each is reported as a distance, a time,
+ * *and* a position — MapView draws the same two points on the route.
+ *
+ * On a short hop the climb and descent overlap and the cruise altitude is
+ * never reached; the two points then collapse onto the single crossover
+ * and the panel says so rather than showing a top of descent that comes
+ * before the top of climb. */
+function VerticalProfilePanel({
+  vertical,
+  points,
+  profile,
+  hasDepartureElevation,
+  hasArrivalElevation,
+}: {
+  vertical: VerticalProfile | null;
+  points: RouteWaypoint[];
+  profile: AircraftProfile;
+  hasDepartureElevation: boolean;
+  hasArrivalElevation: boolean;
+}) {
+  const legLabel = (legIndex: number): string | null => {
+    const from = points[legIndex];
+    const to = points[legIndex + 1];
+    return from && to ? `${from.ident} → ${to.ident}` : null;
+  };
+  const departureIdent = points[0]?.ident ?? "departure";
+  const arrivalIdent = points[points.length - 1]?.ident ?? "arrival";
+
+  const missing: string[] = [];
+  if (profile.cruise_altitude_ft === null) missing.push("a cruise altitude");
+  if (profile.climb_rate_fpm === null && profile.descent_rate_fpm === null) {
+    missing.push("a climb or descent rate");
+  }
+  if (!hasDepartureElevation && !hasArrivalElevation) {
+    missing.push("a departure or arrival airport (for field elevation)");
+  }
+
+  return (
+    <div className="panel vertical-profile">
+      <h2>Top of Climb / Descent</h2>
+      {!vertical && (
+        <p className="hint">
+          {missing.length > 0
+            ? `Needs ${missing.join(", ")} — set them in Aircraft below.`
+            : "Not available for this route."}
+        </p>
+      )}
+      {vertical && !vertical.cruise_reached && (
+        <p className="hint route-warning">
+          ⚠ {formatAltitude(vertical.cruise_altitude_ft)} isn't reachable in{" "}
+          {vertical.total_distance_nm.toFixed(1)} nm — the climb and descent meet at{" "}
+          {formatAltitude(vertical.peak_altitude_ft)}. Plan a lower cruise altitude.
+        </p>
+      )}
+      {vertical && (
+        <dl className="vertical-points">
+          {vertical.top_of_climb && (
+            <>
+              <dt>Top of climb</dt>
+              <dd>
+                <strong>{vertical.top_of_climb.distance_from_departure_nm.toFixed(1)} nm</strong> from{" "}
+                {departureIdent} · {formatAltitude(vertical.top_of_climb.altitude_ft)} ·{" "}
+                {formatMinutes(vertical.top_of_climb.time_min)} after takeoff
+                <span className="hint">
+                  {legLabel(vertical.top_of_climb.leg_index)} · {vertical.top_of_climb.lat.toFixed(4)},{" "}
+                  {vertical.top_of_climb.lon.toFixed(4)}
+                </span>
+              </dd>
+            </>
+          )}
+          {vertical.top_of_descent && (
+            <>
+              <dt>Top of descent</dt>
+              <dd>
+                <strong>{vertical.top_of_descent.distance_to_arrival_nm.toFixed(1)} nm</strong> before{" "}
+                {arrivalIdent} · start down {formatMinutes(vertical.top_of_descent.time_min)} out ·{" "}
+                {vertical.top_of_descent.distance_from_departure_nm.toFixed(1)} nm along the route
+                <span className="hint">
+                  {legLabel(vertical.top_of_descent.leg_index)} · {vertical.top_of_descent.lat.toFixed(4)},{" "}
+                  {vertical.top_of_descent.lon.toFixed(4)}
+                </span>
+              </dd>
+            </>
+          )}
+          {vertical.cruise_reached && (
+            <>
+              <dt>Level cruise</dt>
+              <dd>
+                {vertical.cruise_distance_nm.toFixed(1)} nm at {formatAltitude(vertical.cruise_altitude_ft)}
+              </dd>
+            </>
+          )}
+        </dl>
+      )}
+      {vertical && (!vertical.top_of_climb || !vertical.top_of_descent) && (
+        <p className="hint">
+          {vertical.top_of_climb
+            ? "No top of descent — set an arrival airport and a descent rate."
+            : "No top of climb — set a departure airport and a climb rate."}
+        </p>
+      )}
+      <p className="hint">
+        Constant-rate climb and descent at the profile's rates, wind-corrected per leg — a planning estimate,
+        not a performance chart. The nav log's ETE and fuel still assume cruise TAS for the whole route
+        (DESIGN.md §9.3).
+      </p>
+    </div>
+  );
+}
+
 function AircraftProfileForm({
   profile,
   onChange,
+  fleet,
+  selectedAircraft,
+  onSelectAircraft,
+  powerSetting,
+  onPowerSettingChange,
+  cruiseTasKt,
+  cruiseTasSource,
 }: {
   profile: AircraftProfile;
   onChange: (profile: AircraftProfile) => void;
+  fleet: Aircraft[];
+  selectedAircraft: AircraftDetail | null;
+  onSelectAircraft: (id: number | null) => void;
+  powerSetting: string | null;
+  onPowerSettingChange: (setting: string | null) => void;
+  cruiseTasKt: number | null;
+  cruiseTasSource: ValueSource | null;
 }) {
   const numberField = (key: keyof AircraftProfile) => ({
-    value: profile[key] === null ? "" : String(profile[key]),
+    value: profile[key] === null || profile[key] === undefined ? "" : String(profile[key]),
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value;
       onChange({ ...profile, [key]: raw === "" ? (key === "name" ? "" : null) : Number(raw) });
     },
   });
+  const powerOptions = selectedAircraft ? cruisePowerSettings(selectedAircraft) : [];
 
   return (
     <div className="panel aircraft-profile">
       <h2>Aircraft</h2>
+      {fleet.length > 0 && (
+        <label>
+          Plan with
+          <select
+            value={selectedAircraft?.id ?? ""}
+            onChange={(e) => onSelectAircraft(e.target.value === "" ? null : Number(e.target.value))}
+          >
+            <option value="">This session only</option>
+            {fleet.map((aircraft) => (
+              <option key={aircraft.id} value={aircraft.id}>
+                {aircraft.registration}
+                {aircraft.icao_type ? ` (${aircraft.icao_type})` : ""}
+                {aircraft.verified_at === null ? " — unverified" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {/* Cruise altitude belongs to the flight, not the aeroplane, so it
+          stays editable whichever mode we're in. */}
+      <label>
+        Cruise altitude (ft)
+        <input type="number" {...numberField("cruise_altitude_ft")} />
+      </label>
+      {powerOptions.length > 1 && (
+        <label>
+          Cruise power
+          <select
+            value={powerSetting ?? ""}
+            onChange={(e) => onPowerSettingChange(e.target.value === "" ? null : e.target.value)}
+          >
+            <option value="">— choose —</option>
+            {powerOptions.map((setting) => (
+              <option key={setting} value={setting}>
+                {setting}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {powerOptions.length > 1 && powerSetting === null && (
+        <p className="hint route-warning">
+          ⚠ This aircraft's cruise table records several power settings. Pick one, or the table is
+          ambiguous and the fallback figures are used instead.
+        </p>
+      )}
+
+      {selectedAircraft && (
+        <>
+          <p className="hint">
+            Performance comes from <strong>{selectedAircraft.registration}</strong>
+            {cruiseTasKt !== null && (
+              <>
+                {" "}
+                — cruising {cruiseTasKt.toFixed(0)} kt{" "}
+                {cruiseTasSource === "table" ? "from its performance table" : "from its saved figures"}
+              </>
+            )}
+            . Edit it in the Aircraft view.
+          </p>
+          {selectedAircraft.verified_at === null && (
+            <p className="hint route-warning">⚠ Unverified against its POH.</p>
+          )}
+        </>
+      )}
+
+      {selectedAircraft && (
+        <p className="hint">
+          The fields below are the session profile, kept for when no aircraft is selected — they are not
+          used while {selectedAircraft.registration} is.
+        </p>
+      )}
       <label>
         Name
         <input
@@ -310,11 +720,28 @@ function AircraftProfileForm({
         Fuel burn (gal/hr)
         <input type="number" {...numberField("fuel_burn_gph")} />
       </label>
+      <p className="hint">
+        The cruise altitude above corrects the nav log for real winds aloft (nearest station/level) and
+        drives the top of climb/descent.
+      </p>
+      <h3>Climb &amp; descent</h3>
+      <p className="hint">Drives the top of climb/descent above — rates from your POH, TAS as you actually fly them.</p>
       <label>
-        Cruise altitude (ft)
-        <input type="number" {...numberField("cruise_altitude_ft")} />
+        Climb rate (ft/min)
+        <input type="number" {...numberField("climb_rate_fpm")} />
       </label>
-      <p className="hint">Set an altitude to correct the nav log for real winds aloft (nearest station/level).</p>
+      <label>
+        Climb TAS (kt)
+        <input type="number" {...numberField("climb_tas_kt")} />
+      </label>
+      <label>
+        Descent rate (ft/min)
+        <input type="number" {...numberField("descent_rate_fpm")} />
+      </label>
+      <label>
+        Descent TAS (kt)
+        <input type="number" {...numberField("descent_tas_kt")} />
+      </label>
       <h3>Weight &amp; Balance envelope (optional)</h3>
       <p className="hint">Fill these in to enable the W&amp;B check below.</p>
       <label>
@@ -417,7 +844,15 @@ function AirportSlot({
             <li key={a.icao}>
               <button
                 onClick={() => {
-                  onChange({ ident: a.icao, name: a.name, lat: a.lat, lon: a.lon });
+                  // elevation_ft rides along so the vertical profile can
+                  // climb from / descend to the real field elevation.
+                  onChange({
+                    ident: a.icao,
+                    name: a.name,
+                    lat: a.lat,
+                    lon: a.lon,
+                    elevation_ft: a.elevation_ft,
+                  });
                   setQuery("");
                   setResults([]);
                 }}

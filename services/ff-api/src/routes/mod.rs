@@ -1,3 +1,4 @@
+pub mod aircraft;
 pub mod auth;
 pub mod butterlog;
 pub mod cycles;
@@ -8,7 +9,7 @@ pub mod notams;
 pub mod weather;
 
 use crate::state::AppState;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -57,8 +58,22 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/providers", get(auth::providers))
         .route("/auth/login/:provider", get(auth::login))
         .route("/auth/callback/:provider", get(auth::callback))
-        .route("/auth/me", get(auth::me))
+        .route("/auth/me", get(auth::me).delete(aircraft::delete_account))
         .route("/auth/logout", post(auth::logout))
+        // Aircraft manager (DESIGN.md §9.5). The /types catalog is public
+        // (product data, no user in it); everything else is scoped to the
+        // signed-in user and 404s on someone else's id.
+        .route("/aircraft/types", get(aircraft::list_types))
+        .route("/aircraft/types/:icao", get(aircraft::get_type))
+        .route("/aircraft", get(aircraft::list).post(aircraft::create))
+        .route(
+            "/aircraft/:id",
+            get(aircraft::get).put(aircraft::update).delete(aircraft::delete),
+        )
+        .route(
+            "/aircraft/:id/performance/:phase",
+            put(aircraft::replace_performance),
+        )
         .nest_service("/bundles", bundles)
         .with_state(state)
         // Permissive: this proxies only public FAA/NOAA data and takes no

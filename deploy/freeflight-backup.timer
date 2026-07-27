@@ -1,0 +1,18 @@
+# Install to /etc/systemd/system/freeflight-backup.timer, then:
+#   systemctl daemon-reload && systemctl enable --now freeflight-backup.timer
+#
+# 03:30 keeps it clear of the two backups already on this host (butterlog
+# at 03:00, missiongen at 04:17) so three pg_dumps never contend for the
+# same Postgres at once.
+[Unit]
+Description=Daily freeflight account DB backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# Still run if the machine was off at 03:30, rather than silently
+# skipping a day.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

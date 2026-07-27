@@ -4,6 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
 import { API_BASE_URL } from "./api";
 import { loadMapView, saveMapView, loadButterlogUserId } from "./persistence";
+import type { VerticalPoint, VerticalProfile } from "./planning/wasm";
 import {
   fetchAirportDetail,
   fetchAirportsInBbox,
@@ -42,6 +43,7 @@ const WINDS_ALOFT_SOURCE = "winds-aloft";
 const AIRSPACE_SOURCE = "airspace";
 const PLANNED_ROUTE_SOURCE = "planned-route";
 const PLANNED_ROUTE_FIXES_SOURCE = "planned-route-fixes";
+const VERTICAL_PROFILE_SOURCE = "planned-route-vertical";
 const SELECTED_AIRPORT_SOURCE = "selected-airport";
 const TAP_POINTS_SOURCE = "tap-points";
 
@@ -376,6 +378,27 @@ function plannedRouteFixesGeoJson(route: RouteWaypoint[]): GeoJSON.FeatureCollec
       properties: { label: p.ident },
     })),
   };
+}
+
+/** The route's top of climb and top of descent (see ff-planning's
+ * `vertical` module) as two labelled markers on the drawn route. Both
+ * are already positions, interpolated along the leg they fall on, so
+ * there's no geometry to redo here. When the route is too short to reach
+ * the cruise altitude the two collapse onto the same point — they're
+ * merged into one "TOC/TOD" marker rather than stacked illegibly. */
+function verticalProfileGeoJson(vertical: VerticalProfile | null): GeoJSON.FeatureCollection {
+  if (!vertical) return EMPTY_COLLECTION;
+  const marker = (label: string, point: VerticalPoint): GeoJSON.Feature => ({
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [point.lon, point.lat] },
+    properties: { label: `${label} ${Math.round(point.altitude_ft).toLocaleString("en-US")}′` },
+  });
+  const { top_of_climb: toc, top_of_descent: tod } = vertical;
+  if (toc && tod && !vertical.cruise_reached) return { type: "FeatureCollection", features: [marker("TOC/TOD", toc)] };
+  const features: GeoJSON.Feature[] = [];
+  if (toc) features.push(marker("TOC", toc));
+  if (tod) features.push(marker("TOD", tod));
+  return { type: "FeatureCollection", features };
 }
 
 /** Winds-aloft station idents are 3-letter FAA identifiers (e.g. "SFO"),
@@ -895,6 +918,11 @@ export const MapView = forwardRef<
     /** The Flight Plan view's expanded route points (tokens are expanded
      * in App.tsx — see planning/expandRoute.ts) — drawn in cyan. */
     route: RouteWaypoint[];
+    /** That route's top of climb/descent, computed in the Flight Plan
+     * view and lifted through App.tsx — drawn as two amber markers on
+     * the cyan route line. Null when it can't be computed (no cruise
+     * altitude set, most often). */
+    verticalProfile: VerticalProfile | null;
     /** The flight plan's aircraft profile cruise altitude, if one's been
      * set — snaps the winds-aloft altitude selector to the nearest level
      * that actually has data the first time it becomes available (see the
@@ -917,7 +945,7 @@ export const MapView = forwardRef<
     butterlogDiscordId?: string | null;
   }
 >(function MapView(
-  { selectedAirport, onSelectAirport, onMapTap, selectedProcedureId, visible, route, preferredAltitudeFt, initialView, butterlogDiscordId },
+  { selectedAirport, onSelectAirport, onMapTap, selectedProcedureId, visible, route, verticalProfile, preferredAltitudeFt, initialView, butterlogDiscordId },
   handleRef,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1222,6 +1250,37 @@ export const MapView = forwardRef<
           "text-justify": "center",
         },
         paint: { "text-color": "#22d3ee", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
+      });
+
+      // Top of climb / top of descent on that same route — amber rather
+      // than the route's cyan, since they're computed points rather than
+      // fixes the pilot chose.
+      map.addSource(VERTICAL_PROFILE_SOURCE, { type: "geojson", data: EMPTY_COLLECTION });
+      map.addLayer({
+        id: "planned-route-vertical-marker",
+        type: "circle",
+        source: VERTICAL_PROFILE_SOURCE,
+        paint: {
+          "circle-radius": 5,
+          "circle-color": "#e8c468",
+          "circle-stroke-color": "#0b1220",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "planned-route-vertical-label",
+        type: "symbol",
+        source: VERTICAL_PROFILE_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          // Above the point, so it doesn't collide with the route fix
+          // labels sitting below theirs.
+          "text-offset": [0, -1.1],
+          "text-anchor": "bottom",
+          "text-justify": "center",
+        },
+        paint: { "text-color": "#e8c468", "text-halo-color": "#0b1220", "text-halo-width": 1.2 },
       });
 
       // One marker + label per fix the selected procedure's legs actually
@@ -1802,6 +1861,14 @@ export const MapView = forwardRef<
       plannedRouteFixesGeoJson(route),
     );
   }, [route, loaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    (map.getSource(VERTICAL_PROFILE_SOURCE) as maplibregl.GeoJSONSource | undefined)?.setData(
+      verticalProfileGeoJson(verticalProfile),
+    );
+  }, [verticalProfile, loaded]);
 
   useEffect(() => {
     // An explicitly-entered Butterlog User ID (Settings) wins — it's a

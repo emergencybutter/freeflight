@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/ff-accounts",
     "crates/ff-core",
     "crates/ff-cifp",
     "crates/ff-nasr",
@@ -28,6 +29,7 @@ publish = false
 
 [workspace.dependencies]
 # intra-workspace
+ff-accounts = { path = "crates/ff-accounts" }
 ff-core = { path = "crates/ff-core" }
 ff-cifp = { path = "crates/ff-cifp" }
 ff-nasr = { path = "crates/ff-nasr" }
@@ -50,6 +52,21 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+# Account/aircraft storage only (ff-accounts, DESIGN.md §9.5) — the cycle
+# bundle stays SQLite/rusqlite. rustls rather than native-tls to match
+# reqwest above, so the image needs no OpenSSL.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "migrate",
+    # For `migrate!` only, which embeds migrations/ at compile time. The
+    # `query!` macros this also enables are deliberately NOT used — they
+    # would need a live database (or committed .sqlx metadata) to build.
+    # See ff-accounts' crate docs.
+    "macros",
+] }
 axum = "0.7"
 tower-http = "0.5"
 tracing = "0.1"

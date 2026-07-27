@@ -1,0 +1,15 @@
+# Install to /etc/systemd/system/freeflight-backup.service (see
+# deploy/README.md). Borrows butterlog-backup.service's shape, including
+# its OnFailure notification — a backup that fails silently is worth
+# about as much as no backup, and this database is the one thing on the
+# host that cannot be regenerated from upstream.
+[Unit]
+Description=freeflight account DB backup (pg_dump -> local + Dedibackup)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+OnFailure=notify-discord@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/containers/freeflight/backup-db.sh

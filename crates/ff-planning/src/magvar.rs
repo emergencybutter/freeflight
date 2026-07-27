@@ -162,10 +162,17 @@ pub fn declination_deg(lat_deg: f64, lon_deg: f64, alt_km: f64, decimal_year: f6
         }
         for n in (m + 2)..=nmax {
             let (nn, mm) = (n as f64, m as f64);
-            p[n][m] = ((2.0 * nn - 1.0) * ct * p[n - 1][m] - (nn + mm - 1.0) * p[n - 2][m]) / (nn - mm);
+            p[n][m] =
+                ((2.0 * nn - 1.0) * ct * p[n - 1][m] - (nn + mm - 1.0) * p[n - 2][m]) / (nn - mm);
         }
     }
-    let pv = |n: usize, m: usize| -> f64 { if m <= n { p[n][m] } else { 0.0 } };
+    let pv = |n: usize, m: usize| -> f64 {
+        if m <= n {
+            p[n][m]
+        } else {
+            0.0
+        }
+    };
 
     // Spherical-harmonic synthesis → geocentric field (X north, Y east,
     // Z down).
@@ -212,7 +219,10 @@ mod tests {
         for (yr, alt, lat, lon, expected) in cases {
             let d = declination_deg(lat, lon, alt, yr);
             let err = (d - expected).abs();
-            assert!(err < 0.1, "lat={lat} lon={lon}: got {d:.2}, expected {expected:.2} (err {err:.3})");
+            assert!(
+                err < 0.1,
+                "lat={lat} lon={lon}: got {d:.2}, expected {expected:.2} (err {err:.3})"
+            );
         }
     }
 

@@ -80,6 +80,9 @@ so it and its data live under **one hostname**. nginx splits by path:
 | `Dockerfile` | build context = workspace root | multi-stage Rust build of `ff-api` |
 | `compose.yml` | `/containers/freeflight/compose.yml` | runs the `freeflight-api` container |
 | `ship-image.sh` | — | build the image locally and ship it to vya2 (see runbook step 1) |
+| `backup-db.sh` | `/containers/freeflight/backup-db.sh` | daily `pg_dump` of the account DB → local + Dedibackup (see "Account database" below) |
+| `freeflight-backup.service` | `/etc/systemd/system/` | oneshot unit that runs the above, with a Discord notification on failure |
+| `freeflight-backup.timer` | `/etc/systemd/system/` | runs it daily at 03:30 |
 
 The freeflight **nginx vhost** is *not* kept here — it lives in the
 separate `vya-ws/nginx` repo (`vya-ws/nginx/conf.d/freeflight.conf`),
@@ -88,6 +91,72 @@ its own `deploy.sh`. See "nginx config change" in the runbook below.
 
 The nginx `docker-compose.yml` (also in `vya-ws/nginx`) carries the
 static-root volume line: `- /var/www/freeflight:/srv/freeflight:ro`.
+
+## Account database (one-time setup)
+
+`ff-api` stores users, sessions, and aircraft records in PostgreSQL
+(DESIGN.md §9.5) — the colocated `postgres18` container, which is already
+on the `vya2net` network `freeflight-api` joins, so there is nothing to
+publish and no `compose.yml` change. Everything here is **optional**:
+with `FF_DATABASE_URL` unset, ff-api starts exactly as it does today.
+
+**1. Create the role and database** (matching the `missiongen`/`butterlog`
+convention of a dedicated login role owning a same-named database). Use a
+password with no characters needing percent-encoding, to keep the URL
+readable:
+
+```sh
+# openssl rather than `tr -dc ... </dev/urandom | head -c 32`: head exits
+# early there, tr dies of SIGPIPE, and under `set -o pipefail` that is a
+# fatal 141 rather than a password.
+PW=$(openssl rand -hex 24)
+printf "CREATE ROLE freeflight LOGIN PASSWORD '%s';\n" "$PW" \
+  | docker exec -i postgres18 psql -U postgres -v ON_ERROR_STOP=1
+echo "CREATE DATABASE freeflight OWNER freeflight;" \
+  | docker exec -i postgres18 psql -U postgres -v ON_ERROR_STOP=1
+echo "FF_DATABASE_URL=postgres://freeflight:$PW@postgres18:5432/freeflight"
+```
+
+SQL goes in on stdin rather than via `psql -c` so the password never
+appears in `ps`. For the same reason, if you script this, do **not**
+deliver the script itself on stdin (`ssh root@vya2 'bash -s' <<EOF`) —
+`docker exec -i` reads stdin too and will silently eat the rest of your
+script mid-run.
+
+Put that line in `/containers/freeflight/.env`. The schema itself is
+applied by ff-api on startup (embedded `sqlx` migrations) — there is no
+separate migrate step.
+
+> The password must be **percent-encoded** in the URL if it contains
+> `@`, `/`, `:` or `#`. It is a URI, parsed by both `sqlx` and the backup
+> script's `pg_dump`; an unencoded `@` produces a confusing "could not
+> translate host name" error rather than an auth failure.
+
+**2. Install the backup job.** vya2 has **no cluster-wide `pg_dump`** —
+`missiongen` and `butterlog` each back up their own database by name, so
+a new `freeflight` database is covered by nothing until this is
+installed, and the gap is silent. The cycle bundle can always be rebuilt
+from FAA/NOAA sources; the aircraft performance numbers a pilot typed out
+of their POH cannot.
+
+```sh
+install -m 0755 backup-db.sh /containers/freeflight/backup-db.sh
+install -m 0644 freeflight-backup.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now freeflight-backup.timer
+systemctl start freeflight-backup.service   # prove it works now
+ls -la /containers/freeflight/backups/
+```
+
+Restores are `pg_restore` from the dump, e.g. into a scratch database to
+inspect before promoting:
+
+```sh
+docker exec postgres18 psql -U postgres -c 'CREATE DATABASE ff_restore;'
+docker run --rm --network vya2net -v /containers/freeflight/backups:/b \
+  -e PGPASSWORD=... postgres:18 \
+  pg_restore -h postgres18 -U freeflight -d ff_restore /b/freeflight_YYYYMMDD_HHMMSS.dump
+```
 
 ## Redeploy runbook
 

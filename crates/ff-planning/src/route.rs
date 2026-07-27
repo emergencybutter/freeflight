@@ -1,5 +1,6 @@
 use crate::geo::{distance_nm, initial_bearing_deg};
 use crate::magvar::declination_deg;
+use crate::performance::AircraftPerformance;
 use crate::wind::{solve as solve_wind_triangle, Wind};
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,50 @@ pub struct AircraftProfile {
     pub forward_cg_limit_in: Option<f64>,
     #[serde(default)]
     pub aft_cg_limit_in: Option<f64>,
+    /// Planned cruise altitude (ft MSL). Doesn't affect the horizontal
+    /// nav log — it selects which winds-aloft level the client feeds in
+    /// per leg, and it's the altitude [`crate::vertical`] climbs to and
+    /// descends from.
+    #[serde(default)]
+    pub cruise_altitude_ft: Option<f64>,
+    /// Climb/descent performance for the vertical profile
+    /// ([`crate::vertical`]) — all optional, since a profile with none of
+    /// it can still fly a nav log. A missing *rate* means no top of
+    /// climb/descent can be computed at all; a missing *TAS* falls back
+    /// to `cruise_tas_kt`, which is the usual rough VFR approximation for
+    /// a descent and an over-estimate for a climb.
+    #[serde(default)]
+    pub climb_rate_fpm: Option<f64>,
+    #[serde(default)]
+    pub climb_tas_kt: Option<f64>,
+    #[serde(default)]
+    pub descent_rate_fpm: Option<f64>,
+    #[serde(default)]
+    pub descent_tas_kt: Option<f64>,
+    /// Per-phase fuel burn, for the phase-aware fuel total
+    /// ([`crate::flight`]). Falls back to `fuel_burn_gph` when unset.
+    #[serde(default)]
+    pub climb_fuel_gph: Option<f64>,
+    #[serde(default)]
+    pub descent_fuel_gph: Option<f64>,
+    /// A fixed allowance in gallons for start, taxi and run-up — not a
+    /// rate, since it does not scale with the length of the flight.
+    #[serde(default)]
+    pub taxi_fuel_gal: Option<f64>,
+    #[serde(default)]
+    pub fuel_capacity_gal: Option<f64>,
+    /// Minutes of cruise-burn reserve required on arrival.
+    #[serde(default)]
+    pub reserve_minutes: Option<i32>,
+    /// Real POH tables (DESIGN.md §9.5.6). When present, these are
+    /// preferred over the scalar fields above; the scalars remain the
+    /// fallback for any phase the tables don't cover.
+    #[serde(default)]
+    pub performance: Option<AircraftPerformance>,
+    /// Which cruise power setting to plan at, when the table holds more
+    /// than one (see [`AircraftPerformance::cruise_at`]).
+    #[serde(default)]
+    pub cruise_power_setting: Option<String>,
 }
 
 /// A single point in a route: an airport, navaid, or plain waypoint,
@@ -163,6 +208,21 @@ mod tests {
             max_gross_weight_lb: Some(2450.0),
             forward_cg_limit_in: Some(35.0),
             aft_cg_limit_in: Some(47.3),
+            // No cruise altitude/vertical performance: these tests are
+            // about the horizontal nav log. See vertical.rs for a profile
+            // that fills them in.
+            cruise_altitude_ft: None,
+            climb_rate_fpm: None,
+            climb_tas_kt: None,
+            descent_rate_fpm: None,
+            descent_tas_kt: None,
+            climb_fuel_gph: None,
+            descent_fuel_gph: None,
+            taxi_fuel_gal: None,
+            fuel_capacity_gal: None,
+            reserve_minutes: None,
+            performance: None,
+            cruise_power_setting: None,
         }
     }
 
@@ -190,7 +250,12 @@ mod tests {
         // ~12° less than true (and heading == course with no wind).
         let leg = &summary.legs[0];
         assert!(leg.magnetic_variation_deg > 10.0 && leg.magnetic_variation_deg < 15.0);
-        assert!((leg.magnetic_heading_deg - super::norm360(leg.true_heading_deg - leg.magnetic_variation_deg)).abs() < 1e-9);
+        assert!(
+            (leg.magnetic_heading_deg
+                - super::norm360(leg.true_heading_deg - leg.magnetic_variation_deg))
+            .abs()
+                < 1e-9
+        );
     }
 
     #[test]
@@ -198,15 +263,31 @@ mod tests {
         // A due-north true course in a +10° (east) variation region gives
         // a magnetic course of 350°.
         let leg = plan_leg(
-            RoutePoint { lat: 34.0, lon: -118.0 },
-            RoutePoint { lat: 35.0, lon: -118.0 }, // due north
+            RoutePoint {
+                lat: 34.0,
+                lon: -118.0,
+            },
+            RoutePoint {
+                lat: 35.0,
+                lon: -118.0,
+            }, // due north
             &cessna_172(),
             None,
             2026.5,
         );
-        assert!((leg.true_course_deg - 0.0).abs() < 0.5 || (leg.true_course_deg - 360.0).abs() < 0.5);
-        assert!(leg.magnetic_variation_deg > 8.0, "expected east var, got {}", leg.magnetic_variation_deg);
+        assert!(
+            (leg.true_course_deg - 0.0).abs() < 0.5 || (leg.true_course_deg - 360.0).abs() < 0.5
+        );
+        assert!(
+            leg.magnetic_variation_deg > 8.0,
+            "expected east var, got {}",
+            leg.magnetic_variation_deg
+        );
         // MC = 360 - var  ≈ 349-351
-        assert!(leg.magnetic_course_deg > 347.0 && leg.magnetic_course_deg < 353.0, "MC {}", leg.magnetic_course_deg);
+        assert!(
+            leg.magnetic_course_deg > 347.0 && leg.magnetic_course_deg < 353.0,
+            "MC {}",
+            leg.magnetic_course_deg
+        );
     }
 }

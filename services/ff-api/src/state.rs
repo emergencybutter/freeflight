@@ -1,4 +1,5 @@
 use crate::routes::auth::AuthState;
+use ff_accounts::Accounts;
 use ff_notam::{NotamClient, DEFAULT_API_BASE_URL, DEFAULT_AUTH_URL};
 use ff_weather::WeatherClient;
 use std::collections::HashMap;
@@ -46,6 +47,14 @@ pub struct AppState {
     /// environment; `AuthState` is always present so the routes can report
     /// "no providers configured" cleanly.
     pub auth: Arc<AuthState>,
+    /// PostgreSQL-backed users/sessions/aircraft (DESIGN.md §9.5), or
+    /// `None` when `FF_DATABASE_URL` is unset *or* the database could not
+    /// be reached at startup. `routes::auth` falls back to `AuthState`'s
+    /// in-memory session map when this is absent, so sign-in keeps working
+    /// (just not across restarts) and every other endpoint is unaffected —
+    /// map, charts, weather and planning must not go down because a
+    /// database did.
+    pub accounts: Option<Accounts>,
 }
 
 impl Default for AppState {
@@ -76,6 +85,50 @@ impl Default for AppState {
             data_dir,
             http: reqwest::Client::new(),
             auth: Arc::new(AuthState::from_env()),
+            // Connecting is async, so it can't happen in `default()` —
+            // see `connect_accounts` below, called from `main`.
+            accounts: None,
+        }
+    }
+}
+
+impl AppState {
+    /// Connect the optional account database from `FF_DATABASE_URL` and
+    /// bring its schema up to date (DESIGN.md §9.5.2).
+    ///
+    /// Three outcomes, all non-fatal:
+    /// - unset: accounts are off by design, sessions stay in-memory;
+    /// - set and reachable: durable sessions, and the aircraft manager
+    ///   has somewhere to live;
+    /// - set but unreachable: logged as an error and treated as off.
+    ///
+    /// That last case is deliberate. `ff-api` is primarily a charts,
+    /// weather and planning service that happens to also do sign-in;
+    /// refusing to boot because Postgres is down would take the whole
+    /// thing offline to protect a feature most requests never touch.
+    /// It is logged loudly rather than silently, since running without
+    /// the database is not a state anyone should discover by accident.
+    pub async fn connect_accounts(&mut self) {
+        let Ok(url) = std::env::var("FF_DATABASE_URL") else {
+            tracing::info!("FF_DATABASE_URL unset — accounts disabled, sessions are in-memory");
+            return;
+        };
+        if url.is_empty() {
+            tracing::info!("FF_DATABASE_URL empty — accounts disabled, sessions are in-memory");
+            return;
+        }
+        match Accounts::open(&url).await {
+            Ok(accounts) => {
+                tracing::info!("account database connected and migrated");
+                self.accounts = Some(accounts);
+            }
+            Err(err) => {
+                // Never log `url` — it carries the password.
+                tracing::error!(
+                    "FF_DATABASE_URL is set but the account database is unusable ({err}); \
+                     continuing with accounts disabled and in-memory sessions"
+                );
+            }
         }
     }
 }
