@@ -1144,24 +1144,38 @@ export const MapView = forwardRef<
     /* `compact: true` only makes the attribution *collapsible*; MapLibre
        still adds `maplibregl-compact-show` next to `maplibregl-compact`,
        so it renders expanded and its only minimize trigger is the map's
-       `drag` event — the credits stay open until the pilot happens to pan.
-       Dropping the class is what actually closes it, and the "i" button
-       still toggles it back open normally.
+       `drag` event — the credits stay open until the pilot happens to
+       pan. Dropping that class is what actually closes it, and the "i"
+       button still toggles it back open normally.
 
-       Once on `idle` rather than immediately: attributions arrive with
-       source metadata, and while there are none the control is
-       `maplibregl-attrib-empty` and hasn't been given the compact classes
-       yet — collapsing before that runs would be a no-op that the first
-       real attribution then re-expands. `once`, not `on`, because `idle`
-       fires after every pan settles and would otherwise slam the panel
-       shut under a pilot who had deliberately opened it. */
-    const collapseAttribution = () => {
-      map
+       Watched with an observer rather than collapsed on a map event,
+       because the timing is the whole problem. The control does not get
+       these classes until attributions arrive with source metadata, so
+       collapsing any earlier is a no-op; but hanging it on `idle`
+       (the obvious choice) measured ~1.8s of full-width credits on a
+       cold production load, since this map settles slowly with its
+       raster chart sources. The observer fires on the same mutation that
+       adds the class, so the expanded state never gets a frame.
+
+       Disconnecting after the first collapse is what keeps this from
+       fighting the user: MapLibre only re-adds `maplibregl-compact-show`
+       when `maplibregl-compact` is absent, which after the first pass it
+       never is — so there is nothing left to suppress, and a pilot who
+       deliberately opens the panel keeps it open. */
+    const attributionObserver = new MutationObserver(() => {
+      const attrib = map
         .getContainer()
-        .querySelector(".maplibregl-ctrl-attrib.maplibregl-compact")
-        ?.classList.remove("maplibregl-compact-show");
-    };
-    map.once("idle", collapseAttribution);
+        .querySelector(".maplibregl-ctrl-attrib.maplibregl-compact.maplibregl-compact-show");
+      if (!attrib) return;
+      attrib.classList.remove("maplibregl-compact-show");
+      attributionObserver.disconnect();
+    });
+    attributionObserver.observe(map.getContainer(), {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class"],
+    });
 
     // MapLibre only auto-tracks *window* resizes, not container ones —
     // so when the map pane is drag-resized or the narrow/wide layout
@@ -1842,6 +1856,10 @@ export const MapView = forwardRef<
     return () => {
       unmountedRef.current = true;
       resizeObserver.disconnect();
+      // No-op once it has already collapsed and disconnected itself, but
+      // a map torn down before its attributions ever loaded would
+      // otherwise leave this observing a detached container.
+      attributionObserver.disconnect();
       if (flightCategoryTimer) clearInterval(flightCategoryTimer);
       map.remove();
       mapRef.current = null;
