@@ -1133,9 +1133,35 @@ export const MapView = forwardRef<
       // See MAX_IOS_PIXEL_RATIO — undefined everywhere else keeps
       // MapLibre's default (the device's own devicePixelRatio).
       pixelRatio: IS_IOS ? Math.min(window.devicePixelRatio || 1, MAX_IOS_PIXEL_RATIO) : undefined,
+      // Collapse the source credits to the "i" button instead of letting
+      // a full-width line of attribution text sit over the chart. Not
+      // sufficient on its own — see collapseAttribution below.
+      attributionControl: { compact: true },
     });
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+    /* `compact: true` only makes the attribution *collapsible*; MapLibre
+       still adds `maplibregl-compact-show` next to `maplibregl-compact`,
+       so it renders expanded and its only minimize trigger is the map's
+       `drag` event — the credits stay open until the pilot happens to pan.
+       Dropping the class is what actually closes it, and the "i" button
+       still toggles it back open normally.
+
+       Once on `idle` rather than immediately: attributions arrive with
+       source metadata, and while there are none the control is
+       `maplibregl-attrib-empty` and hasn't been given the compact classes
+       yet — collapsing before that runs would be a no-op that the first
+       real attribution then re-expands. `once`, not `on`, because `idle`
+       fires after every pan settles and would otherwise slam the panel
+       shut under a pilot who had deliberately opened it. */
+    const collapseAttribution = () => {
+      map
+        .getContainer()
+        .querySelector(".maplibregl-ctrl-attrib.maplibregl-compact")
+        ?.classList.remove("maplibregl-compact-show");
+    };
+    map.once("idle", collapseAttribution);
 
     // MapLibre only auto-tracks *window* resizes, not container ones —
     // so when the map pane is drag-resized or the narrow/wide layout

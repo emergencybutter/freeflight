@@ -849,6 +849,7 @@ th {
 }
 
 .aircraft-profile input,
+.aircraft-profile select,
 .weight-balance input {
   width: 8rem;
   box-sizing: border-box;
@@ -858,6 +859,16 @@ th {
   border-radius: 6px;
   color: inherit;
   font: inherit;
+}
+
+/* The "Plan with" aircraft picker and the cruise-power picker. Wider
+   than the numeric fields beside them because their options are
+   registrations with a type and status appended ("N12345 (C172) —
+   unverified"), and matching `input[type="text"]` below keeps every
+   control in this panel flush at the same right edge — the labels are
+   `space-between`, so the control's own width is what aligns them. */
+.aircraft-profile select {
+  width: 12rem;
 }
 
 .aircraft-profile input[type="text"] {

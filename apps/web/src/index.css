@@ -2,6 +2,18 @@
   box-sizing: border-box;
 }
 
+/* The parts of a form control the browser draws itself — a <select>'s
+   dropdown menu, the up/down steppers on <input type="number">, focus
+   rings, scrollbars — are not styleable with CSS, so the aircraft
+   editor's dark inputs opened light-grey menus and carried light
+   steppers regardless of the `background`/`color` set on them. This is
+   the switch that tells the browser to render those in its dark
+   variant; every surface in this app is dark (see `body` below), so it
+   applies at the root rather than per control. */
+:root {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
