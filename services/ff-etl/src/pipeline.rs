@@ -174,7 +174,7 @@ pub fn run() -> Result<(), EtlError> {
                 "openAIP state loaded"
             );
         }
-        let added = add_openaip(&bundle_path, &loaded.airports, &loaded.navaids)?;
+        let added = add_openaip(&bundle_path, &loaded.airports, &loaded.navaids, &cifp.cycle_date)?;
         add_airspace(&bundle_path, &loaded.airspaces)?;
         // Fold into `stats` so validation's cycle-to-cycle airport-count
         // check compares like with like, exactly as the AIXM step does.

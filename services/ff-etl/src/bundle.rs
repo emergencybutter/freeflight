@@ -490,10 +490,21 @@ pub fn add_dtpp_charts(
 /// higher-priority source wins. That is the tier rule holding at the
 /// database level as well as in configuration: official data is never
 /// overwritten by community data.
+///
+/// `cycle_id` is recorded as the attribution's effective date — openAIP
+/// is a live snapshot with no AIRAC-style effective date of its own, so
+/// the cycle it was pulled into is the closest honest answer to "as of
+/// when". Records the `data_source` row the same call the AIXM step
+/// makes for SIA: permission to bundle openAIP is conditional on
+/// crediting it wherever its data appears (DESIGN.md §3.1.2), and until
+/// this call existed, `add_openaip` inserted the rows themselves but
+/// never the credit — the About page's `/data/attributions` reads
+/// `data_source`, so nothing would have shown up there.
 pub fn add_openaip(
     bundle_path: &Path,
     airports: &[ff_core::airport::Airport],
     navaids: &[ff_core::navaid::Navaid],
+    cycle_id: &str,
 ) -> Result<OpenAipStats, BundleError> {
     let mut conn = rusqlite::Connection::open(bundle_path)?;
     let tx = conn.transaction()?;
@@ -534,6 +545,21 @@ pub fn add_openaip(
             ],
         )?;
     }
+
+    // Record the openAIP attribution (see the doc comment above) so
+    // clients can display it. Idempotent, same as the SIA row add_aixm
+    // writes.
+    tx.execute(
+        "INSERT OR REPLACE INTO data_source (name, effective_date, licence, url, attribution)
+         VALUES (?1,?2,?3,?4,?5)",
+        params![
+            "openAIP",
+            cycle_id,
+            "openAIP terms of use — free use, no re-sale of the raw data",
+            "https://www.openaip.net",
+            "openAIP contributors",
+        ],
+    )?;
 
     tx.commit()?;
     Ok(OpenAipStats {

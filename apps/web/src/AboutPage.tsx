@@ -25,6 +25,7 @@ export function AboutPage() {
       .catch(() => setSources([]));
   }, []);
   const sia = sources.find((s) => s.name.includes("SIA"));
+  const openAip = sources.find((s) => s.name === "openAIP");
 
   return (
     <div className="about-page">
@@ -64,6 +65,15 @@ export function AboutPage() {
             <a href="https://www.sia.aviation-civile.gouv.fr">sia.aviation-civile.gouv.fr</a>
             {sia?.effective_date ? `, AIRAC effective ${sia.effective_date}.` : " and updated each AIRAC cycle."}
           </li>
+          {openAip && (
+            <li>
+              German, British, Canadian, and Greenlandic airports, navaids, and airspace — where an
+              official AIS does not permit re-hosting or publishes no dataset at all — come from{" "}
+              <a href={openAip.url ?? "https://www.openaip.net"}>openAIP</a>, community-maintained
+              data (not an official AIS source; verify against official sources before relying on
+              it){openAip.effective_date ? `, as of ${openAip.effective_date}.` : "."}
+            </li>
+          )}
         </ul>
 
         <a className="about-back" href="/">
