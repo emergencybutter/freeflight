@@ -67,7 +67,12 @@ export function AboutPage() {
           </li>
           {openAip && (
             <li>
-              German, British, Canadian, and Greenlandic airports, navaids, and airspace — where an
+              {/* Deliberately doesn't name the covered countries: that
+                  list (openaip.rs's DEFAULT_STATES) grows as coverage
+                  does, and a hardcoded list here is exactly what went
+                  stale the first time — this credit shouldn't need a
+                  code change every time a country is added. */}
+              Airports, navaids, and airspace for a growing set of other countries — where an
               official AIS does not permit re-hosting or publishes no dataset at all — come from{" "}
               <a href={openAip.url ?? "https://www.openaip.net"}>openAIP</a>, community-maintained
               data (not an official AIS source; verify against official sources before relying on

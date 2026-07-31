@@ -208,6 +208,7 @@ impossible, and they are not correlated:
 | **UK — NATS** | — | AIP portal | Crown copyright | ✅ served via openAIP (§3.1.2) |
 | **Canada — NAV CANADA** | — | commercial licensing | not redistributable | ✅ served via openAIP (§3.1.2) — note thin navaid coverage |
 | **Greenland / Denmark / Faroes — Naviair** | **none published** | eAIP documents only | not publicly stated | ✅ served via openAIP (§3.1.2) — no official alternative exists |
+| **Iceland — Isavia** | none published directly | eAIP portal, HTML/PDF only; structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-07-31: EUROCONTROL's inventory lists Iceland as "static data provider through EAD" with no direct AIXM publication, and the eAIP site itself carries no licence text |
 
 ⚠️ = lead, not a conclusion. Only the France, Germany and Denmark rows
 have been read against the provider's own material; the rest come from
@@ -276,12 +277,12 @@ holding the exact wording of the terms in the repo rather than in
 memory — the licence has already been mis-recorded here once.
 
 **Status: `ff-openaip` implemented and wired into `ff-etl`**, validated
-against the live API for four states. Configuration:
+against the live API for five states. Configuration:
 
 - `FF_OPENAIP_API_KEY` — required; unset skips the step entirely, leaving
   a US-only (or US+France) cycle unaffected.
 - `FF_OPENAIP_STATES` — `CC:REGION` pairs, default `DE:ED,GB:EG,CA:CY,
-  GL:BG`. Note `CC` is openAIP's country code and `REGION` the ICAO
+  GL:BG,IS:BI`. Note `CC` is openAIP's country code and `REGION` the ICAO
   region, which differ (Canada is `CA` but `CY`).
 
 **The one-tier-per-state rule is enforced twice.** Configuring a state
@@ -301,6 +302,7 @@ reporting-points import.
 | United Kingdom | `EG` | 469 / 469 | 136 | 794 / 1185 | 388 |
 | Canada | `CY` | 1452 / 1452 | 22 | 2264 / 2264 | 2010 |
 | Greenland | `BG` | 77 / 77 | 19 | 26 / 27 | 10 |
+| Iceland | `BI` | 84 / 84 | 20 | 54 / 55 | 7 |
 
 **`ff-core` gained Class A and Class F** to make this correct. Neither
 occurs in US airspace the FAA sources describe, so neither was modelled —
