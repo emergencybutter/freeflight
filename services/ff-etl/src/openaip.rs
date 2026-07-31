@@ -22,7 +22,7 @@
 //! - `FF_OPENAIP_API_KEY` — required; unset means the step is skipped and
 //!   a US-only (or US+France) cycle is unaffected.
 //! - `FF_OPENAIP_STATES` — comma-separated `CC:REGION` pairs, e.g.
-//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI`. `CC` is openAIP's two-letter
+//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI,IE:EI`. `CC` is openAIP's two-letter
 //!   country code; `REGION` is the ICAO region stamped on navaids, which
 //!   is *not* the same thing (Canada is `CA` but `CY`). Defaults to
 //!   [`DEFAULT_STATES`].
@@ -42,6 +42,7 @@ pub const DEFAULT_STATES: &[(&str, &str)] = &[
     ("CA", "CY"), // Canada — NAV CANADA commercial licensing
     ("GL", "BG"), // Greenland — Naviair publishes no dataset at all
     ("IS", "BI"), // Iceland — Isavia publishes no direct AIXM (EAD-gated), eAIP is HTML/PDF only
+    ("IE", "EI"), // Ireland — AirNav Ireland is EAD-gated too, same as Iceland
 ];
 
 /// States served by the official-AIXM tier. A state here must never also
