@@ -22,9 +22,10 @@
 //! - `FF_OPENAIP_API_KEY` — required; unset means the step is skipped and
 //!   a US-only (or US+France) cycle is unaffected.
 //! - `FF_OPENAIP_STATES` — comma-separated `CC:REGION` pairs, e.g.
-//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI,IE:EI,PT:LP,ES:LE`. `CC` is openAIP's
-//!   two-letter country code; `REGION` is the ICAO region stamped on
-//!   navaids, which is *not* the same thing (Canada is `CA` but `CY`).
+//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH`. `CC`
+//!   is openAIP's two-letter country code; `REGION` is the ICAO region
+//!   stamped on navaids, which is *not* the same thing (Canada is `CA`
+//!   but `CY`).
 //!   Defaults to [`DEFAULT_STATES`].
 
 use ff_core::airport::Airport;
@@ -52,6 +53,8 @@ pub const DEFAULT_STATES: &[(&str, &str)] = &[
     // (DESIGN.md §3.1's known limitation), since openAIP has no way to
     // split one country fetch into two regions.
     ("ES", "LE"),
+    ("BE", "EB"), // Belgium — skeyes/EAD-gated, no direct AIXM
+    ("NL", "EH"), // Netherlands — LVNL/EAD-gated, no direct AIXM
 ];
 
 /// States served by the official-AIXM tier. A state here must never also

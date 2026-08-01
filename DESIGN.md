@@ -212,6 +212,8 @@ impossible, and they are not correlated:
 | **Ireland — AirNav Ireland (IAA)** | none published directly | eAIP portal, HTML only; structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-07-31, same finding as Iceland: EUROCONTROL's inventory lists Ireland as "static data provider through EAD", no direct AIXM, no licence text on the eAIP itself |
 | **Portugal — NAV Portugal** | none published directly (EAD) | eAIP portal | **explicitly restricted** — GEN section states redistribution/copying only by prior agreement with NAV Portugal, E.P.E. | ✅ served via openAIP (§3.1.2) — checked 2026-08-01, the one state here with a definite (not just presumed) redistribution block, same shape as Germany |
 | **Spain — ENAIRE** | **5.1**, published directly (unlike most of this list) | direct download, `aip.enaire.es` "AIXM5.1 Data Sets" | unread — the linked "use and limitations" page 404'd when checked; moot regardless (below) | ✅ served via openAIP (§3.1.2) — checked 2026-08-01: `ff-aixm` parses 4.5 only, so Spain's official 5.1 export needs a second parser before its licence is even worth resolving |
+| **Belgium — skeyes** | none published directly | eAIP portal (`ops.skeyes.be`); structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-08-01, same finding as Iceland/Ireland: EUROCONTROL's inventory lists Belgium as "static data provider through EAD" with no direct AIXM |
+| **Netherlands — LVNL** | none published directly | eAIP portal (`eaip.lvnl.nl`); structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-08-01, same finding: "static data provider through EAD", no direct AIXM |
 
 ⚠️ = lead, not a conclusion. Only the France, Germany and Denmark rows
 have been read against the provider's own material; the rest come from
@@ -280,13 +282,14 @@ holding the exact wording of the terms in the repo rather than in
 memory — the licence has already been mis-recorded here once.
 
 **Status: `ff-openaip` implemented and wired into `ff-etl`**, validated
-against the live API for eight states. Configuration:
+against the live API for ten states. Configuration:
 
 - `FF_OPENAIP_API_KEY` — required; unset skips the step entirely, leaving
   a US-only (or US+France) cycle unaffected.
 - `FF_OPENAIP_STATES` — `CC:REGION` pairs, default `DE:ED,GB:EG,CA:CY,
-  GL:BG,IS:BI,IE:EI,PT:LP,ES:LE`. Note `CC` is openAIP's country code and
-  `REGION` the ICAO region, which differ (Canada is `CA` but `CY`).
+  GL:BG,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH`. Note `CC` is openAIP's
+  country code and `REGION` the ICAO region, which differ (Canada is
+  `CA` but `CY`).
 
 **The one-tier-per-state rule is enforced twice.** Configuring a state
 that the official-AIXM tier already serves (France) fails the run rather
@@ -297,16 +300,15 @@ failures are logged and skipped — one unreachable country must not sink a
 cycle — but a tier conflict is a config error and propagates.
 
 Still to do: per-feature source provenance in the bundle + UI, and the
-reporting-points import. Also queued: Belgium and Netherlands — both
-confirmed EAD-gated with no direct AIXM (same shape as Iceland/Ireland),
-just not added yet. The openAIP API key hit a sustained rate limit while
-adding Portugal and Spain (2026-08-01): several escalating cooldowns
-(up to 4 minutes) all still 429'd, well past the short per-country
-bursts the earlier countries hit, before a ~10-minute wait finally
-cleared it — confirming a longer window, not a per-minute one, though
-not pinning down exactly how long. Adding Belgium/Netherlands is just
-`("BE","EB")`/`("NL","EH")` in `DEFAULT_STATES`, same pattern as every
-other row here; budget for another possible multi-minute wait.
+reporting-points import.
+
+**On the rate limit noted in an earlier revision of this section**: it
+had cleared by the next session (2026-08-01, later the same day) —
+Belgium and Netherlands both fetched on the first attempt, no cooldown
+needed. So the earlier ~10-minute-plus stall while adding Portugal/Spain
+was a real but apparently short-lived window, not a persistent problem
+with this key; worth expecting *some* rate limiting on a burst of
+several countries in one sitting, but not necessarily a long one.
 
 | State | Region | Airports | Navaids | Airspace | of which controlled |
 |---|---|---|---|---|---|
@@ -318,6 +320,8 @@ other row here; budget for another possible multi-minute wait.
 | Ireland | `EI` | 44 / 44 | 17 | 82 / 83 | 47 |
 | Portugal | `LP` | 189 / 189 | 27 | 94 / 94 | see note* |
 | Spain | `LE` | 500 / 500 | 129 | 547 / 777 | see note* |
+| Belgium | `EB` | 161 / 161 | 18 | 226 / 228 | 58 |
+| Netherlands | `EH` | 185 / 185 | 12 | 221 / 262 | 42 |
 
 \* Portugal and Spain were applied to the live bundle in the same
 session without an intermediate checkpoint between them, so the
