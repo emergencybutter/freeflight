@@ -22,10 +22,10 @@
 //! - `FF_OPENAIP_API_KEY` — required; unset means the step is skipped and
 //!   a US-only (or US+France) cycle is unaffected.
 //! - `FF_OPENAIP_STATES` — comma-separated `CC:REGION` pairs, e.g.
-//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI,IE:EI`. `CC` is openAIP's two-letter
-//!   country code; `REGION` is the ICAO region stamped on navaids, which
-//!   is *not* the same thing (Canada is `CA` but `CY`). Defaults to
-//!   [`DEFAULT_STATES`].
+//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI,IE:EI,PT:LP,ES:LE`. `CC` is openAIP's
+//!   two-letter country code; `REGION` is the ICAO region stamped on
+//!   navaids, which is *not* the same thing (Canada is `CA` but `CY`).
+//!   Defaults to [`DEFAULT_STATES`].
 
 use ff_core::airport::Airport;
 use ff_core::airspace::AirspaceVolume;
@@ -43,6 +43,15 @@ pub const DEFAULT_STATES: &[(&str, &str)] = &[
     ("GL", "BG"), // Greenland — Naviair publishes no dataset at all
     ("IS", "BI"), // Iceland — Isavia publishes no direct AIXM (EAD-gated), eAIP is HTML/PDF only
     ("IE", "EI"), // Ireland — AirNav Ireland is EAD-gated too, same as Iceland
+    ("PT", "LP"), // Portugal — NAV Portugal forbids redistribution without prior agreement
+    // Spain — ENAIRE does publish AIXM 5.1 directly (unlike most of this
+    // list), but ff-aixm only parses 4.5, so that source is unusable
+    // until a second parser exists. `region` is stamped "LE" on every
+    // navaid, including the Canary Islands' (properly "GC") — the same
+    // cosmetic simplification already accepted for France's FR_OM export
+    // (DESIGN.md §3.1's known limitation), since openAIP has no way to
+    // split one country fetch into two regions.
+    ("ES", "LE"),
 ];
 
 /// States served by the official-AIXM tier. A state here must never also
