@@ -22,10 +22,10 @@
 //! - `FF_OPENAIP_API_KEY` — required; unset means the step is skipped and
 //!   a US-only (or US+France) cycle is unaffected.
 //! - `FF_OPENAIP_STATES` — comma-separated `CC:REGION` pairs, e.g.
-//!   `DE:ED,GB:EG,CA:CY,GL:BG,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH`. `CC`
-//!   is openAIP's two-letter country code; `REGION` is the ICAO region
-//!   stamped on navaids, which is *not* the same thing (Canada is `CA`
-//!   but `CY`).
+//!   `DE:ED,GB:EG,CA:CY,GL:BG,DK:EK,FO:EK,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,
+//!   NL:EH`. `CC` is openAIP's two-letter country code; `REGION` is the
+//!   ICAO region stamped on navaids, which is *not* the same thing
+//!   (Canada is `CA` but `CY`).
 //!   Defaults to [`DEFAULT_STATES`].
 
 use ff_core::airport::Airport;
@@ -42,6 +42,13 @@ pub const DEFAULT_STATES: &[(&str, &str)] = &[
     ("GB", "EG"), // United Kingdom — Crown copyright
     ("CA", "CY"), // Canada — NAV CANADA commercial licensing
     ("GL", "BG"), // Greenland — Naviair publishes no dataset at all
+    // Denmark and the Faroe Islands share Naviair's "nothing published"
+    // finding with Greenland above, and share the same ICAO region as
+    // each other (Vágar and Copenhagen both stamp `EK`) — but sat
+    // unimplemented until a user asked why EKVG (Vágar) had no data.
+    // openAIP treats them as two country codes, not one.
+    ("DK", "EK"), // Denmark
+    ("FO", "EK"), // Faroe Islands
     ("IS", "BI"), // Iceland — Isavia publishes no direct AIXM (EAD-gated), eAIP is HTML/PDF only
     ("IE", "EI"), // Ireland — AirNav Ireland is EAD-gated too, same as Iceland
     ("PT", "LP"), // Portugal — NAV Portugal forbids redistribution without prior agreement

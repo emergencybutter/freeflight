@@ -207,7 +207,7 @@ impossible, and they are not correlated:
 | **Most of ECAC** (Austria, Belgium, Croatia, Cyprus, …) | via EAD | **EAD**, access-controlled | not redistributable by default | ❌ |
 | **UK — NATS** | — | AIP portal | Crown copyright | ✅ served via openAIP (§3.1.2) |
 | **Canada — NAV CANADA** | — | commercial licensing | not redistributable | ✅ served via openAIP (§3.1.2) — note thin navaid coverage |
-| **Greenland / Denmark / Faroes — Naviair** | **none published** | eAIP documents only | not publicly stated | ✅ served via openAIP (§3.1.2) — no official alternative exists |
+| **Greenland / Denmark / Faroes — Naviair** | **none published** | eAIP documents only | not publicly stated | ✅ served via openAIP (§3.1.2) — no official alternative exists. All three are now actually wired in (`GL`/`DK`/`FO` in `DEFAULT_STATES`, checked 2026-08-03); Denmark and the Faroes shared this finding with Greenland from the start but sat unimplemented until a user asked why `EKVG` (Vágar, Faroe Islands) had no data |
 | **Iceland — Isavia** | none published directly | eAIP portal, HTML/PDF only; structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-07-31: EUROCONTROL's inventory lists Iceland as "static data provider through EAD" with no direct AIXM publication, and the eAIP site itself carries no licence text |
 | **Ireland — AirNav Ireland (IAA)** | none published directly | eAIP portal, HTML only; structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-07-31, same finding as Iceland: EUROCONTROL's inventory lists Ireland as "static data provider through EAD", no direct AIXM, no licence text on the eAIP itself |
 | **Portugal — NAV Portugal** | none published directly (EAD) | eAIP portal | **explicitly restricted** — GEN section states redistribution/copying only by prior agreement with NAV Portugal, E.P.E. | ✅ served via openAIP (§3.1.2) — checked 2026-08-01, the one state here with a definite (not just presumed) redistribution block, same shape as Germany |
@@ -282,13 +282,13 @@ holding the exact wording of the terms in the repo rather than in
 memory — the licence has already been mis-recorded here once.
 
 **Status: `ff-openaip` implemented and wired into `ff-etl`**, validated
-against the live API for ten states. Configuration:
+against the live API for twelve states. Configuration:
 
 - `FF_OPENAIP_API_KEY` — required; unset skips the step entirely, leaving
   a US-only (or US+France) cycle unaffected.
 - `FF_OPENAIP_STATES` — `CC:REGION` pairs, default `DE:ED,GB:EG,CA:CY,
-  GL:BG,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH`. Note `CC` is openAIP's
-  country code and `REGION` the ICAO region, which differ (Canada is
+  GL:BG,DK:EK,FO:EK,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH`. Note `CC` is
+  openAIP's country code and `REGION` the ICAO region, which differ (Canada is
   `CA` but `CY`).
 
 **The one-tier-per-state rule is enforced twice.** Configuring a state
@@ -316,6 +316,8 @@ several countries in one sitting, but not necessarily a long one.
 | United Kingdom | `EG` | 469 / 469 | 136 | 794 / 1185 | 388 |
 | Canada | `CY` | 1452 / 1452 | 22 | 2264 / 2264 | 2010 |
 | Greenland | `BG` | 77 / 77 | 19 | 26 / 27 | 10 |
+| Denmark | `EK` | 130 / 130 | 20 | 159 / 189 | 28 |
+| Faroe Islands | `EK` | 9 / 9 | 2 | 1 / 1 | 0 |
 | Iceland | `BI` | 84 / 84 | 20 | 54 / 55 | 7 |
 | Ireland | `EI` | 44 / 44 | 17 | 82 / 83 | 47 |
 | Portugal | `LP` | 189 / 189 | 27 | 94 / 94 | see note* |
