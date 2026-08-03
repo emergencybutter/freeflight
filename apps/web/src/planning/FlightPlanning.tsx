@@ -1158,15 +1158,19 @@ function RouteBuilder({
   // NFDC Preferred Routes / ATCSCC Coded Departure Routes, baked into the
   // cycle bundle at ETL time (see ff-etl's preferred_routes.rs). Neither
   // is a clearance; presented as "here's what's commonly flown", not a
-  // guarantee. Refetches whenever either airport changes, including back
-  // to whatever it was — the point is showing what's on file for the
-  // *current* pair, not remembering a stale one.
+  // guarantee. IFR only, same reasoning as the SID/STAR pickers above:
+  // both source databases are filed-IFR constructs (TEC is literally an
+  // IFR ATC service), so a VFR flight has nothing to do with what they
+  // publish — not fetched at all in VFR, rather than fetched and hidden,
+  // to skip the wasted request. Refetches whenever either airport
+  // changes, including back to whatever it was — the point is showing
+  // what's on file for the *current* pair, not remembering a stale one.
   const [suggestions, setSuggestions] = useState<PreferredRouteRow[]>([]);
   const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
   const departureIdent = route.departure?.ident ?? null;
   const arrivalIdent = route.arrival?.ident ?? null;
   useEffect(() => {
-    if (!departureIdent || !arrivalIdent) {
+    if (flightRules !== "IFR" || !departureIdent || !arrivalIdent) {
       setSuggestions([]);
       setSuggestionsError(null);
       return;
@@ -1185,7 +1189,7 @@ function RouteBuilder({
     return () => {
       cancelled = true;
     };
-  }, [departureIdent, arrivalIdent]);
+  }, [flightRules, departureIdent, arrivalIdent]);
 
   // Applying a suggestion replaces the middle-fixes list wholesale rather
   // than appending: a suggestion describes the *whole* route between the
@@ -1195,6 +1199,13 @@ function RouteBuilder({
   // no route at all, since it looks complete but isn't.
   const [applyingIndex, setApplyingIndex] = useState<number | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  // Leaving IFR hides the panel this error would show in, but without
+  // clearing it here a stale error from before switching away resurfaces
+  // untouched the moment the pilot switches back — worse than no error,
+  // since it would describe a suggestion that isn't even on screen.
+  useEffect(() => {
+    if (flightRules !== "IFR") setApplyError(null);
+  }, [flightRules]);
   const applySuggestion = async (routeString: string, index: number) => {
     const rawTokens = routeString.trim().length === 0 ? [] : routeString.trim().split(/\s+/);
     setApplyingIndex(index);
@@ -1307,7 +1318,7 @@ function RouteBuilder({
         </div>
       )}
 
-      {departureIdent && arrivalIdent && (
+      {flightRules === "IFR" && departureIdent && arrivalIdent && (
         <div className="preferred-routes">
           <h3>Suggested routes</h3>
           <p className="hint">
