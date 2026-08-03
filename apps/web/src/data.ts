@@ -11,6 +11,7 @@ import type {
   CycleManifest,
   IdentSearchRow,
   NearestFix,
+  PreferredRouteRow,
   Procedure,
   ProcedureDetail,
 } from "./types";
@@ -50,6 +51,14 @@ export async function fetchAirwayDetail(ident: string): Promise<AirwayDetail> {
  * route builder's single search box. */
 export async function searchIdents(q: string): Promise<IdentSearchRow[]> {
   return fetchJson<IdentSearchRow[]>(`/data/search_idents?q=${encodeURIComponent(q)}`);
+}
+
+/** Suggested routings between two airports, once both are set on the
+ * flight plan — see PreferredRouteRow. */
+export async function fetchPreferredRoutes(from: string, to: string): Promise<PreferredRouteRow[]> {
+  return fetchJson<PreferredRouteRow[]>(
+    `/data/preferred_routes?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+  );
 }
 
 export async function fetchCharts(): Promise<ChartCatalogEntry[]> {

@@ -922,6 +922,39 @@ th {
   text-align: center;
 }
 
+.preferred-routes {
+  margin-bottom: 0.75rem;
+}
+
+.preferred-route-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.preferred-route-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #1c2333;
+}
+
+.preferred-route-list li:last-child {
+  border-bottom: none;
+}
+
+.preferred-route-summary {
+  font-size: 0.9rem;
+  margin-bottom: 0.2rem;
+}
+
+.preferred-route-list button {
+  width: auto;
+  margin-top: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+}
+
 .weight-balance td input {
   width: 100%;
 }

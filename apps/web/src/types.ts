@@ -123,6 +123,35 @@ export interface IdentSearchRow {
   lon: number | null;
 }
 
+/** `GET /data/preferred_routes?from=ICAO&to=ICAO` — a suggested routing
+ * between two airports, from the FAA's NFDC Preferred Routes Database
+ * ("PFR": filed altitude/aircraft-restricted routings) or ATCSCC Coded
+ * Departure Routes ("CDR": pre-coordinated reroute strings). Neither is a
+ * clearance — both are "here's what's commonly flown", surfaced as a
+ * suggestion to populate the route builder's middle fixes, not a
+ * guarantee ATC will assign it. `route_string` holds only the
+ * intermediate fixes/airways (departure/arrival are already the route
+ * builder's own fields); empty means a direct routing. Most fields are
+ * `PFR`-only or `CDR`-only — see ff-etl's preferred_routes.rs for which. */
+export interface PreferredRouteRow {
+  source: "PFR" | "CDR";
+  orig_icao: string;
+  dest_icao: string;
+  route_string: string;
+  route_type: string | null;
+  altitude: string | null;
+  aircraft: string | null;
+  direction: string | null;
+  area: string | null;
+  code: string | null;
+  dep_fix: string | null;
+  coordination_required: string | null;
+  nav_equipment: string | null;
+  dep_artcc: string | null;
+  arr_artcc: string | null;
+  seq: number | null;
+}
+
 /** One resolved point on a planned route — an airport, waypoint, or
  * navaid (airway tokens expand into these; see planning/expandRoute). */
 export interface RouteWaypoint {

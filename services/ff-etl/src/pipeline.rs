@@ -1,7 +1,7 @@
 use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
 use crate::bundle::{
-    add_airspace, add_aixm, add_chart, add_dtpp_charts, add_openaip, build_bundle, BundleSource,
-    ChartSource,
+    add_airspace, add_aixm, add_chart, add_dtpp_charts, add_openaip, add_preferred_routes,
+    build_bundle, BundleSource, ChartSource,
 };
 use crate::chart_prep::{crop_legend_and_collar, crop_to_neatline, expand_palette_to_rgb};
 use crate::dtpp::{discover_dtpp_cycle, fetch_and_match_dtpp_charts};
@@ -186,6 +186,22 @@ pub fn run() -> Result<(), EtlError> {
             airspaces = loaded.airspaces.len(),
             "added openAIP data to bundle (attribution required in clients)"
         );
+    }
+
+    // Suggested departure/arrival routings for the flight-plan route
+    // builder (crate::preferred_routes) — run after the AIXM/openAIP
+    // steps above so non-US airports (e.g. Canada's CYUL) are already in
+    // the bundle for orig/dest resolution to match against. Best-effort:
+    // FAA's fly.faa.gov being briefly unreachable shouldn't cost the rest
+    // of the cycle, same policy as d-TPP below.
+    match crate::preferred_routes::fetch_and_parse(&bundle_path) {
+        Ok(routes) => {
+            let inserted = add_preferred_routes(&bundle_path, &routes)?;
+            tracing::info!(count = inserted, "added preferred/coded-departure routes to bundle");
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "couldn't add preferred routes this cycle — skipping")
+        }
     }
 
     // d-TPP SID/STAR/Approach chart links — best-effort, matching every

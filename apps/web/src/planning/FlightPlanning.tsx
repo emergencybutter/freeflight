@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchAirwayDetail, fetchProcedureDetail, searchAirports, searchIdents } from "../data";
+import {
+  fetchAirwayDetail,
+  fetchPreferredRoutes,
+  fetchProcedureDetail,
+  searchAirports,
+  searchIdents,
+} from "../data";
 import { fetchWindsAloft } from "../weather";
 import { buildResolvedProcedure, fetchProcedureOptions, transitionOptions } from "./procedureLookup";
 import { windsForRoute } from "./windsAloft";
@@ -7,6 +13,7 @@ import type {
   Airport,
   AirspaceVolume,
   IdentSearchRow,
+  PreferredRouteRow,
   Procedure,
   ProcedureDetail,
   ProcedureTransitionDetail,
@@ -1033,6 +1040,70 @@ function ProcedurePickerButton({
   );
 }
 
+/** Converts one already-fetched search result into the `RouteToken` it
+ * represents — an airway ident needs its detail fetched (legs, for
+ * `expandRoute.ts`); anything else becomes a point directly from the
+ * row's own coordinates. Shared by the manual search box (which already
+ * has the row from a live typeahead) and `resolveRouteToken` below
+ * (which fetches the row itself), so a route built by hand and one
+ * applied from a suggestion resolve through the same logic. */
+async function identSearchRowToToken(row: IdentSearchRow): Promise<RouteToken | null> {
+  if (row.kind === "airway") {
+    const detail = await fetchAirwayDetail(row.ident);
+    return { kind: "airway", ident: detail.ident, detail };
+  }
+  if (row.lat === null || row.lon === null) return null;
+  return { kind: "point", point: { ident: row.ident, name: row.name, lat: row.lat, lon: row.lon } };
+}
+
+/** Resolves one whitespace-separated route-string token (a fix, navaid,
+ * or airway ident) into a `RouteToken`, via the same exact-match lookup
+ * the manual search box uses for a typed result — reused here so a
+ * suggested route resolves identically to one built up by hand. `null`
+ * means this cycle's data has nothing under that exact ident (a route
+ * from a different AIRAC cycle, or a token this cycle simply doesn't
+ * carry) — the caller's job to decide what that should mean for applying
+ * the rest of the route. */
+async function resolveRouteToken(rawIdent: string): Promise<RouteToken | null> {
+  const ident = rawIdent.toUpperCase();
+  const rows = await searchIdents(ident);
+  const exact = rows.find((r) => r.ident === ident);
+  return exact ? identSearchRowToToken(exact) : null;
+}
+
+/** Tries to resolve `ident` as a named SID/STAR at `airportIcao` — the
+ * fallback when a route string's leading (SID, at the departure) or
+ * trailing (STAR, at the arrival) token isn't a plain fix/airway/navaid.
+ * Real preferred/coded-departure routes commonly end (or begin) with
+ * exactly this shape: "MERIT ROBUC3" into KBOS names the ROBUC3 STAR,
+ * entered via MERIT. Only tried after `resolveRouteToken` has already
+ * failed on this token (see `applySuggestion`) — a heuristic based on the
+ * ident's shape alone would misfire, since real waypoints ending in a
+ * digit exist too (this cycle alone has hundreds, e.g. "AAS1", "BBE2").
+ *
+ * `adjacentIdent` is the fix immediately next to this token in the route
+ * string, used to pick which of the procedure's named transitions
+ * matches what was actually filed. Falls back to the transition when the
+ * procedure has exactly one (nothing to disambiguate); returns `null`
+ * — a real, reportable failure — when there are several and none match,
+ * rather than guessing which one a route string that doesn't say was
+ * filed against. */
+async function resolveNamedProcedure(
+  airportIcao: string,
+  kind: "SID" | "STAR",
+  ident: string,
+  adjacentIdent: string | undefined,
+): Promise<ResolvedProcedureRef | null> {
+  const options = await fetchProcedureOptions(airportIcao, kind);
+  const procedure = options.find((p) => p.ident === ident);
+  if (!procedure) return null;
+  const detail = await fetchProcedureDetail(procedure.id);
+  const transitions = transitionOptions(detail);
+  const matched = adjacentIdent ? transitions.find((t) => t.ident === adjacentIdent) : undefined;
+  const chosen = matched ?? (transitions.length === 1 ? transitions[0] : undefined);
+  return chosen ? buildResolvedProcedure(airportIcao, kind, detail, chosen.id) : null;
+}
+
 /** The route builder: departure/arrival airports and an optional SID/
  * STAR are chosen explicitly (dedicated fields/buttons, not typed),
  * then fixes/navaids/airways in between via one unified search box —
@@ -1083,20 +1154,105 @@ function RouteBuilder({
   const { middleTokens } = route;
   const setMiddleTokens = (tokens: RouteToken[]) => onChange({ ...route, middleTokens: tokens });
 
+  // Suggested routings (DESIGN.md §9.3) once both airports are set — FAA
+  // NFDC Preferred Routes / ATCSCC Coded Departure Routes, baked into the
+  // cycle bundle at ETL time (see ff-etl's preferred_routes.rs). Neither
+  // is a clearance; presented as "here's what's commonly flown", not a
+  // guarantee. Refetches whenever either airport changes, including back
+  // to whatever it was — the point is showing what's on file for the
+  // *current* pair, not remembering a stale one.
+  const [suggestions, setSuggestions] = useState<PreferredRouteRow[]>([]);
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
+  const departureIdent = route.departure?.ident ?? null;
+  const arrivalIdent = route.arrival?.ident ?? null;
+  useEffect(() => {
+    if (!departureIdent || !arrivalIdent) {
+      setSuggestions([]);
+      setSuggestionsError(null);
+      return;
+    }
+    let cancelled = false;
+    fetchPreferredRoutes(departureIdent, arrivalIdent)
+      .then((rows) => {
+        if (!cancelled) {
+          setSuggestions(rows);
+          setSuggestionsError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setSuggestionsError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [departureIdent, arrivalIdent]);
+
+  // Applying a suggestion replaces the middle-fixes list wholesale rather
+  // than appending: a suggestion describes the *whole* route between the
+  // two airports, so combining it with whatever was there before would
+  // usually produce a route nobody meant to fly. All-or-nothing on
+  // resolution too — a route with one silently-dropped fix is worse than
+  // no route at all, since it looks complete but isn't.
+  const [applyingIndex, setApplyingIndex] = useState<number | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const applySuggestion = async (routeString: string, index: number) => {
+    const rawTokens = routeString.trim().length === 0 ? [] : routeString.trim().split(/\s+/);
+    setApplyingIndex(index);
+    setApplyError(null);
+    try {
+      // A filed route commonly ends in a named STAR ("MERIT ROBUC3" into
+      // an arrival) or starts with a named SID — neither is a plain
+      // fix/airway, so they're only ever looked for at the two ends,
+      // and only in IFR mode (VFR hides SID/STAR entirely elsewhere in
+      // this component, so there is nowhere to put one here either).
+      let resolvedSid: ResolvedProcedureRef | undefined;
+      let resolvedStar: ResolvedProcedureRef | undefined;
+      let middleRaw = rawTokens;
+
+      if (flightRules === "IFR" && route.departure && middleRaw.length > 0) {
+        const [first, second] = middleRaw;
+        const sid = (await resolveRouteToken(first)) ? null : await resolveNamedProcedure(route.departure.ident, "SID", first, second);
+        if (sid) {
+          resolvedSid = sid;
+          middleRaw = middleRaw.slice(sid.transitionIdent === second ? 2 : 1);
+        }
+      }
+      if (flightRules === "IFR" && route.arrival && middleRaw.length > 0) {
+        const last = middleRaw[middleRaw.length - 1];
+        const secondLast = middleRaw[middleRaw.length - 2];
+        const star = (await resolveRouteToken(last)) ? null : await resolveNamedProcedure(route.arrival.ident, "STAR", last, secondLast);
+        if (star) {
+          resolvedStar = star;
+          middleRaw = middleRaw.slice(0, star.transitionIdent === secondLast ? -2 : -1);
+        }
+      }
+
+      const resolved = await Promise.all(middleRaw.map(resolveRouteToken));
+      const badIndex = resolved.findIndex((t) => t === null);
+      if (badIndex !== -1) {
+        throw new Error(`"${middleRaw[badIndex]}" isn't in this cycle's data — route not applied`);
+      }
+      onChange({
+        ...route,
+        sid: resolvedSid ?? route.sid,
+        star: resolvedStar ?? route.star,
+        middleTokens: resolved as RouteToken[],
+      });
+    } catch (err) {
+      setApplyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApplyingIndex(null);
+    }
+  };
+
   const addResult = (row: IdentSearchRow) => {
     setQuery("");
     setResults([]);
-    if (row.kind === "airway") {
-      fetchAirwayDetail(row.ident)
-        .then((detail) => setMiddleTokens([...middleTokens, { kind: "airway", ident: detail.ident, detail }]))
-        .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-      return;
-    }
-    if (row.lat === null || row.lon === null) return;
-    setMiddleTokens([
-      ...middleTokens,
-      { kind: "point", point: { ident: row.ident, name: row.name, lat: row.lat, lon: row.lon } },
-    ]);
+    identSearchRowToToken(row)
+      .then((token) => {
+        if (token) setMiddleTokens([...middleTokens, token]);
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   };
   const removeAt = (i: number) => setMiddleTokens(middleTokens.filter((_, idx) => idx !== i));
   const moveUp = (i: number) => {
@@ -1148,6 +1304,53 @@ function RouteBuilder({
             resolved={route.star}
             onResolve={(star) => onChange({ ...route, star })}
           />
+        </div>
+      )}
+
+      {departureIdent && arrivalIdent && (
+        <div className="preferred-routes">
+          <h3>Suggested routes</h3>
+          <p className="hint">
+            From the FAA's Preferred Routes and Coded Departure Routes databases — what's commonly
+            filed between these two airports, not a clearance.
+          </p>
+          {suggestionsError && <p className="hint">couldn't load suggested routes: {suggestionsError}</p>}
+          {!suggestionsError && suggestions.length === 0 && (
+            <p className="hint">
+              No published route on file for {departureIdent}–{arrivalIdent}.
+            </p>
+          )}
+          {suggestions.length > 0 && (
+            <ul className="preferred-route-list">
+              {suggestions.map((s, i) => (
+                <li key={`${s.source}-${s.code ?? s.route_string}-${i}`}>
+                  <div className="preferred-route-summary">
+                    <span className="kind-badge">{s.source}</span>{" "}
+                    <strong>{s.route_string || "(direct)"}</strong>
+                    {s.route_type && <span className="airport-name"> · {s.route_type}</span>}
+                    {/* Rendered as filed, no unit appended — the FAA's
+                        own Altitude field mixes plain feet ("5000") with
+                        flight-level ranges ("FL180-FL230"), so a fixed
+                        "ft" suffix would be wrong on the latter. */}
+                    {s.altitude && <span className="airport-name"> · {s.altitude}</span>}
+                  </div>
+                  {s.aircraft && <p className="hint">{s.aircraft}</p>}
+                  {s.direction && <p className="hint">{s.direction}</p>}
+                  {s.code && (
+                    <p className="hint">
+                      CDR {s.code}
+                      {s.dep_fix ? ` via ${s.dep_fix}` : ""}
+                      {s.coordination_required === "Y" ? " · coordination required" : ""}
+                    </p>
+                  )}
+                  <button onClick={() => applySuggestion(s.route_string, i)} disabled={applyingIndex === i}>
+                    {applyingIndex === i ? "Resolving…" : "Use this route"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {applyError && <p className="hint route-warning">⚠ {applyError}</p>}
         </div>
       )}
 

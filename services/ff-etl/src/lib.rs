@@ -9,6 +9,7 @@ pub mod chart_prep;
 pub mod dtpp;
 pub mod fetch;
 pub mod pipeline;
+pub mod preferred_routes;
 pub mod publish;
 pub mod validate;
 

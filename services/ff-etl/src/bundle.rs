@@ -152,7 +152,11 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
     // anything else would fail the FK constraint at insert time (which
     // is exactly how this was discovered; a 5-airport region never hit
     // it).
-    let airport_icaos: HashSet<&str> = airports.iter().map(|a| a.icao.as_str()).collect();
+    // Owned rather than borrowed from `airports`: the NASR enrichment
+    // step below needs to mutate `airports` (backfilling `faa_id`) while
+    // this set is still alive for `frequencies.retain` afterward, which a
+    // borrow can't straddle.
+    let airport_icaos: HashSet<String> = airports.iter().map(|a| a.icao.clone()).collect();
     runway_ends.retain(|end| airport_icaos.contains(end.airport_icao.as_str()));
     leg_rows.retain(|row| airport_icaos.contains(row.airport_icao.as_str()));
 
@@ -213,8 +217,22 @@ pub fn build_bundle(source: &BundleSource, output_path: &Path) -> Result<BundleS
     }
 
     let mut frequencies = if let Some(nasr_dir) = &source.nasr_dir {
-        let (surfaces, frequencies) = load_nasr_enrichment(nasr_dir, icaos)?;
+        let (surfaces, frequencies, faa_ids) = load_nasr_enrichment(nasr_dir, icaos)?;
         apply_nasr_surfaces(&mut runways, &surfaces);
+        // NASR's ARPT_ID (the FAA 3-4 letter local identifier, e.g. "SFO"
+        // for KSFO) has no CIFP equivalent — extract_airport always
+        // leaves faa_id `None` (see ff-cifp) — so without this every
+        // domestic airport's faa_id sits empty despite the column
+        // existing and two call sites already querying it
+        // (routes/data.rs's search, routes/weather.rs's METAR lookup).
+        // Backfilled here rather than left to whichever inserts first,
+        // since this is the one place nationwide CIFP airports and their
+        // NASR-sourced identifier meet.
+        for a in &mut airports {
+            if let Some(faa_id) = faa_ids.get(a.icao.as_str()) {
+                a.faa_id = Some(faa_id.clone());
+            }
+        }
         frequencies
     } else {
         Vec::new()
@@ -586,6 +604,49 @@ pub struct AixmStats {
     pub airway_legs: usize,
 }
 
+/// Inserts suggested routings (`crate::preferred_routes::fetch_and_parse`)
+/// into an existing bundle — plain appends, since `orig_icao`/`dest_icao`
+/// were already resolved and validated against this same bundle's
+/// `airport` table by the caller, and there's no natural uniqueness key
+/// to dedupe on (the same city pair legitimately has many rows: one per
+/// altitude/aircraft/direction variant, or one per CDR reroute code).
+pub fn add_preferred_routes(
+    bundle_path: &Path,
+    routes: &[crate::preferred_routes::PreferredRoute],
+) -> Result<usize, BundleError> {
+    let mut conn = rusqlite::Connection::open(bundle_path)?;
+    let tx = conn.transaction()?;
+    for r in routes {
+        tx.execute(
+            "INSERT INTO preferred_route
+                 (source, orig_icao, dest_icao, route_string, route_type, altitude, aircraft,
+                  direction, area, code, dep_fix, coordination_required, nav_equipment,
+                  dep_artcc, arr_artcc, seq)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+            params![
+                r.source,
+                r.orig_icao,
+                r.dest_icao,
+                r.route_string,
+                r.route_type,
+                r.altitude,
+                r.aircraft,
+                r.direction,
+                r.area,
+                r.code,
+                r.dep_fix,
+                r.coordination_required,
+                r.nav_equipment,
+                r.dep_artcc,
+                r.arr_artcc,
+                r.seq,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(routes.len())
+}
+
 /// Inserts parsed non-US AIXM data (`crate::aixm::load`) into an existing
 /// bundle — the non-US analog of the FAA inserts in [`build_bundle`], run
 /// as a post-build step like `add_airspace` (DESIGN.md §3.1).
@@ -738,7 +799,7 @@ type SurfacesByAirportAndRunway = HashMap<(String, String), RunwaySurface>;
 fn load_nasr_enrichment(
     dir: &Path,
     icaos: &Option<HashSet<String>>,
-) -> Result<(SurfacesByAirportAndRunway, Vec<Frequency>), BundleError> {
+) -> Result<(SurfacesByAirportAndRunway, Vec<Frequency>, HashMap<String, String>), BundleError> {
     let airports = parse_apt_base(&fs::read(dir.join("APT_BASE.csv"))?)
         .map_err(|e| BundleError::Parse(format!("APT_BASE.csv: {e}")))?;
     let runways = parse_apt_runway(&fs::read(dir.join("APT_RWY.csv"))?)
@@ -799,7 +860,15 @@ fn load_nasr_enrichment(
         frequencies.extend(frequencies_for_airport(rows, arpt_id, icao));
     }
 
-    Ok((surfaces, frequencies))
+    // Inverted (icao -> arpt_id) for the caller to backfill `Airport.faa_id`
+    // — `wanted_airports` above is keyed the other way round because that's
+    // what joining runway/frequency rows needs.
+    let faa_ids: HashMap<String, String> = wanted_airports
+        .iter()
+        .map(|(arpt_id, icao)| (icao.clone(), arpt_id.clone()))
+        .collect();
+
+    Ok((surfaces, frequencies, faa_ids))
 }
 
 fn apply_nasr_surfaces(

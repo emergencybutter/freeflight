@@ -753,6 +753,93 @@ pub struct IdentSearchRow {
     pub lon: Option<f64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PreferredRouteRow {
+    pub source: String,
+    pub orig_icao: String,
+    pub dest_icao: String,
+    pub route_string: String,
+    pub route_type: Option<String>,
+    pub altitude: Option<String>,
+    pub aircraft: Option<String>,
+    pub direction: Option<String>,
+    pub area: Option<String>,
+    pub code: Option<String>,
+    pub dep_fix: Option<String>,
+    pub coordination_required: Option<String>,
+    pub nav_equipment: Option<String>,
+    pub dep_artcc: Option<String>,
+    pub arr_artcc: Option<String>,
+    pub seq: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PreferredRouteQuery {
+    pub from: String,
+    pub to: String,
+}
+
+/// Suggested routings between two airports, for the route builder's
+/// "Suggested routes" panel once both departure and arrival are set
+/// (DESIGN.md §9.3) — sourced at ETL time from the FAA's NFDC Preferred
+/// Routes Database and ATCSCC Coded Departure Routes database (see
+/// ff-etl's preferred_routes.rs). Neither is a clearance; the client is
+/// expected to present these as suggestions, not guarantees. Exact
+/// ICAO match only, case-insensitive — no nearby-airport fuzziness, since
+/// a preferred route for the wrong airport is worse than no suggestion.
+/// PFR rows sort first: they're what a pilot would normally file,
+/// whereas CDR is oriented at ATC-initiated reroutes.
+pub async fn preferred_routes(
+    State(state): State<AppState>,
+    Query(query): Query<PreferredRouteQuery>,
+) -> Response {
+    let from = query.from.trim().to_uppercase();
+    let to = query.to.trim().to_uppercase();
+    if from.is_empty() || to.is_empty() {
+        return Json(Vec::<PreferredRouteRow>::new()).into_response();
+    }
+    let result = with_bundle(&state, move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT source, orig_icao, dest_icao, route_string, route_type, altitude, aircraft,
+                    direction, area, code, dep_fix, coordination_required, nav_equipment,
+                    dep_artcc, arr_artcc, seq
+             FROM preferred_route
+             WHERE orig_icao = ?1 AND dest_icao = ?2
+             ORDER BY (source = 'PFR') DESC, id",
+        )?;
+        let mapped = stmt.query_map(rusqlite::params![from, to], |row| {
+            Ok(PreferredRouteRow {
+                source: row.get(0)?,
+                orig_icao: row.get(1)?,
+                dest_icao: row.get(2)?,
+                route_string: row.get(3)?,
+                route_type: row.get(4)?,
+                altitude: row.get(5)?,
+                aircraft: row.get(6)?,
+                direction: row.get(7)?,
+                area: row.get(8)?,
+                code: row.get(9)?,
+                dep_fix: row.get(10)?,
+                coordination_required: row.get(11)?,
+                nav_equipment: row.get(12)?,
+                dep_artcc: row.get(13)?,
+                arr_artcc: row.get(14)?,
+                seq: row.get(15)?,
+            })
+        })?;
+        let mut rows = Vec::new();
+        for r in mapped {
+            rows.push(r?);
+        }
+        Ok(rows)
+    })
+    .await;
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 /// Unified ident search across airports, waypoints, navaids, and airways
 /// for the route builder's single search box (DESIGN.md §9.3: "add
 /// fixes/navaids/airways in between"). Exact ident matches rank before

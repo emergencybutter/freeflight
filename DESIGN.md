@@ -993,6 +993,46 @@ Consequences:
   map in cyan with per-fix markers. Departure/arrival/middle fixes can
   also be set from the map's Airport/Waypoint tap tabs (§9.1) instead of
   this screen's own search fields — same route state either way.
+- **Suggested routes**, once both departure and arrival are set
+  (implemented on web): `GET /data/preferred_routes?from=ICAO&to=ICAO`
+  returns exact-match candidates from two FAA city-pair route databases,
+  baked into the cycle bundle at ETL time rather than queried live (see
+  `ff-etl`'s `preferred_routes.rs`, `crates/ff-storage`'s
+  `preferred_route` table) — same "no live external calls beyond
+  weather/NOTAMs" shape as every other data source here:
+  - **NFDC Preferred Routes** (`fly.faa.gov/rmt/nfdc_preferred_routes_database`,
+    "PFR") — filed altitude/aircraft-restricted routings (High/Low/TEC).
+    Orig/Dest are FAA 3-letter local identifiers for domestic airports
+    (no "K" prefix), resolved against a real `airport.faa_id` column —
+    which this feature is also what finally populated: NASR's `ARPT_ID`
+    was already being parsed for runway surfaces/frequencies, just never
+    backfilled onto the airport row itself, so `faa_id` sat empty for
+    every domestic airport despite two existing call sites
+    (`/data/search`, the METAR lookup) already querying it. A `NAR` route
+    type in the same file names an oceanic entry/exit fix as "Orig", not
+    an airport — dropped, nothing for a flight plan to match.
+  - **ATCSCC Coded Departure Routes**
+    (`fly.faa.gov/rmt/cdm_operational_coded_departur`, "CDR") —
+    pre-coordinated reroute strings, already keyed by full ICAO.
+  - A route string commonly ends (STAR) or starts (SID) with a named
+    procedure rather than a plain fix — e.g. "MERIT ROBUC3" into Boston
+    names the ROBUC3 arrival, entered via MERIT. The web client tries the
+    normal fix/airway/navaid lookup on the two end tokens first, falling
+    back to a real procedure lookup only on failure (a naming heuristic
+    would misfire: hundreds of real waypoints in a single cycle already
+    end in a digit, e.g. "AAS1"). On a match it sets `route.sid`/`star`
+    through the same path the manual SID/STAR pickers use, picking the
+    transition matching the adjacent fix or falling back to a procedure's
+    sole transition when it only has one. IFR-only, since VFR hides
+    SID/STAR entirely (§9.3 above) — applying a suggestion in VFR mode
+    that ends in a named procedure fails with an honest "not resolvable"
+    error rather than silently dropping the arrival portion.
+  - Considered and deferred: coded departure routes' own "coded" shorthand
+    beyond what's already exposed (`code`, `dep_fix`) needs no further
+    decoding, the database already stores the full route string. Belgium/
+    Netherlands-style per-state licence review doesn't apply here — both
+    sources are the FAA's own public-domain city-pair data, same tier as
+    NASR/CIFP.
 - VFR/IFR toggle (defaults VFR). Under VFR, the route is checked against
   real Class B/C/D + Special Use Airspace boundaries (client-side
   point-in-polygon/segment-intersection over whatever `/data/airspace`
