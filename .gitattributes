@@ -1,0 +1,17 @@
+# Force LF on checkout regardless of the client's core.autocrlf, so a
+# Windows checkout can't silently turn a tracked text file into CRLF.
+# `text=auto` lets git's own binary-detection heuristic exempt real
+# binaries (images, wasm, sqlite fixtures) from this.
+#
+# This exists because of a real outage: crates/ff-accounts/migrations/
+# 0001_init.sql got checked out as CRLF on a Windows machine with
+# core.autocrlf=true, and sqlx::migrate! embeds and SHA-384-checksums a
+# migration file's exact bytes at compile time. The CRLF build's checksum
+# didn't match what production's `_sqlx_migrations` had recorded from the
+# original (LF) apply, so ff-api correctly refused to proceed and fell
+# back to accounts disabled — a real user-facing "accounts are not
+# configured on this server" from a line-ending difference alone.
+# ff-storage's own SQLite migrations use a plain applied/not-applied
+# marker with no checksum, so they were never at risk the same way; this
+# guards the general case, not just the one file that broke.
+* text=auto eol=lf
