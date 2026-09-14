@@ -77,6 +77,27 @@ target. The default (`ff.abis` in `gradle.properties`) covers real devices
 and the emulator; add `armeabi-v7a` for a release that needs 32-bit
 hardware.
 
+### 16 KB page sizes
+
+Android devices are moving to 16 KB memory pages, and a native library laid
+out for 4 KB pages will not load on one. Nothing about a normal build tells
+you — it installs and runs everywhere else — so the build checks it, and
+fails on a library whose LOAD segments are aligned below 16 KB.
+
+This bit us once already: JNA 5.14 shipped a `libjnidispatch.so` that a
+Pixel reported as "RELRO segment not aligned", which is why the version
+catalog pins JNA far above the version uniffi actually requires. The Rust
+core needs two linker flags, not one — `max-page-size` aligns the segments
+and `common-page-size` pads the RELRO region — both set in `cargoBuild`.
+
+To inspect a library by hand:
+
+```sh
+$ANDROID_HOME/ndk/<ver>/toolchains/llvm/prebuilt/*/bin/llvm-readelf -l <lib>.so
+```
+
+Every `LOAD` line should show an alignment of `0x4000` or more.
+
 ## Running
 
 The app is useless until it has a cycle, and it gets one from `ff-api`:
