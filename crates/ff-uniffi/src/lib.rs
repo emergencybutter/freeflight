@@ -1,27 +1,354 @@
-//! UniFFI bindings over `ff-planning`/`ff-core` for the Android client
-//! (DESIGN.md §4, §5), mirroring `ff-wasm`'s surface for the web client so
-//! both bindings expose the same operations from one Rust core.
+//! UniFFI bindings over the freeflight Rust core for the Android client
+//! (DESIGN.md §4, §5).
+//!
+//! Android is the offline-capable client (§8), so this binding is wider
+//! than `ff-wasm`'s: as well as the shared planning math that both clients
+//! run, it owns the device's local cycle bundle — opening it, querying it,
+//! swapping in a newer one, and reading chart tiles out of the PMTiles
+//! archives installed beside it. The queries answer exactly what `ff-api`'s
+//! `/data/*` routes answer for web, from a file on the device instead of a
+//! file on a server, which is the whole difference between the two clients.
+//!
+//! What is *not* here: HTTP. Every byte this binding consumes was fetched
+//! by Kotlin (`ff-sync`'s `apply` module explains why) and handed over as a
+//! path. That keeps a second TLS stack and its root-certificate problem out
+//! of the `.so`, and leaves downloads where Android's foreground-service and
+//! progress-notification machinery can reach them.
 //!
 //! Uses UniFFI's proc-macro export mode (no `.udl` file). Kotlin bindings
-//! are generated from this crate with `uniffi-bindgen`.
+//! are generated from the built library with `uniffi-bindgen` — see
+//! `apps/android`'s Gradle wiring.
+
+mod charts;
+mod error;
+mod query;
+mod types;
+
+use charts::ChartCache;
+pub use error::CoreError;
+pub use types::*;
+
 use ff_planning::{
-    distance_nm as core_distance_nm, initial_bearing_deg as core_initial_bearing_deg,
+    distance_nm as core_distance_nm, initial_bearing_deg as core_initial_bearing_deg, plan_route,
+    AircraftProfile, RoutePoint, Wind,
 };
-use ff_planning::{plan_route, AircraftProfile, RoutePoint, Wind};
+use ff_sync::{apply_downloaded_bundle, prune_superseded_cycles, BundleLayout};
+use rusqlite::Connection;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 uniffi::setup_scaffolding!();
 
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum PlanningError {
-    #[error("invalid points JSON: {0}")]
-    InvalidPoints(String),
-    #[error("invalid profile JSON: {0}")]
-    InvalidProfile(String),
-    #[error("invalid winds JSON: {0}")]
-    InvalidWinds(String),
-    #[error("failed to serialize result: {0}")]
-    Serialize(String),
+/// The app's handle on everything stored for it on this device.
+///
+/// One instance per process, constructed with the app's private files
+/// directory. It is `Send + Sync` and every method takes `&self`, so Kotlin
+/// can hold a single instance and call it from any dispatcher; the state
+/// behind it (an open SQLite connection and any open chart archives) sits
+/// behind one mutex, since SQLite reads here are single-milliseconds and
+/// not worth a connection pool.
+#[derive(uniffi::Object)]
+pub struct Freeflight {
+    layout: BundleLayout,
+    state: Mutex<State>,
 }
+
+#[derive(Default)]
+struct State {
+    /// The open bundle and the cycle it belongs to, so a cycle swapped in
+    /// while the app is running is picked up without a restart.
+    db: Option<(String, Connection)>,
+    charts: ChartCache,
+}
+
+#[uniffi::export]
+impl Freeflight {
+    /// `data_dir` is the app's private files directory (Kotlin:
+    /// `context.filesDir`). Nothing is opened or created here — a first run
+    /// with no cycle downloaded is a normal state, not a failure.
+    #[uniffi::constructor]
+    pub fn new(data_dir: String) -> Arc<Self> {
+        Arc::new(Self {
+            layout: BundleLayout::new(PathBuf::from(data_dir)),
+            state: Mutex::new(State::default()),
+        })
+    }
+
+    // ---- cycle lifecycle -------------------------------------------------
+
+    /// What the app is flying on, or `None` before the first sync. The UI
+    /// is required to show this (§11: never let a pilot mistake stale data
+    /// for current), so it reads the counts and the effective date out of
+    /// the bundle itself rather than trusting the directory name.
+    pub fn current_cycle(&self) -> Option<CycleInfo> {
+        let cycle_id = self.layout.current_cycle_id()?;
+        let bundle_bytes = fs::metadata(self.layout.bundle_path(&cycle_id))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let mut state = self.state.lock().ok()?;
+        let conn = self.connection(&mut state).ok()?;
+        Some(CycleInfo {
+            effective_date: query::cycle_effective_date(conn),
+            airport_count: query::count(conn, "airport"),
+            procedure_count: query::count(conn, "procedure"),
+            installed_chart_ids: self.installed_chart_ids(&cycle_id),
+            cycle_id,
+            bundle_bytes,
+        })
+    }
+
+    /// Parse a `GET /cycles/latest` body. Deliberately Rust's job: the wire
+    /// type is `ff_sync::CycleManifest`, the same type `ff-api` serializes,
+    /// so the two cannot disagree about the shape — §4.1 records that they
+    /// silently did once.
+    pub fn parse_manifest(&self, json: String) -> Result<CycleManifest, CoreError> {
+        let manifest: ff_sync::CycleManifest =
+            serde_json::from_str(&json).map_err(|e| CoreError::InvalidManifest(e.to_string()))?;
+        Ok(CycleManifest {
+            cycle_id: manifest.cycle_id,
+            sqlite_url: manifest.sqlite_url,
+            sqlite_sha256: manifest.sqlite_sha256,
+        })
+    }
+
+    /// Whether `cycle_id` is worth downloading — i.e. newer than whatever
+    /// is installed. `true` on a fresh install.
+    pub fn is_update_available(&self, cycle_id: String) -> bool {
+        ff_sync::is_newer(self.layout.current_cycle_id().as_deref(), &cycle_id)
+    }
+
+    /// Directory Kotlin should download into. Inside the app's data root on
+    /// purpose: a finished download is then `rename`d into place instead of
+    /// copied, which for a ~145MB bundle is the difference between instant
+    /// and visibly slow.
+    pub fn downloads_dir(&self) -> Result<String, CoreError> {
+        let dir = self.layout.downloads_dir();
+        fs::create_dir_all(&dir).map_err(|e| CoreError::Sync(e.to_string()))?;
+        Ok(dir.display().to_string())
+    }
+
+    /// Verify a downloaded bundle and make it the active cycle. The open
+    /// connection is dropped first so the swap never races a read, and
+    /// reopening on the next query picks up the new file.
+    pub fn apply_cycle(
+        &self,
+        cycle_id: String,
+        downloaded_path: String,
+        sha256: String,
+    ) -> Result<(), CoreError> {
+        let mut state = self.lock()?;
+        state.db = None;
+        state.charts.forget_all();
+        apply_downloaded_bundle(
+            &self.layout,
+            &cycle_id,
+            Path::new(&downloaded_path),
+            &sha256,
+        )?;
+        Ok(())
+    }
+
+    /// Delete cycles older than the active one and the charts installed
+    /// alongside them; returns the bytes reclaimed.
+    pub fn prune_old_cycles(&self) -> Result<u64, CoreError> {
+        let mut state = self.lock()?;
+        state.charts.forget_all();
+        Ok(prune_superseded_cycles(&self.layout)?)
+    }
+
+    // ---- charts ----------------------------------------------------------
+
+    /// Every chart this cycle catalogues, each marked with whether its
+    /// PMTiles archive is already on the device.
+    pub fn charts(&self) -> Result<Vec<Chart>, CoreError> {
+        let cycle_id = self.require_cycle()?;
+        let mut state = self.lock()?;
+        let mut charts = query::charts(self.connection(&mut state)?)?;
+        for chart in &mut charts {
+            let path = self.layout.chart_path(&cycle_id, &chart.id);
+            if let Ok(meta) = fs::metadata(&path) {
+                chart.installed = true;
+                chart.installed_bytes = meta.len();
+                if let Some(range) = charts::zoom_range(&path) {
+                    chart.min_zoom = range.min;
+                    chart.max_zoom = range.max;
+                }
+            }
+        }
+        Ok(charts)
+    }
+
+    /// Move a downloaded PMTiles archive into place for the active cycle.
+    /// No checksum: unlike the bundle, `ff-api` publishes no digest for
+    /// chart files, and a damaged archive degrades to missing tiles rather
+    /// than to wrong data — so it is caught at read time and reported, not
+    /// guarded here with a check that would have nothing to compare against.
+    pub fn install_chart(
+        &self,
+        chart_id: String,
+        downloaded_path: String,
+    ) -> Result<(), CoreError> {
+        let cycle_id = self.require_cycle()?;
+        let target = self
+            .layout
+            .chart_path(&cycle_id, &sanitize_chart_id(&chart_id)?);
+        let parent = target.parent().expect("chart path always has a parent");
+        fs::create_dir_all(parent).map_err(|e| CoreError::Chart(e.to_string()))?;
+        let mut state = self.lock()?;
+        state.charts.forget(&chart_id);
+        fs::rename(Path::new(&downloaded_path), &target)
+            .map_err(|e| CoreError::Chart(format!("installing {chart_id}: {e}")))?;
+        Ok(())
+    }
+
+    pub fn remove_chart(&self, chart_id: String) -> Result<(), CoreError> {
+        let cycle_id = self.require_cycle()?;
+        let target = self
+            .layout
+            .chart_path(&cycle_id, &sanitize_chart_id(&chart_id)?);
+        let mut state = self.lock()?;
+        state.charts.forget(&chart_id);
+        match fs::remove_file(&target) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(CoreError::Chart(format!("removing {chart_id}: {e}"))),
+        }
+    }
+
+    /// PNG bytes for one raster tile, or `null` where this chart has no
+    /// tile there — which is the common case at the edges of a sectional
+    /// and must not read as an error.
+    pub fn chart_tile(
+        &self,
+        chart_id: String,
+        z: u8,
+        x: u32,
+        y: u32,
+    ) -> Result<Option<Vec<u8>>, CoreError> {
+        let cycle_id = self.require_cycle()?;
+        let safe_id = sanitize_chart_id(&chart_id)?;
+        let path = self.layout.chart_path(&cycle_id, &safe_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let mut state = self.lock()?;
+        state.charts.tile(&chart_id, &path, z, x as u64, y as u64)
+    }
+
+    // ---- cycle queries ---------------------------------------------------
+
+    pub fn airports_in_bbox(
+        &self,
+        bbox: BoundingBox,
+        limit: u32,
+    ) -> Result<Vec<Airport>, CoreError> {
+        self.with_db(|conn| query::airports_in_bbox(conn, bbox, limit))
+    }
+
+    pub fn search(&self, query_text: String, limit: u32) -> Result<Vec<SearchHit>, CoreError> {
+        self.with_db(|conn| query::search(conn, &query_text, limit))
+    }
+
+    pub fn airport(&self, icao: String) -> Result<AirportDetail, CoreError> {
+        self.with_db(|conn| query::airport_detail(conn, &icao))
+    }
+
+    pub fn airport_procedures(&self, icao: String) -> Result<Vec<Procedure>, CoreError> {
+        self.with_db(|conn| query::airport_procedures(conn, &icao))
+    }
+
+    pub fn procedure(&self, id: String) -> Result<ProcedureDetail, CoreError> {
+        self.with_db(|conn| query::procedure_detail(conn, &id))
+    }
+
+    pub fn airspace_in_bbox(&self, bbox: BoundingBox) -> Result<Vec<Airspace>, CoreError> {
+        self.with_db(|conn| query::airspace_in_bbox(conn, bbox))
+    }
+
+    pub fn attributions(&self) -> Result<Vec<DataSourceCredit>, CoreError> {
+        self.with_db(query::attributions)
+    }
+
+    // ---- internals -------------------------------------------------------
+}
+
+impl Freeflight {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, CoreError> {
+        self.state
+            .lock()
+            .map_err(|_| CoreError::Database("core state lock was poisoned".to_string()))
+    }
+
+    fn require_cycle(&self) -> Result<String, CoreError> {
+        self.layout.current_cycle_id().ok_or(CoreError::NoCycle)
+    }
+
+    fn with_db<T>(
+        &self,
+        run: impl FnOnce(&Connection) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let mut state = self.lock()?;
+        let conn = self.connection(&mut state)?;
+        run(conn)
+    }
+
+    /// The open bundle, opening (or reopening) it if the active cycle has
+    /// changed under us. Re-checking the marker per call is one small file
+    /// read, and it is what lets a sync finishing in the background become
+    /// visible to the next query without restarting the app.
+    fn connection<'a>(&self, state: &'a mut State) -> Result<&'a Connection, CoreError> {
+        let cycle_id = self.require_cycle()?;
+        let stale = !matches!(&state.db, Some((open_id, _)) if *open_id == cycle_id);
+        if stale {
+            let path = self.layout.bundle_path(&cycle_id);
+            // Through `ff-storage` rather than rusqlite directly, so the
+            // client-local tables (§6's aircraft/route/track tables, below
+            // the bundle marker) exist even in a bundle published before
+            // the migration that added them.
+            let conn = ff_storage::open(&path.display().to_string())
+                .map_err(|e| CoreError::Database(e.to_string()))?;
+            state.db = Some((cycle_id, conn));
+        }
+        Ok(&state.db.as_ref().expect("opened just above").1)
+    }
+
+    fn installed_chart_ids(&self, cycle_id: &str) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(self.layout.charts_dir(cycle_id)) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .strip_suffix(".pmtiles")
+                    .map(str::to_string)
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+}
+
+/// Chart ids come from `chart_catalog` and become filenames, so they get
+/// the same treatment cycle ids get in `ff-sync`: checked, not sanitized.
+/// `ff-etl` writes ids like `2026-07-09-seattle`.
+fn sanitize_chart_id(chart_id: &str) -> Result<String, CoreError> {
+    let ok = !chart_id.is_empty()
+        && chart_id.len() <= 128
+        && chart_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if ok {
+        Ok(chart_id.to_string())
+    } else {
+        Err(CoreError::Chart(format!("unusable chart id {chart_id:?}")))
+    }
+}
+
+// ---- shared planning math (mirrors `ff-wasm`'s surface) ------------------
 
 #[uniffi::export]
 pub fn distance_nm(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
@@ -47,13 +374,16 @@ pub fn plan_route_json(
     profile_json: String,
     winds_json: String,
     decimal_year: f64,
-) -> Result<String, PlanningError> {
-    let points: Vec<RoutePoint> = serde_json::from_str(&points_json)
-        .map_err(|e| PlanningError::InvalidPoints(e.to_string()))?;
+) -> Result<String, CoreError> {
+    let points: Vec<RoutePoint> =
+        serde_json::from_str(&points_json).map_err(|e| CoreError::InvalidPoints(e.to_string()))?;
     let profile: AircraftProfile = serde_json::from_str(&profile_json)
-        .map_err(|e| PlanningError::InvalidProfile(e.to_string()))?;
-    let winds: Vec<Option<Wind>> = serde_json::from_str(&winds_json)
-        .map_err(|e| PlanningError::InvalidWinds(e.to_string()))?;
+        .map_err(|e| CoreError::InvalidProfile(e.to_string()))?;
+    let winds: Vec<Option<Wind>> =
+        serde_json::from_str(&winds_json).map_err(|e| CoreError::InvalidWinds(e.to_string()))?;
     let summary = plan_route(&points, &profile, Some(&winds), decimal_year);
-    serde_json::to_string(&summary).map_err(|e| PlanningError::Serialize(e.to_string()))
+    serde_json::to_string(&summary).map_err(|e| CoreError::Serialize(e.to_string()))
 }
+
+#[cfg(test)]
+mod tests;

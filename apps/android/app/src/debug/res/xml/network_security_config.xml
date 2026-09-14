@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds only. A developer commonly runs ff-api on their laptop and
+  the app on a real device over the LAN, which is plain HTTP to an
+  arbitrary private address — the release config deliberately refuses
+  that, and this overlay allows it while debugging. It is not merged into
+  a release APK.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

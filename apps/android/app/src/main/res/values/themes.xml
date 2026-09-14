@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose owns the real theming (see ui/Theme.kt); this exists only
+         so the window itself starts out the right colour and without an
+         action bar. -->
+    <style name="Theme.Freeflight" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ff_background</item>
+        <item name="android:statusBarColor">@color/ff_background</item>
+        <item name="android:navigationBarColor">@color/ff_background</item>
+    </style>
+</resources>

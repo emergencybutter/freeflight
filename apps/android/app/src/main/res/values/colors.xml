@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The chart-surround colour, matching MapStyle's background layer so
+         the window behind the map never flashes a different shade while
+         the map surface is coming up. -->
+    <color name="ff_background">#FF0E1116</color>
+    <color name="ff_accent">#FF4FC3F7</color>
+</resources>

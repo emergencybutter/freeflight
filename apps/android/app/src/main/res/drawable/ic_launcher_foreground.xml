@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A course rose: the compass ring an EFB's chart view is read against,
+  with the aircraft's track up. Drawn inside the 72dp safe circle of the
+  108dp adaptive-icon canvas so no mask crops it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Compass ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#4FC3F7"
+        android:strokeWidth="3"
+        android:pathData="M54,28 A26,26 0 1,1 53.9,28" />
+
+    <!-- Cardinal ticks -->
+    <path
+        android:strokeColor="#4FC3F7"
+        android:strokeWidth="3"
+        android:pathData="M54,22 L54,30 M54,78 L54,86 M22,54 L30,54 M78,54 L86,54" />
+
+    <!-- Aircraft silhouette, track up -->
+    <path
+        android:fillColor="#E8F4FB"
+        android:pathData="M54,36 L58,52 L74,60 L74,65 L58,61 L57,72 L62,76 L62,79 L54,77 L46,79 L46,76 L51,72 L50,61 L34,65 L34,60 L50,52 Z" />
+</vector>

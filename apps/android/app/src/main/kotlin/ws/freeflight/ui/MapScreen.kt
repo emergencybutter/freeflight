@@ -1,0 +1,439 @@
+package ws.freeflight.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import uniffi.ff_uniffi.BoundingBox
+import uniffi.ff_uniffi.ProcedureDetail
+import ws.freeflight.map.ChartLayer
+import ws.freeflight.map.ChartMap
+import ws.freeflight.map.GeoJson
+import ws.freeflight.map.MapController
+
+/**
+ * The chart view: the screen this app exists for.
+ *
+ * Chrome is kept to the edges and translucent — everything overlaid here is
+ * covering a chart the pilot is trying to read.
+ */
+@Composable
+fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
+    val controller = remember { MapController() }
+    val mapState by viewModel.map.collectAsState()
+    val cycle by viewModel.cycle.collectAsState()
+    val selectedChartId by viewModel.settings.selectedChartId.collectAsState()
+    val charts by viewModel.charts.collectAsState()
+    val airport by viewModel.airport.collectAsState()
+    val procedure by viewModel.procedure.collectAsState()
+
+    LaunchedEffect(controller) {
+        controller.onViewportChanged = viewModel::onViewportChanged
+        controller.onAirportTapped = { icao ->
+            if (icao != null) viewModel.openAirport(icao) else viewModel.closeAirport()
+        }
+    }
+
+    // The chart layer follows the selection, but only once the chart is
+    // actually installed — pointing a raster source at an archive that
+    // isn't there produces a screenful of 404s rather than an empty map.
+    val selectedChart = charts.firstOrNull { it.id == selectedChartId && it.installed }
+    LaunchedEffect(selectedChart?.id, selectedChart?.maxZoom) {
+        controller.setChart(
+            selectedChart?.let {
+                ChartLayer(
+                    tileUrlTemplate = viewModel.tileUrlTemplate(it.id),
+                    minZoom = it.minZoom.toInt(),
+                    maxZoom = it.maxZoom.toInt(),
+                )
+            }
+        )
+    }
+    LaunchedEffect(mapState.airports, mapState.flightCategories) {
+        controller.setAirports(GeoJson.airports(mapState.airports, mapState.flightCategories))
+    }
+    LaunchedEffect(mapState.airspace) {
+        controller.setAirspace(GeoJson.airspace(mapState.airspace))
+    }
+    LaunchedEffect(procedure) {
+        controller.setProcedure(procedure?.let(GeoJson::procedure) ?: GeoJson.empty)
+        // A STAR can begin a hundred miles from the field, so drawing it
+        // without moving the camera usually means drawing it off-screen.
+        procedure?.extent()?.let { controller.fitBounds(it, sheetCoversBottomHalf = true) }
+    }
+
+    Box(modifier.fillMaxSize()) {
+        ChartMap(controller, Modifier.fillMaxSize())
+
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            SearchBar(viewModel, controller)
+            Spacer(Modifier.width(8.dp))
+            CycleStatusLine(
+                cycleLabel = cycle?.let { info ->
+                    "Cycle ${info.effectiveDate ?: info.cycleId}"
+                } ?: "No cycle downloaded",
+                weatherLabel = mapState.weatherFetchedAtMillis?.let { "Wx ${formatAge(it)}" },
+                // Only once there is data to zoom in on — with no cycle
+                // installed the reason the map is empty is a different
+                // one, and the card in the middle already says it.
+                zoomedOutTooFar = mapState.zoomedOutTooFar && cycle != null,
+            )
+        }
+
+        MapControls(
+            viewModel = viewModel,
+            charts = charts,
+            selectedChartId = selectedChartId,
+            weatherLoading = mapState.weatherLoading,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(12.dp),
+        )
+
+        if (cycle == null) {
+            NoCycleCard(Modifier.align(Alignment.Center).padding(24.dp))
+        }
+
+        mapState.message?.let { message ->
+            MessageBar(
+                message = message,
+                onDismiss = viewModel::dismissMessage,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+            )
+        }
+
+        airport?.let { state ->
+            AirportSheet(
+                state = state,
+                onDismiss = viewModel::closeAirport,
+                onRefreshWeather = { viewModel.fetchAirportWeather(state.detail.airport.icao) },
+                onProcedureSelected = { id ->
+                    viewModel.openProcedure(id)
+                    viewModel.closeAirport()
+                },
+                onShowOnMap = {
+                    controller.flyTo(state.detail.airport.lat, state.detail.airport.lon)
+                },
+            )
+        }
+
+        procedure?.let { detail ->
+            ProcedureSheet(detail = detail, onDismiss = viewModel::closeProcedure)
+        }
+    }
+}
+
+@Composable
+private fun SearchBar(viewModel: FreeflightViewModel, controller: MapController) {
+    var query by remember { mutableStateOf("") }
+    val results by viewModel.searchResults.collectAsState()
+
+    Column {
+        TextField(
+            value = query,
+            onValueChange = {
+                query = it
+                viewModel.onSearchQueryChanged(it)
+            },
+            singleLine = true,
+            placeholder = { Text("Airport, navaid or fix") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = {
+                        query = ""
+                        viewModel.clearSearch()
+                    }) { Icon(Icons.Default.Clear, contentDescription = "Clear search") }
+                }
+            },
+            shape = RoundedCornerShape(12.dp),
+            colors = TextFieldDefaults.colors(
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        if (results.isNotEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
+                ),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
+            ) {
+                LazyColumn {
+                    items(results, key = { "${it.kind}:${it.ident}" }) { hit ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    query = ""
+                                    viewModel.clearSearch()
+                                    controller.flyTo(hit.lat, hit.lon)
+                                    if (hit.kind == "airport") viewModel.openAirport(hit.ident)
+                                }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                hit.ident,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.width(72.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                hit.name?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                                Text(
+                                    hit.kind.replaceFirstChar(Char::titlecase),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Cycle currency and briefing age, always visible.
+ *
+ * This is the §11 requirement made literal: the AIRAC cycle in use and the
+ * age of the last weather fetch are never more than a glance away, so stale
+ * data cannot quietly pass for current.
+ */
+@Composable
+private fun CycleStatusLine(
+    cycleLabel: String,
+    weatherLabel: String?,
+    zoomedOutTooFar: Boolean,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.padding(top = 8.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Text(cycleLabel, style = MaterialTheme.typography.labelMedium)
+            weatherLabel?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (zoomedOutTooFar) {
+                Text(
+                    "Zoom in for airports",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapControls(
+    viewModel: FreeflightViewModel,
+    charts: List<uniffi.ff_uniffi.Chart>,
+    selectedChartId: String?,
+    weatherLoading: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var layersOpen by remember { mutableStateOf(false) }
+    val showAirspace by viewModel.settings.showAirspace.collectAsState()
+    val showAirports by viewModel.settings.showAirports.collectAsState()
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box {
+            FilledTonalIconButton(onClick = { layersOpen = true }) {
+                Icon(Icons.Default.Layers, contentDescription = "Layers")
+            }
+            DropdownMenu(expanded = layersOpen, onDismissRequest = { layersOpen = false }) {
+                Text(
+                    "Chart",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                DropdownMenuItem(
+                    text = { Text("No chart") },
+                    onClick = {
+                        viewModel.settings.setSelectedChartId(null)
+                        layersOpen = false
+                    },
+                    trailingIcon = { if (selectedChartId == null) Text("✓") },
+                )
+                // Only what is actually on the device: an uninstalled chart
+                // offered here would draw nothing and look broken. The Data
+                // tab is where charts are downloaded.
+                charts.filter { it.installed }.forEach { chart ->
+                    DropdownMenuItem(
+                        text = { Text(chart.name) },
+                        onClick = {
+                            viewModel.settings.setSelectedChartId(chart.id)
+                            layersOpen = false
+                        },
+                        trailingIcon = { if (selectedChartId == chart.id) Text("✓") },
+                    )
+                }
+                if (charts.none { it.installed }) {
+                    Text(
+                        "No charts downloaded — see the Data tab",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Airports") },
+                    onClick = {
+                        viewModel.settings.setShowAirports(!showAirports)
+                        viewModel.refreshViewport()
+                    },
+                    trailingIcon = { Switch(checked = showAirports, onCheckedChange = null) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Airspace") },
+                    onClick = {
+                        viewModel.settings.setShowAirspace(!showAirspace)
+                        viewModel.refreshViewport()
+                    },
+                    trailingIcon = { Switch(checked = showAirspace, onCheckedChange = null) },
+                )
+            }
+        }
+
+        FilledTonalIconButton(onClick = viewModel::refreshVisibleWeather) {
+            if (weatherLoading) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(Icons.Default.Cloud, contentDescription = "Refresh weather")
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoCycleCard(modifier: Modifier = Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("No aeronautical data yet", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Download a cycle from the Data tab to use charts, airports and " +
+                    "procedures offline.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MessageBar(message: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(10.dp),
+        modifier = modifier,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        ) {
+            Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, false))
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Clear, contentDescription = "Dismiss")
+            }
+        }
+    }
+}
+
+/**
+ * The geographic extent of a procedure's resolvable fixes, or null when
+ * fewer than two of them resolved to a coordinate — a one-point "extent"
+ * is not something to frame the camera on.
+ *
+ * Padded slightly so the outermost fixes do not sit exactly on the edge of
+ * the screen.
+ */
+private fun ProcedureDetail.extent(): BoundingBox? {
+    val points = transitions
+        .flatMap { it.legs }
+        .mapNotNull { leg ->
+            val lat = leg.lat ?: return@mapNotNull null
+            val lon = leg.lon ?: return@mapNotNull null
+            lat to lon
+        }
+    if (points.size < 2) return null
+    val margin = 0.05
+    return BoundingBox(
+        minLat = points.minOf { it.first } - margin,
+        minLon = points.minOf { it.second } - margin,
+        maxLat = points.maxOf { it.first } + margin,
+        maxLon = points.maxOf { it.second } + margin,
+    )
+}
+
+/** A flight-category dot, in the colours every other briefing product uses. */
+@Composable
+fun FlightCategoryDot(category: String?, modifier: Modifier = Modifier) {
+    val color = when (category?.uppercase()) {
+        "VFR" -> Color(0xFF4CAF50)
+        "MVFR" -> Color(0xFF2196F3)
+        "IFR" -> Color(0xFFF44336)
+        "LIFR" -> Color(0xFFE040FB)
+        else -> Color(0xFF9E9E9E)
+    }
+    Box(modifier.size(10.dp).background(color, RoundedCornerShape(5.dp)))
+}

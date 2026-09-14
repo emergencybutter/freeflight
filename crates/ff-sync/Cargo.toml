@@ -6,12 +6,23 @@ license.workspace = true
 publish.workspace = true
 description = "Cycle bundle discovery/download/verify for offline sync (DESIGN.md §8)."
 
+[features]
+# The reqwest-based manifest/bundle HTTP client. Off by default because
+# the crate's main consumer is now `ff-uniffi` (the Android client), which
+# does its byte transfers in Kotlin/OkHttp — see `client.rs`'s module docs
+# — and pulling reqwest+rustls into the Android `.so` for code nothing
+# calls costs build time and NDK cross-compilation risk for nothing.
+# `ff-api` only uses `manifest`/`checksum`, so nothing in-tree needs this
+# today; it stays available for a Rust-side caller that wants it.
+client = ["dep:reqwest"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 thiserror.workspace = true
 sha2 = "0.10"
 
 [dev-dependencies]
 tokio.workspace = true
+tempfile = "3"

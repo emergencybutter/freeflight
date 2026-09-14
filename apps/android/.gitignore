@@ -1,0 +1,7 @@
+# Local machine paths; never committed.
+local.properties
+.gradle/
+build/
+.idea/
+*.iml
+.cxx/

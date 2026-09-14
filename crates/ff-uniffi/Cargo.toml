@@ -4,13 +4,32 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "UniFFI (Kotlin) bindings over ff-core/ff-planning for the Android client."
+description = "UniFFI (Kotlin) bindings over the freeflight core for the Android client."
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# Pulls in uniffi's CLI so `uniffi-bindgen` can be built and run to
+# generate the Kotlin bindings (see the `uniffi-bindgen` bin target and
+# apps/android's Gradle wiring). Off by default so the Android `.so`
+# doesn't carry an argument parser it never calls.
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
 [dependencies]
 ff-planning.workspace = true
+ff-sync.workspace = true
+ff-storage.workspace = true
+rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+pmtiles2 = "0.3"
 uniffi = "0.28"
+
+[dev-dependencies]
+tempfile = "3"

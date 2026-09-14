@@ -565,7 +565,7 @@ Implemented today:
 | `GET /weather/windtemp?level=&fcst=&region=` | both clients | parsed `WindsAloftBulletin`, each station's ident additionally resolved to a `lat`/`lon` against the current cycle bundle (best-effort — the raw NWS product only carries idents; used for the route builder's nearest-station wind lookup, §9.3) |
 | `GET /notams?location=ICAO` | both clients | raw NOTAM JSON (501 until credentials exist — risk [notam-api]) |
 | `GET /dtpp/plate?url=` | web (`PlateViewer`) | proxies a single FAA d-TPP plate PDF byte-for-byte (`Content-Type: application/pdf`) — `url` must start with `https://aeronav.faa.gov/d-tpp/` (checked server-side; otherwise 400) so this can't be turned into an open proxy. Exists because `pdf.js` needs to fetch the PDF's bytes itself for highlighter annotation (§9.1), and aeronav.faa.gov sends no CORS headers, so a direct browser fetch is blocked |
-| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256). `pmtiles_url`/`sha256` are always `None`: a nationwide cycle publishes one PMTiles file per sectional, which this single-chart shape can't represent (see `/data/charts` for the real list) — revisit once Android needs multi-chart offline sync |
+| `GET /cycles/latest` | Android sync | `CycleManifest` (cycle id, bundle URL, sha256). `pmtiles_url`/`sha256` are always `None`: a nationwide cycle publishes one PMTiles file per sectional, which this single-chart shape can't represent. Resolved rather than outstanding — Android syncs charts from the `chart_catalog` rows in the bundle it just installed, downloading each archive on demand from its `tile_url` (below), because which charts a given device wants is a decision for the pilot, not something a manifest should presume |
 | `GET /bundles/:id/cycle.sqlite` | Android sync | raw SQLite bytes (static file service, Range-capable) |
 | `GET /bundles/:id/chart-<sectional>.pmtiles` | both clients | one sectional's chart tiles, one file per `chart_catalog` row — PMTiles is fetched via HTTP Range requests (web reads it directly through MapLibre's pmtiles protocol) |
 | `GET /data/airports?bbox=` | web | airports (optionally filtered to a bounding box) |
@@ -617,7 +617,12 @@ freeflight/
                         for the web client (ff-postflight bindings come
                         with Phase 3; no ff-sync binding — nothing local
                         to sync, see §8)
-    ff-uniffi/          UniFFI bindings (Kotlin) for the Android client
+    ff-uniffi/          UniFFI bindings (Kotlin) for the Android client:
+                        the shared planning math (mirroring ff-wasm), plus
+                        the on-device half of §8 — opening and querying
+                        the local cycle bundle, applying a downloaded one,
+                        and reading chart tiles out of local PMTiles
+                        archives
   services/
     ff-api/             axum server: weather/NOTAM proxy+cache, cycle
                         bundle hosting (Android's offline sync), JSON
@@ -637,7 +642,10 @@ freeflight/
                         loads ff-uniffi, on-device SQLite (via the same
                         ff-storage schema, driven through Rust) — the
                         one offline-capable client (§8); syncs cycles
-                        via ff-uniffi bindings over ff-sync
+                        via ff-uniffi bindings over ff-sync, and serves
+                        local PMTiles chart tiles to MapLibre through an
+                        in-app loopback HTTP server (the Android SDK has
+                        no pmtiles protocol hook the way GL JS does)
   docs/
     DESIGN.md            (this file)
 ```
@@ -803,12 +811,18 @@ Consequences:
 - **Android** owns a local SQLite database — the same `ff-storage`
   schema opened directly with `rusqlite` inside the UniFFI core. On app
   start (or manually), it checks `ff-api /cycles/latest` for a newer
-  cycle id; if found, downloads the new SQLite + PMTiles bundle in the
-  background (resumable, range-request friendly) via `ff-sync`, verifies
-  a checksum, and swaps it in atomically. The previous cycle stays usable
-  until the swap completes, so the app is never mid-download-unusable.
-  Charts/procedures/airports work fully offline once a cycle is
-  downloaded; so does route planning. Flight tracking (GPS logging) is
+  cycle id; if found, it downloads the new SQLite bundle in the
+  background (resumable with a `Range` request), verifies its checksum,
+  and swaps it in atomically. The transfer runs in Kotlin and
+  `ff-sync::apply` does the verify and the swap — see that module's docs
+  for why the split falls there. The previous cycle stays usable until
+  the swap completes, so the app is never mid-download-unusable. Chart
+  PMTiles archives are downloaded separately, per chart, from the
+  `chart_catalog` rows of the installed bundle: a nationwide cycle
+  publishes over a hundred of them at a couple of hundred MB each, so
+  which ones a device carries is the pilot's choice, not the manifest's.
+  Charts/procedures/airports work fully offline once a cycle (and a chart
+  covering the area) is downloaded; so does route planning. Flight tracking (GPS logging) is
   inherently offline-capable.
 - **Web** has no local database and no `ff-sync`/`ff-wasm` sync bindings
   — there's nothing to keep offline-durable. It fetches whatever the
@@ -1786,10 +1800,21 @@ document survive insertions/removals.
   (§9.2), and inline FAA plate charts (SID/STAR/Approach/Airport Diagram)
   rendered via `pdf.js` with translucent highlighter annotation (§9.1).
   NOTAM proxy exists but its record shape is still unvalidated pending
-  credentials (`[notam-api]`, §12). **Android hasn't been started at
-  all** — every item above is web-only; Android is the actual gap this
-  phase is named for (offline-in-the-cockpit), not a parallel-track
-  detail.
+  credentials (`[notam-api]`, §12). **Android now exists and the
+  offline-in-the-cockpit milestone this phase is named for is met**:
+  Kotlin/Compose over `ff-uniffi`, with a local cycle bundle synced from
+  `/cycles/latest` (downloaded in Kotlin, checksum-verified and swapped in
+  atomically by `ff-sync::apply`), per-sectional PMTiles archives
+  downloaded on demand, and a MapLibre map drawing those tiles out of the
+  device through an in-app loopback tile server — plus airports, Class
+  B/C/D and Special Use airspace, nationwide ident search, airport
+  runways/frequencies, and full procedure leg tables drawn on the map, all
+  read from the on-device bundle. Live METAR/TAF is the only screen that
+  needs the network, and it says so when it can't reach it. Verified
+  end-to-end against a real 2026-07-09 cycle on an emulator in airplane
+  mode. Still missing on Android: own-ship GPS position, the plate-chart
+  viewer web has (§9.1), and the weather overlays beyond station
+  METAR/TAF.
 - **Phase 2 — Flight planning**: route builder, nav log, basic W&B,
   aircraft profiles. Web slice implemented: `ff-planning`'s math now
   runs client-side via `ff-wasm` (previously built but not wired into
@@ -1804,9 +1829,14 @@ document survive insertions/removals.
   `apps/web/src/planning/windsAloft.ts`). Departure/arrival/middle fixes
   can also be set straight from the map's Airport/Waypoint tap tabs
   (§9.1/§9.3), and a VFR-only warning flags real Class B/C/D/Special Use
-  Airspace the route actually crosses (§9.3). Android's equivalent
-  (`ff-uniffi` bindings, persisted via the
-  `aircraft_profile`/`route_plan`/`route_leg` tables) is still unstarted.
+  Airspace the route actually crosses (§9.3). Android's equivalent is
+  still unstarted as a *feature*, though the ground under it is now in
+  place: `ff-uniffi` exposes and tests the same `ff-planning` entry points
+  `ff-wasm` gives web, and the local bundle it opens already carries the
+  `aircraft_profile`/`route_plan`/`route_leg` tables (they are below
+  `0001_init.sql`'s client-local marker, and the Android client opens the
+  bundle through `ff-storage`, so they exist on device). What is missing
+  is the route-builder UI and the code that writes those tables.
 - **Phase 3 — Post-flight analysis**: GPS track recording (Android),
   GPX import (web), phase-of-flight detection, flight log export.
 - **Phase 4 — Accounts & sync** (optional): let a pilot's route plans,

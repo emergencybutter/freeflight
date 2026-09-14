@@ -15,3 +15,10 @@
 # marker with no checksum, so they were never at risk the same way; this
 # guards the general case, not just the one file that broke.
 * text=auto eol=lf
+
+# ...with one exception: Windows batch files. `gradlew.bat` is run by
+# cmd.exe, which is the one interpreter here that genuinely wants CRLF —
+# it reads batch files line by line and LF-only endings can break
+# `goto`/label handling. The rule above would otherwise force LF on it
+# along with everything else.
+*.bat text eol=crlf
