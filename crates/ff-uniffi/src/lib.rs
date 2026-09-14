@@ -77,25 +77,33 @@ impl Freeflight {
 
     // ---- cycle lifecycle -------------------------------------------------
 
-    /// What the app is flying on, or `None` before the first sync. The UI
-    /// is required to show this (§11: never let a pilot mistake stale data
-    /// for current), so it reads the counts and the effective date out of
-    /// the bundle itself rather than trusting the directory name.
-    pub fn current_cycle(&self) -> Option<CycleInfo> {
-        let cycle_id = self.layout.current_cycle_id()?;
+    /// What the app is flying on: `Ok(None)` before the first sync, an
+    /// error if a cycle is installed but unreadable. The UI is required to
+    /// show this (§11: never let a pilot mistake stale data for current),
+    /// so it reads the counts and the effective date out of the bundle
+    /// itself rather than trusting the directory name.
+    pub fn current_cycle(&self) -> Result<Option<CycleInfo>, CoreError> {
+        let Some(cycle_id) = self.layout.current_cycle_id() else {
+            return Ok(None);
+        };
         let bundle_bytes = fs::metadata(self.layout.bundle_path(&cycle_id))
             .map(|m| m.len())
             .unwrap_or(0);
-        let mut state = self.state.lock().ok()?;
-        let conn = self.connection(&mut state).ok()?;
-        Some(CycleInfo {
+        let mut state = self.lock()?;
+        // Deliberately propagated rather than swallowed into `None`. A
+        // bundle that is present but won't open — a bad download, a
+        // half-applied migration — is not the same thing as no bundle, and
+        // reporting it as "nothing downloaded" tells a pilot something
+        // false about what their device is carrying (§11).
+        let conn = self.connection(&mut state)?;
+        Ok(Some(CycleInfo {
             effective_date: query::cycle_effective_date(conn),
             airport_count: query::count(conn, "airport"),
             procedure_count: query::count(conn, "procedure"),
             installed_chart_ids: self.installed_chart_ids(conn),
             cycle_id,
             bundle_bytes,
-        })
+        }))
     }
 
     /// Parse a `GET /cycles/latest` body. Deliberately Rust's job: the wire

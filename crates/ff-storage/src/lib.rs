@@ -17,6 +17,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("migrations/0005_data_source.sql")),
     (6, include_str!("migrations/0006_preferred_route.sql")),
     (7, include_str!("migrations/0007_chart_sha256.sql")),
+    (8, include_str!("migrations/0008_chart_bytes.sql")),
 ];
 
 #[derive(Debug, Error)]

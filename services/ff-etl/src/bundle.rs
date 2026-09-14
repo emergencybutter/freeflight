@@ -420,6 +420,7 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
     // migration 0007 for what the client does with it.
     let sha256 = ff_sync::sha256_file_hex(&chart.pmtiles_out)
         .map_err(|e| BundleError::ChartChecksum(e.to_string()))?;
+    let bytes = std::fs::metadata(&chart.pmtiles_out).map(|m| m.len()).ok();
     let entry = ChartCatalogEntry {
         id: chart.id.clone(),
         name: chart.name.clone(),
@@ -432,8 +433,9 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
     let conn = rusqlite::Connection::open(bundle_path)?;
     conn.execute(
         "INSERT INTO chart_catalog
-             (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url, sha256)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+             (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url, sha256,
+              bytes)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
             entry.id,
             entry.name,
@@ -445,6 +447,7 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
             entry.bbox.max_lon,
             entry.tile_url,
             sha256,
+            bytes,
         ],
     )?;
     Ok(())

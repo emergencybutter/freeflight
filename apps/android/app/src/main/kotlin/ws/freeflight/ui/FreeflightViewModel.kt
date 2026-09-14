@@ -20,6 +20,7 @@ import uniffi.ff_uniffi.Procedure
 import uniffi.ff_uniffi.ProcedureDetail
 import uniffi.ff_uniffi.SearchHit
 import ws.freeflight.AppContainer
+import ws.freeflight.data.ChartSet
 import ws.freeflight.data.Metar
 import ws.freeflight.data.Taf
 
@@ -56,6 +57,12 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     val sync = container.cycles.sync
     val charts = container.cycles.charts
     val chartDownloads = container.cycles.chartDownloads
+    val setDownload = container.cycles.setDownload
+
+    private val _chartSets = MutableStateFlow<List<ChartSet>>(emptyList())
+
+    /** Bulk download options, recomputed as the catalogue or the map moves. */
+    val chartSets: StateFlow<List<ChartSet>> = _chartSets.asStateFlow()
     val settings = container.settings
 
     private val _map = MutableStateFlow(MapUiState())
@@ -71,9 +78,22 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     val procedure: StateFlow<ProcedureDetail?> = _procedure.asStateFlow()
 
     private var viewportJob: Job? = null
+    private var chartSetJob: Job? = null
     private var searchJob: Job? = null
     private var lastViewport: BoundingBox? = null
     private var lastZoom: Double = MIN_AIRPORT_ZOOM
+
+    init {
+        // The catalogue arrives asynchronously after a sync, so the sets
+        // follow it rather than being built once.
+        viewModelScope.launch {
+            charts.collect { refreshChartSets() }
+        }
+    }
+
+    private fun refreshChartSets() {
+        _chartSets.value = ChartSet.forCatalogue(charts.value, lastViewport)
+    }
 
     /**
      * Reload what is in view.
@@ -85,6 +105,14 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     fun onViewportChanged(bbox: BoundingBox, zoom: Double) {
         lastViewport = bbox
         lastZoom = zoom
+        // "Covering the map view" depends on where the map is, so it is
+        // rebuilt as the map settles — debounced with everything else, not
+        // per camera frame.
+        chartSetJob?.cancel()
+        chartSetJob = viewModelScope.launch {
+            delay(VIEWPORT_DEBOUNCE_MS)
+            refreshChartSets()
+        }
         viewportJob?.cancel()
         viewportJob = viewModelScope.launch {
             delay(VIEWPORT_DEBOUNCE_MS)
@@ -261,6 +289,9 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     fun downloadLatestCycle() = container.cycles.downloadLatestCycle()
     fun downloadChart(chart: uniffi.ff_uniffi.Chart) = container.cycles.downloadChart(chart)
     fun cancelChartDownload(chartId: String) = container.cycles.cancelChartDownload(chartId)
+    fun downloadChartSet(set: ChartSet) = container.cycles.downloadChartSet(set)
+    fun cancelChartSetDownload() = container.cycles.cancelChartSetDownload()
+    fun dismissChartSetDownload() = container.cycles.dismissChartSetDownload()
 
     fun removeChart(chartId: String) {
         viewModelScope.launch { container.cycles.removeChart(chartId) }

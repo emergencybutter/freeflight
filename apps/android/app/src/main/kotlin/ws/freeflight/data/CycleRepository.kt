@@ -1,5 +1,6 @@
 package ws.freeflight.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +31,27 @@ sealed interface SyncState {
 data class ChartDownload(val downloaded: Long, val total: Long, val failure: String? = null)
 
 /**
+ * A queued run over several charts, reported as one job.
+ *
+ * Downloading a set is still N separate transfers — that is what the
+ * server publishes — but a pilot who asked for "everything" wants one
+ * answer to "how far along is it", not 111. [completed] counts finished
+ * charts; [downloadedBytes] is cumulative across the whole run so a single
+ * progress bar can be honest about the ~20GB case.
+ */
+data class ChartSetDownload(
+    val setName: String,
+    val completed: Int,
+    val total: Int,
+    val currentChart: String?,
+    val downloadedBytes: Long,
+    val totalBytes: Long?,
+    val failures: List<String> = emptyList(),
+) {
+    val finished: Boolean get() = completed >= total
+}
+
+/**
  * Owns getting aeronautical data onto the device and keeping the UI honest
  * about what is there (DESIGN.md §8, §11).
  *
@@ -57,6 +79,11 @@ class CycleRepository(
     private val _chartDownloads = MutableStateFlow<Map<String, ChartDownload>>(emptyMap())
     val chartDownloads: StateFlow<Map<String, ChartDownload>> = _chartDownloads.asStateFlow()
 
+    private val _setDownload = MutableStateFlow<ChartSetDownload?>(null)
+    val setDownload: StateFlow<ChartSetDownload?> = _setDownload.asStateFlow()
+
+    private var setJob: Job? = null
+
     private var syncJob: Job? = null
     private val chartJobs = mutableMapOf<String, Job>()
 
@@ -66,7 +93,18 @@ class CycleRepository(
 
     /** Re-read what is installed. Cheap, and the only way the UI learns a swap happened. */
     suspend fun refresh() = withContext(Dispatchers.IO) {
-        _cycle.value = core.currentCycle()
+        try {
+            _cycle.value = core.currentCycle()
+        } catch (e: Exception) {
+            // An installed-but-unreadable bundle. Saying so beats showing
+            // the first-run empty state, which would claim the device is
+            // carrying nothing when it is carrying something broken.
+            _cycle.value = null
+            _sync.value = SyncState.Failed(
+                "The installed cycle can't be read (${e.readableMessage()}). " +
+                    "Downloading it again should replace it."
+            )
+        }
         _charts.value = runCatching { core.charts() }.getOrDefault(emptyList())
     }
 
@@ -154,6 +192,77 @@ class CycleRepository(
                 }
             }
         }
+    }
+
+    /**
+     * Download every chart in `set` that isn't already here, one at a
+     * time, reported as a single job.
+     *
+     * Sequential on purpose: these are hundreds of megabytes each, and
+     * running them in parallel on a phone buys nothing but contention and
+     * a progress bar that lurches. A chart that fails is recorded and the
+     * run continues — one bad archive out of a hundred shouldn't abandon
+     * the other ninety-nine.
+     *
+     * Charts already installed are skipped, which after a cycle update is
+     * usually most of them: archives are addressed by content, so anything
+     * unchanged is already on disk.
+     */
+    fun downloadChartSet(set: ChartSet) {
+        if (setJob?.isActive == true) return
+        val pending = set.missing
+        if (pending.isEmpty()) return
+
+        setJob = scope.launch {
+            var done = 0
+            var bytesSoFar = 0L
+            val failures = mutableListOf<String>()
+            val totalBytes = set.remainingBytes
+
+            fun publish(current: String?, inFlight: Long) {
+                _setDownload.value = ChartSetDownload(
+                    setName = set.name,
+                    completed = done,
+                    total = pending.size,
+                    currentChart = current,
+                    downloadedBytes = bytesSoFar + inFlight,
+                    totalBytes = totalBytes,
+                    failures = failures.toList(),
+                )
+            }
+            publish(pending.first().name, 0)
+
+            for (chart in pending) {
+                try {
+                    val staged = File(core.downloadsDir(), "${chart.id}.pmtiles.partial")
+                    api.download(chart.tileUrl, staged) { got, _ -> publish(chart.name, got) }
+                    withContext(Dispatchers.IO) {
+                        core.installChart(chart.id, staged.absolutePath)
+                    }
+                    bytesSoFar += chart.downloadBytes?.toLong() ?: staged.length()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failures += "${chart.name}: ${e.readableMessage()}"
+                }
+                done++
+                publish(null, 0)
+                refresh()
+            }
+            publish(null, 0)
+        }
+    }
+
+    /** Stop a set download. Partial files stay, so resuming re-uses them. */
+    fun cancelChartSetDownload() {
+        setJob?.cancel()
+        setJob = null
+        _setDownload.value = null
+    }
+
+    fun dismissChartSetDownload() {
+        if (setJob?.isActive == true) return
+        _setDownload.value = null
     }
 
     fun cancelChartDownload(chartId: String) {

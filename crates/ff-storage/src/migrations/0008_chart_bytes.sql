@@ -1,0 +1,16 @@
+-- Published size of each chart's PMTiles archive, in bytes.
+--
+-- So a client can say what a download will cost before starting it. That
+-- matters more here than it sounds: a full chart set is ~20GB against a
+-- 145MB cycle bundle, individual sectionals range from about 50MB to
+-- 600MB, and the offline client (DESIGN.md §8) deliberately makes every
+-- transfer an explicit choice. A "download these" button that can't state
+-- a size isn't a choice, it's a surprise.
+--
+-- The alternative was a HEAD request per chart, which for a nationwide
+-- cycle is over a hundred round trips just to render a list.
+--
+-- Nullable for the same reason `sha256` is (migration 0007): bundles
+-- published before this exist, and a client shows an unknown size rather
+-- than refusing to list the chart.
+ALTER TABLE chart_catalog ADD COLUMN bytes INTEGER;

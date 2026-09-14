@@ -227,13 +227,14 @@ fn seed(conn: &Connection, cycle_id: &str, chart_sha256: &str) {
 
     conn.execute(
         "INSERT INTO chart_catalog (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon,
-                                    tile_url, sha256)
-         VALUES (?1, 'Seattle Sectional', 'Sectional', ?2, 45.0, -125.0, 49.0, -117.0, ?3, ?4)",
+                                    tile_url, sha256, bytes)
+         VALUES (?1, 'Seattle Sectional', 'Sectional', ?2, 45.0, -125.0, 49.0, -117.0, ?3, ?4, ?5)",
         params![
             format!("{cycle_id}-seattle"),
             cycle_id,
             format!("/bundles/{cycle_id}/chart-seattle.pmtiles"),
-            chart_sha256
+            chart_sha256,
+            252_226_540i64
         ],
     )
     .unwrap();
@@ -263,7 +264,7 @@ fn seattle_bbox() -> BoundingBox {
 fn a_first_run_reports_no_cycle_rather_than_empty_results() {
     let fixture = Fixture::empty();
 
-    assert!(fixture.core.current_cycle().is_none());
+    assert!(fixture.core.current_cycle().unwrap().is_none());
     // §11: an unsynced app must be distinguishable from an empty map.
     let err = fixture
         .core
@@ -274,6 +275,20 @@ fn a_first_run_reports_no_cycle_rather_than_empty_results() {
         fixture.core.charts().unwrap_err(),
         CoreError::NoCycle
     ));
+}
+
+/// A cycle that is installed but unreadable must not read as "nothing
+/// downloaded" — that would tell a pilot their device is empty when it is
+/// actually carrying something broken.
+#[test]
+fn a_cycle_that_cannot_be_opened_is_an_error_not_an_empty_state() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    let bundle = fixture.data_dir.join("cycles/2026-07-09/cycle.sqlite");
+    fs::write(&bundle, b"this is not a database").unwrap();
+
+    let err = fixture.core.current_cycle().unwrap_err();
+
+    assert!(matches!(err, CoreError::Database(_)), "got {err:?}");
 }
 
 #[test]
@@ -288,7 +303,7 @@ fn any_cycle_is_an_update_when_none_is_installed() {
 fn applying_a_bundle_makes_its_contents_queryable() {
     let fixture = Fixture::with_cycle("2026-07-09");
 
-    let cycle = fixture.core.current_cycle().unwrap();
+    let cycle = fixture.core.current_cycle().unwrap().unwrap();
     assert_eq!(cycle.cycle_id, "2026-07-09");
     assert_eq!(cycle.effective_date.as_deref(), Some("2026-07-09"));
     assert_eq!(cycle.airport_count, 3);
@@ -348,7 +363,7 @@ fn a_bundle_whose_checksum_does_not_match_never_becomes_current() {
 
     assert!(matches!(err, CoreError::Sync(_)), "got {err:?}");
     // §8: the previous cycle is still there and still usable.
-    assert_eq!(fixture.core.current_cycle().unwrap().cycle_id, "2026-07-09");
+    assert_eq!(fixture.core.current_cycle().unwrap().unwrap().cycle_id, "2026-07-09");
     assert_eq!(
         fixture
             .core
@@ -364,7 +379,7 @@ fn a_bundle_whose_checksum_does_not_match_never_becomes_current() {
 fn a_cycle_swapped_in_under_a_running_app_is_picked_up_without_a_restart() {
     let fixture = Fixture::with_cycle("2026-07-09");
     // Open the bundle, so there is a cached connection to go stale.
-    assert_eq!(fixture.core.current_cycle().unwrap().airport_count, 3);
+    assert_eq!(fixture.core.current_cycle().unwrap().unwrap().airport_count, 3);
 
     let staged = fixture.stage_bundle("2026-08-06");
     let conn = ff_storage::open(&staged.display().to_string()).unwrap();
@@ -381,7 +396,7 @@ fn a_cycle_swapped_in_under_a_running_app_is_picked_up_without_a_restart() {
         .apply_cycle("2026-08-06".to_string(), staged.display().to_string(), sha)
         .unwrap();
 
-    let cycle = fixture.core.current_cycle().unwrap();
+    let cycle = fixture.core.current_cycle().unwrap().unwrap();
     assert_eq!(cycle.cycle_id, "2026-08-06");
     assert_eq!(cycle.airport_count, 4);
     assert_eq!(
@@ -603,8 +618,10 @@ fn a_catalogued_chart_reads_as_not_installed_until_it_is() {
     let charts = fixture.core.charts().unwrap();
     assert_eq!(charts.len(), 1);
     assert_eq!(charts[0].name, "Seattle Sectional");
-    // No archive on disk yet, so no zoom range to report.
+    // No archive on disk yet, so no zoom range to report — but the
+    // catalogue already knows what it would cost to fetch.
     assert_eq!((charts[0].min_zoom, charts[0].max_zoom), (0, 0));
+    assert_eq!(charts[0].download_bytes, Some(252_226_540));
     assert_eq!(
         charts[0].tile_url,
         "/bundles/2026-07-09/chart-seattle.pmtiles"
@@ -620,7 +637,7 @@ fn a_catalogued_chart_reads_as_not_installed_until_it_is() {
     // nothing outside this range, so a wrong guess blanks the chart.
     assert_eq!((charts[0].min_zoom, charts[0].max_zoom), (8, 8));
     assert_eq!(
-        fixture.core.current_cycle().unwrap().installed_chart_ids,
+        fixture.core.current_cycle().unwrap().unwrap().installed_chart_ids,
         vec!["2026-07-09-seattle".to_string()]
     );
 }
@@ -777,7 +794,7 @@ fn pruning_reclaims_the_superseded_cycle_but_keeps_charts_it_still_uses() {
     let freed = fixture.core.prune_old_cycles().unwrap();
 
     assert!(freed > 0, "the superseded bundle's bytes");
-    assert_eq!(fixture.core.current_cycle().unwrap().cycle_id, "2026-08-06");
+    assert_eq!(fixture.core.current_cycle().unwrap().unwrap().cycle_id, "2026-08-06");
     assert_eq!(
         fixture
             .core

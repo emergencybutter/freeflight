@@ -21,9 +21,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import uniffi.ff_uniffi.Chart
 import ws.freeflight.data.ChartDownload
+import ws.freeflight.data.ChartSet
+import ws.freeflight.data.ChartSetDownload
 import ws.freeflight.data.SyncState
 
 /**
@@ -39,6 +42,8 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val sync by viewModel.sync.collectAsState()
     val charts by viewModel.charts.collectAsState()
     val downloads by viewModel.chartDownloads.collectAsState()
+    val chartSets by viewModel.chartSets.collectAsState()
+    val setDownload by viewModel.setDownload.collectAsState()
 
     LazyColumn(
         modifier.fillMaxSize().padding(16.dp),
@@ -92,11 +97,40 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             }
         }
 
+        setDownload?.let { job ->
+            item {
+                ChartSetProgress(
+                    job = job,
+                    onCancel = viewModel::cancelChartSetDownload,
+                    onDismiss = viewModel::dismissChartSetDownload,
+                )
+            }
+        }
+
+        if (chartSets.isNotEmpty() && setDownload == null) {
+            item {
+                Text("Chart sets", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Take a whole group in one go. Charts already on the device are skipped, " +
+                        "so after a cycle update this is usually far smaller than it looks.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            items(chartSets, key = { it.name }) { set ->
+                ChartSetRow(set = set, onDownload = { viewModel.downloadChartSet(set) })
+            }
+        }
+
         item {
-            Text("Charts", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Each chart is downloaded separately and works with no network once it is " +
-                    "here. Pick which one the map draws from the layers button.",
+                "Individual charts",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                "Each chart works with no network once it is here. Pick which one the map " +
+                    "draws from the layers button.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -169,6 +203,124 @@ private fun SyncStatus(sync: SyncState) {
     }
 }
 
+/**
+ * One bulk option: what it contains, what it still costs, and a single
+ * button. The size shown is what is *missing*, not the set total — after a
+ * cycle update most of a set is usually already on disk, and quoting the
+ * full 20GB would be a lie that stops someone downloading.
+ */
+@Composable
+private fun ChartSetRow(set: ChartSet, onDownload: () -> Unit) {
+    Card {
+        Row(
+            Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(set.name, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    set.description,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    when {
+                        set.isComplete -> "All ${set.charts.size} already downloaded"
+                        else -> buildString {
+                            append("${set.missing.size} to download")
+                            // Null means the bundle predates published
+                            // sizes; say so rather than imply free.
+                            append(
+                                set.remainingBytes
+                                    ?.let { " · ${formatBytes(it)}" }
+                                    ?: " · size unknown"
+                            )
+                            if (set.installedCount > 0) {
+                                append(" · ${set.installedCount} already here")
+                            }
+                        }
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (set.isComplete) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+            if (!set.isComplete) {
+                Button(onClick = onDownload) { Text("Get") }
+            }
+        }
+    }
+}
+
+/** The one progress bar a bulk download reports through. */
+@Composable
+private fun ChartSetProgress(
+    job: ChartSetDownload,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(job.setName, style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (job.finished) {
+                    "Finished — ${job.completed} of ${job.total}"
+                } else {
+                    "Chart ${job.completed + 1} of ${job.total}" +
+                        (job.currentChart?.let { " · $it" } ?: "")
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                formatBytes(job.downloadedBytes) +
+                    (job.totalBytes?.let { " of ${formatBytes(it)}" } ?: ""),
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+            if (!job.finished) {
+                Progress(job.downloadedBytes, job.totalBytes ?: -1L)
+            }
+            // Failures don't stop the run, so they accumulate rather than
+            // replacing it: one bad archive out of a hundred should not
+            // look like total failure. Only the first few are shown — a
+            // run that fails widely would otherwise push the progress bar
+            // and the Cancel button off the screen entirely, which is
+            // exactly when you want them.
+            if (job.failures.isNotEmpty()) {
+                Text(
+                    "${job.failures.size} failed",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                job.failures.take(MAX_SHOWN_FAILURES).forEach { failure ->
+                    Text(
+                        failure,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                val hidden = job.failures.size - MAX_SHOWN_FAILURES
+                if (hidden > 0) {
+                    Text(
+                        "…and $hidden more",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            TextButton(onClick = if (job.finished) onDismiss else onCancel) {
+                Text(if (job.finished) "Done" else "Cancel")
+            }
+        }
+    }
+}
+
 @Composable
 private fun ChartRow(
     chart: Chart,
@@ -221,6 +373,9 @@ private fun ChartRow(
         }
     }
 }
+
+/** Enough to see the shape of a problem, not enough to bury the controls. */
+private const val MAX_SHOWN_FAILURES = 3
 
 /**
  * Determinate when the server sent a length, indeterminate when it didn't —

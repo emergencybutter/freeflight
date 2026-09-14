@@ -514,7 +514,7 @@ pub fn catalogued_chart_hashes(conn: &Connection) -> Result<Vec<String>> {
 
 pub fn charts(conn: &Connection) -> Result<Vec<Chart>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, kind, min_lat, min_lon, max_lat, max_lon, tile_url
+        "SELECT id, name, kind, min_lat, min_lon, max_lat, max_lon, tile_url, bytes
          FROM chart_catalog ORDER BY kind, name",
     )?;
     let rows = stmt
@@ -530,6 +530,7 @@ pub fn charts(conn: &Connection) -> Result<Vec<Chart>> {
                     max_lon: row.get(6)?,
                 },
                 tile_url: row.get(7)?,
+                download_bytes: row.get::<_, Option<i64>>(8)?.map(|b| b.max(0) as u64),
                 // Filled in by the caller, which is the half that knows
                 // what is on disk.
                 installed: false,

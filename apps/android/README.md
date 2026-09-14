@@ -20,9 +20,14 @@ Three tabs.
   fetch (§11). Tapping an airport opens its sheet; tapping a procedure
   draws it and frames it on the map.
 - **Data** — the installed cycle (effective date, counts, size), checking
-  for and downloading a newer one, and per-chart download/removal. Nothing
-  here transfers anything without being asked: a cycle is ~145MB and a
-  sectional is a couple hundred more.
+  for and downloading a newer one, and charts. Nothing here transfers
+  anything without being asked: a cycle is ~145MB and a sectional is a
+  couple hundred more. Charts can be taken individually or as a **set** —
+  everything covering the current map view, everything of one kind, or
+  everything full stop (111 archives, ~20GB) — which runs as one queued
+  job with one progress bar. A set skips what is already on the device,
+  so the size quoted is what is actually still missing, and one chart
+  failing doesn't abandon the rest.
 - **Settings** — the `ff-api` base URL, the not-for-navigation
   disclaimer, and the data-source attributions shipped inside the bundle.
 

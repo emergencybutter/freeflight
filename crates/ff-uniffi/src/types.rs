@@ -163,6 +163,12 @@ pub struct Chart {
     /// `/bundles/2026-07-09/chart-seattle.pmtiles`. The client joins this
     /// onto its configured API base to download the chart for offline use.
     pub tile_url: String,
+    /// Published size of the archive, from the catalogue — what this chart
+    /// will cost to download. `None` for bundles older than migration
+    /// 0008, where the UI has to say the size is unknown rather than
+    /// guess; sizes here range from about 50MB to 600MB, so guessing
+    /// would be worse than admitting it.
+    pub download_bytes: Option<u64>,
     /// Whether that archive is already on this device.
     pub installed: bool,
     pub installed_bytes: u64,
