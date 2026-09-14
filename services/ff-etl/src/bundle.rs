@@ -37,6 +37,8 @@ pub enum BundleError {
     Parse(String),
     #[error("failed to convert chart GeoTIFF to PMTiles: {0}")]
     Chart(#[from] ff_charts::ChartIngestError),
+    #[error("failed to checksum the produced chart archive: {0}")]
+    ChartChecksum(String),
 }
 
 /// A source chart GeoTIFF to run through `ff-charts::geotiff_to_pmtiles`
@@ -412,6 +414,12 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
         cycle_id: chart.cycle_id.clone(),
     };
     let bbox = geotiff_to_pmtiles(&geotiff, &chart.pmtiles_out)?;
+    // Hashed here rather than carried on `ChartCatalogEntry`: that type
+    // models the catalog for spatial lookup (`covering`, `of_kind`), and
+    // the digest is a distribution concern that only the row needs. See
+    // migration 0007 for what the client does with it.
+    let sha256 = ff_sync::sha256_file_hex(&chart.pmtiles_out)
+        .map_err(|e| BundleError::ChartChecksum(e.to_string()))?;
     let entry = ChartCatalogEntry {
         id: chart.id.clone(),
         name: chart.name.clone(),
@@ -423,8 +431,9 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
 
     let conn = rusqlite::Connection::open(bundle_path)?;
     conn.execute(
-        "INSERT INTO chart_catalog (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT INTO chart_catalog
+             (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon, tile_url, sha256)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             entry.id,
             entry.name,
@@ -435,6 +444,7 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
             entry.bbox.max_lat,
             entry.bbox.max_lon,
             entry.tile_url,
+            sha256,
         ],
     )?;
     Ok(())

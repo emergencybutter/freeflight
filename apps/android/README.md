@@ -41,6 +41,11 @@ Rust.**
   `ff-api`'s `/data/*` routes answer for web — from a file on the device
   instead of a file on a server. It also verifies and atomically swaps in
   a downloaded cycle, and reads raster tiles out of PMTiles archives.
+- Chart archives are stored under the hash of their contents, so a
+  sectional that didn't change between cycles is still installed after an
+  update rather than being downloaded again. A full chart set is ~20GB
+  against a 145MB bundle, so this is the difference between a cycle
+  update costing megabytes and costing the lot.
 - `data/ApiClient.kt` is the only thing here that speaks HTTP. Downloads
   stream to disk and resume with a `Range` request, so a 145MB bundle
   survives being interrupted.

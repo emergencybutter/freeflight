@@ -15,6 +15,9 @@ ff-aixm.workspace = true
 ff-openaip = { workspace = true, features = ["blocking"] }
 ff-charts.workspace = true
 ff-storage.workspace = true
+# For `sha256_file_hex` only — the chart hashes this publishes are the
+# ones the client verifies with, so both sides use the same function.
+ff-sync.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

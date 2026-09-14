@@ -821,6 +821,15 @@ Consequences:
   `chart_catalog` rows of the installed bundle: a nationwide cycle
   publishes over a hundred of them at a couple of hundred MB each, so
   which ones a device carries is the pilot's choice, not the manifest's.
+  They are stored **by content hash**, not under the cycle that
+  catalogued them (`chart_catalog.sha256`, migration 0007). Chart ids
+  embed the cycle date, so per-cycle storage meant every chart looked new
+  every cycle and a device re-downloaded the lot — the full set is about
+  20GB against a 145MB bundle, every 56 days. FAA sectionals revise on
+  their own, slower schedule and are mostly byte-identical between AIRAC
+  cycles, so addressed by content an unchanged chart is already installed
+  and costs nothing. The same hash gives chart downloads the integrity
+  check they previously lacked; the bundle has always had one.
   Charts/procedures/airports work fully offline once a cycle (and a chart
   covering the area) is downloaded; so does route planning. Flight tracking (GPS logging) is
   inherently offline-capable.

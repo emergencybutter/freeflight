@@ -43,35 +43,64 @@ impl Fixture {
     }
 
     fn stage_bundle(&self, cycle_id: &str) -> PathBuf {
+        self.stage_bundle_with_chart(cycle_id, CHART_TILE)
+    }
+
+    /// Stages a bundle whose chart row advertises the hash of the archive
+    /// `install_chart` will later be given — the same relationship a real
+    /// `ff-etl` run produces, and what makes verification and cross-cycle
+    /// reuse testable. Vary `tile_png` to make a cycle's chart differ.
+    fn stage_bundle_with_chart(&self, cycle_id: &str, tile_png: &[u8]) -> PathBuf {
         let staging = self.data_dir.join("staging");
         fs::create_dir_all(&staging).unwrap();
+        let archive = staging.join("advertised.pmtiles");
+        write_chart_archive(&archive, tile_png);
+        let chart_sha = ff_sync::sha256_file_hex(&archive).unwrap();
+
         let path = staging.join("cycle.sqlite");
         let conn = ff_storage::open(&path.display().to_string()).unwrap();
-        seed(&conn, cycle_id);
+        seed(&conn, cycle_id, &chart_sha);
         drop(conn);
         path
     }
 
-    /// Writes a one-tile PMTiles archive where a download would have landed
-    /// and installs it, as the chart downloader does.
+    /// Writes a chart archive where a download would have landed and
+    /// installs it, as the downloader does.
     fn install_chart(&self, chart_id: &str, tile_png: &[u8]) {
-        use pmtiles2::{util::tile_id, Compression, PMTiles, TileType};
+        self.try_install_chart(chart_id, tile_png).unwrap()
+    }
+
+    fn try_install_chart(&self, chart_id: &str, tile_png: &[u8]) -> Result<(), CoreError> {
         let staged = self.data_dir.join("staged-chart.pmtiles");
         fs::create_dir_all(staged.parent().unwrap()).unwrap();
-        let mut archive = PMTiles::new(TileType::Png, Compression::None);
-        archive.min_zoom = 8;
-        archive.max_zoom = 8;
-        archive.add_tile(tile_id(8, 41, 89), tile_png).unwrap();
-        archive
-            .to_writer(&mut File::create(&staged).unwrap())
-            .unwrap();
+        write_chart_archive(&staged, tile_png);
         self.core
             .install_chart(chart_id.to_string(), staged.display().to_string())
-            .unwrap();
+    }
+
+    /// How many chart archives are on disk, regardless of which cycle
+    /// catalogues them.
+    fn installed_blob_count(&self) -> usize {
+        fs::read_dir(self.data_dir.join("charts").join("blobs"))
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0)
     }
 }
 
-fn seed(conn: &Connection, cycle_id: &str) {
+/// The tile payload a fixture chart archive carries, and therefore what
+/// determines its content hash.
+const CHART_TILE: &[u8] = b"PNG fake";
+
+fn write_chart_archive(path: &Path, tile_png: &[u8]) {
+    use pmtiles2::{util::tile_id, Compression, PMTiles, TileType};
+    let mut archive = PMTiles::new(TileType::Png, Compression::None);
+    archive.min_zoom = 8;
+    archive.max_zoom = 8;
+    archive.add_tile(tile_id(8, 41, 89), tile_png).unwrap();
+    archive.to_writer(&mut File::create(path).unwrap()).unwrap();
+}
+
+fn seed(conn: &Connection, cycle_id: &str, chart_sha256: &str) {
     conn.execute(
         "INSERT INTO airac_cycle (id, effective_date, source_version) VALUES (?1, ?1, 'test')",
         [cycle_id],
@@ -198,12 +227,13 @@ fn seed(conn: &Connection, cycle_id: &str) {
 
     conn.execute(
         "INSERT INTO chart_catalog (id, name, kind, cycle_id, min_lat, min_lon, max_lat, max_lon,
-                                    tile_url)
-         VALUES (?1, 'Seattle Sectional', 'Sectional', ?2, 45.0, -125.0, 49.0, -117.0, ?3)",
+                                    tile_url, sha256)
+         VALUES (?1, 'Seattle Sectional', 'Sectional', ?2, 45.0, -125.0, 49.0, -117.0, ?3, ?4)",
         params![
             format!("{cycle_id}-seattle"),
             cycle_id,
-            format!("/bundles/{cycle_id}/chart-seattle.pmtiles")
+            format!("/bundles/{cycle_id}/chart-seattle.pmtiles"),
+            chart_sha256
         ],
     )
     .unwrap();
@@ -581,7 +611,7 @@ fn a_catalogued_chart_reads_as_not_installed_until_it_is() {
     );
     assert!(!charts[0].installed);
 
-    fixture.install_chart("2026-07-09-seattle", b"\x89PNG fake");
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
 
     let charts = fixture.core.charts().unwrap();
     assert!(charts[0].installed);
@@ -598,13 +628,13 @@ fn a_catalogued_chart_reads_as_not_installed_until_it_is() {
 #[test]
 fn an_installed_chart_serves_its_tiles_and_nothing_where_it_has_none() {
     let fixture = Fixture::with_cycle("2026-07-09");
-    fixture.install_chart("2026-07-09-seattle", b"\x89PNG fake");
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
 
     let tile = fixture
         .core
         .chart_tile("2026-07-09-seattle".to_string(), 8, 41, 89)
         .unwrap();
-    assert_eq!(tile.as_deref(), Some(&b"\x89PNG fake"[..]));
+    assert_eq!(tile.as_deref(), Some(CHART_TILE));
 
     // Off the edge of the archive: normal, and must not be an error.
     let gap = fixture
@@ -627,7 +657,7 @@ fn a_chart_that_was_never_downloaded_has_no_tiles() {
 #[test]
 fn removing_a_chart_frees_it_and_stops_it_serving_tiles() {
     let fixture = Fixture::with_cycle("2026-07-09");
-    fixture.install_chart("2026-07-09-seattle", b"\x89PNG fake");
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
     // Read one first, so there is an open handle that has to be dropped.
     fixture
         .core
@@ -648,22 +678,94 @@ fn removing_a_chart_frees_it_and_stops_it_serving_tiles() {
         .is_none());
 }
 
+/// Chart ids no longer reach the filesystem at all — an archive is named
+/// by its content hash, which `BundleLayout::chart_blob_path` validates —
+/// so an id that isn't catalogued is simply not found.
 #[test]
-fn chart_ids_that_would_escape_the_chart_directory_are_refused() {
+fn chart_ids_that_are_not_catalogued_are_not_found() {
     let fixture = Fixture::with_cycle("2026-07-09");
     for hostile in ["../../secrets", "a/b", ""] {
         let err = fixture
             .core
             .chart_tile(hostile.to_string(), 8, 41, 89)
             .unwrap_err();
-        assert!(matches!(err, CoreError::Chart(_)), "{hostile:?} -> {err:?}");
+        assert!(
+            matches!(err, CoreError::NotFound(_)),
+            "{hostile:?} -> {err:?}"
+        );
     }
 }
 
+/// The behaviour this whole design exists for: a chart that didn't change
+/// between cycles is already installed once the new cycle is applied, so
+/// the device re-downloads nothing.
 #[test]
-fn pruning_reclaims_the_superseded_cycle_and_its_charts() {
+fn a_chart_unchanged_across_cycles_stays_installed() {
     let fixture = Fixture::with_cycle("2026-07-09");
-    fixture.install_chart("2026-07-09-seattle", &vec![0u8; 4096]);
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
+    assert!(fixture.core.charts().unwrap()[0].installed);
+
+    // A new cycle whose Seattle sectional is byte-identical. Its chart id
+    // differs — ids embed the cycle date — which is exactly why keying on
+    // the id used to force a re-download of all ~20GB.
+    let staged = fixture.stage_bundle("2026-08-06");
+    let sha = ff_sync::sha256_file_hex(&staged).unwrap();
+    fixture
+        .core
+        .apply_cycle("2026-08-06".to_string(), staged.display().to_string(), sha)
+        .unwrap();
+
+    let charts = fixture.core.charts().unwrap();
+    assert_eq!(charts[0].id, "2026-08-06-seattle");
+    assert!(
+        charts[0].installed,
+        "an unchanged archive should carry over, not need downloading again"
+    );
+    assert_eq!(fixture.installed_blob_count(), 1, "one archive, not two");
+    // ...and it serves tiles under the new cycle's chart id.
+    assert!(fixture
+        .core
+        .chart_tile("2026-08-06-seattle".to_string(), 8, 41, 89)
+        .unwrap()
+        .is_some());
+}
+
+/// The other half: a chart that *did* change must not read as installed,
+/// or the app would keep serving last cycle's imagery.
+#[test]
+fn a_chart_that_changed_between_cycles_needs_downloading_again() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
+
+    let staged = fixture.stage_bundle_with_chart("2026-08-06", b"PNG revised");
+    let sha = ff_sync::sha256_file_hex(&staged).unwrap();
+    fixture
+        .core
+        .apply_cycle("2026-08-06".to_string(), staged.display().to_string(), sha)
+        .unwrap();
+
+    assert!(!fixture.core.charts().unwrap()[0].installed);
+}
+
+/// Chart archives had no integrity check at all before they were keyed by
+/// hash: a truncated download simply became missing tiles.
+#[test]
+fn a_chart_download_that_does_not_match_its_catalogued_hash_is_refused() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+
+    let err = fixture
+        .try_install_chart("2026-07-09-seattle", b"PNG corrupted")
+        .unwrap_err();
+
+    assert!(matches!(err, CoreError::Chart(_)), "got {err:?}");
+    assert!(!fixture.core.charts().unwrap()[0].installed);
+    assert_eq!(fixture.installed_blob_count(), 0);
+}
+
+#[test]
+fn pruning_reclaims_the_superseded_cycle_but_keeps_charts_it_still_uses() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
 
     let staged = fixture.stage_bundle("2026-08-06");
     let sha = ff_sync::sha256_file_hex(&staged).unwrap();
@@ -674,7 +776,7 @@ fn pruning_reclaims_the_superseded_cycle_and_its_charts() {
 
     let freed = fixture.core.prune_old_cycles().unwrap();
 
-    assert!(freed > 4096, "expected bundle + chart bytes, got {freed}");
+    assert!(freed > 0, "the superseded bundle's bytes");
     assert_eq!(fixture.core.current_cycle().unwrap().cycle_id, "2026-08-06");
     assert_eq!(
         fixture
@@ -685,6 +787,29 @@ fn pruning_reclaims_the_superseded_cycle_and_its_charts() {
             .icao,
         "KSEA"
     );
+    // The chart is shared with the live cycle, so pruning must not take it.
+    assert!(fixture.core.charts().unwrap()[0].installed);
+}
+
+/// A chart the live cycle no longer catalogues is genuinely orphaned, and
+/// pruning is what reclaims it.
+#[test]
+fn pruning_reclaims_a_chart_no_cycle_refers_to_any_more() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
+
+    let staged = fixture.stage_bundle_with_chart("2026-08-06", b"PNG revised");
+    let sha = ff_sync::sha256_file_hex(&staged).unwrap();
+    fixture
+        .core
+        .apply_cycle("2026-08-06".to_string(), staged.display().to_string(), sha)
+        .unwrap();
+
+    fixture.core.prune_old_cycles().unwrap();
+
+    // Only the revised chart is catalogued now, and it was never
+    // downloaded — so nothing should be left in the blob store.
+    assert!(fixture.installed_blob_count() == 0, "orphan reclaimed");
 }
 
 // ---- shared planning math ------------------------------------------------

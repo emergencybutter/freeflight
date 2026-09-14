@@ -927,6 +927,7 @@ dependencies = [
  "ff-nasr",
  "ff-openaip",
  "ff-storage",
+ "ff-sync",
  "image",
  "pmtiles2",
  "quick-xml",

@@ -463,6 +463,55 @@ pub fn airspace_in_bbox(conn: &Connection, bbox: BoundingBox) -> Result<Vec<Airs
     Ok(rows)
 }
 
+/// The content hash a chart's archive is stored under.
+///
+/// `chart_catalog.sha256` when the bundle has one (migration 0007), which
+/// is what makes an unchanged chart reusable across cycles and lets a
+/// download be verified. Bundles published before that migration have no
+/// hash, and there is nothing to recover it from without the file, so they
+/// fall back to a digest of the chart id: still a stable key, so the chart
+/// installs and serves tiles normally, but no verification and no reuse —
+/// chart ids embed the cycle date, so an older bundle's charts could not
+/// have been shared across cycles anyway.
+pub fn chart_blob_key(catalogued_sha256: Option<&str>, chart_id: &str) -> String {
+    match catalogued_sha256 {
+        Some(hash) if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) => {
+            hash.to_ascii_lowercase()
+        }
+        _ => ff_sync::sha256_hex(chart_id.as_bytes()),
+    }
+}
+
+/// The catalogued hash for one chart, and whether it was verifiable.
+pub fn chart_hash(conn: &Connection, chart_id: &str) -> Result<(String, bool)> {
+    let catalogued: Option<String> = conn
+        .query_row(
+            "SELECT sha256 FROM chart_catalog WHERE id = ?1",
+            [chart_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => CoreError::NotFound(chart_id.to_string()),
+            other => CoreError::from(other),
+        })?;
+    let key = chart_blob_key(catalogued.as_deref(), chart_id);
+    let verifiable = catalogued.as_deref() == Some(key.as_str());
+    Ok((key, verifiable))
+}
+
+/// Every blob key this bundle still refers to — what pruning must keep.
+pub fn catalogued_chart_hashes(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id, sha256 FROM chart_catalog")?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let sha: Option<String> = row.get(1)?;
+            Ok(chart_blob_key(sha.as_deref(), &id))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 pub fn charts(conn: &Connection) -> Result<Vec<Chart>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, kind, min_lat, min_lon, max_lat, max_lon, tile_url

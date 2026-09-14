@@ -48,16 +48,21 @@ pub enum ApplyError {
 ///
 /// ```text
 /// <root>/
-///   current                                  active cycle id, one line
-///   cycles/<cycle_id>/cycle.sqlite           the bundle itself
-///   cycles/.incoming-<cycle_id>/             half-applied, never read
-///   charts/<cycle_id>/<chart_id>.pmtiles     per-cycle chart tiles
+///   current                              active cycle id, one line
+///   cycles/<cycle_id>/cycle.sqlite       the bundle itself
+///   cycles/.incoming-<cycle_id>/         half-applied, never read
+///   charts/blobs/<sha256>.pmtiles        chart tiles, keyed by content
 /// ```
 ///
-/// Charts are nested under the cycle id rather than shared across cycles
-/// because `ff-etl` republishes chart tiles per cycle and `chart_catalog`
-/// rows carry a `cycle_id`: a chart file is only meaningful next to the
-/// bundle that catalogues it, so they're installed and pruned together.
+/// Chart archives are stored under the hash of their own contents, not
+/// under the cycle that catalogued them. Chart ids embed the cycle date
+/// (`2026-07-09-seattle`), so per-cycle storage made every chart look new
+/// every cycle and a device re-downloaded the lot — around 20GB every 56
+/// days for a full set, against a 145MB bundle. FAA sectionals revise on
+/// their own, slower schedule, so most are byte-identical from one AIRAC
+/// cycle to the next; addressed by content, an unchanged chart is already
+/// installed and costs nothing. `chart_catalog.sha256` (migration 0007) is
+/// what maps a cycle's chart id onto a blob.
 #[derive(Debug, Clone)]
 pub struct BundleLayout {
     root: PathBuf,
@@ -88,13 +93,39 @@ impl BundleLayout {
         self.cycle_dir(cycle_id).join("cycle.sqlite")
     }
 
-    pub fn charts_dir(&self, cycle_id: &str) -> PathBuf {
-        self.root.join("charts").join(cycle_id)
+    pub fn chart_blobs_dir(&self) -> PathBuf {
+        self.root.join("charts").join("blobs")
     }
 
-    pub fn chart_path(&self, cycle_id: &str, chart_id: &str) -> PathBuf {
-        self.charts_dir(cycle_id)
-            .join(format!("{chart_id}.pmtiles"))
+    /// Where the archive with this content hash lives. `None` if `sha256`
+    /// isn't a plain hex digest — it reaches here from a cycle bundle and
+    /// is used as a filename, so it gets the same treatment cycle ids get
+    /// rather than being trusted.
+    pub fn chart_blob_path(&self, sha256: &str) -> Option<PathBuf> {
+        let valid = sha256.len() == 64 && sha256.chars().all(|c| c.is_ascii_hexdigit());
+        valid.then(|| {
+            self.chart_blobs_dir()
+                .join(format!("{}.pmtiles", sha256.to_ascii_lowercase()))
+        })
+    }
+
+    /// Content hashes of every chart archive on disk.
+    pub fn installed_chart_hashes(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(self.chart_blobs_dir()) else {
+            return Vec::new();
+        };
+        let mut hashes: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .strip_suffix(".pmtiles")
+                    .map(str::to_string)
+            })
+            .collect();
+        hashes.sort();
+        hashes
     }
 
     /// Scratch space for in-flight downloads. Deliberately inside `root`
@@ -186,8 +217,15 @@ pub fn apply_downloaded_bundle(
     Ok(())
 }
 
-/// Delete every installed cycle older than the active one, with the chart
-/// tiles installed alongside it, and report the bytes reclaimed.
+/// Delete every installed cycle older than the active one and report the
+/// bytes reclaimed.
+///
+/// Chart archives are deliberately *not* touched here. They are keyed by
+/// content now, not by cycle, and the whole point is that a chart survives
+/// the cycle that introduced it — deleting the old cycle's charts is
+/// exactly the behaviour this replaced. Use [`prune_chart_blobs`] for
+/// those, which needs the live set of hashes and therefore the caller's
+/// database.
 ///
 /// Separate from [`apply_downloaded_bundle`] and never implied by it:
 /// reclaiming space is a decision about a pilot's device, and the swap
@@ -202,11 +240,66 @@ pub fn prune_superseded_cycles(layout: &BundleLayout) -> Result<u64, ApplyError>
             continue;
         }
         freed += dir_size(&layout.cycle_dir(&cycle_id));
-        freed += dir_size(&layout.charts_dir(&cycle_id));
         remove_dir_if_present(&layout.cycle_dir(&cycle_id))?;
-        remove_dir_if_present(&layout.charts_dir(&cycle_id))?;
+    }
+    // Pre-content-addressing layout: charts used to live under
+    // `charts/<cycle_id>/`. Nothing reads those any more, so anything left
+    // there is dead weight on a device that upgraded.
+    for legacy in legacy_chart_dirs(layout) {
+        freed += dir_size(&legacy);
+        remove_dir_if_present(&legacy)?;
     }
     Ok(freed)
+}
+
+/// Delete chart archives that no installed cycle still refers to, and
+/// report the bytes reclaimed.
+///
+/// `keep` is the set of content hashes the caller's cycle bundles still
+/// catalogue. It has to come from the caller because the mapping from a
+/// chart to its hash lives in `chart_catalog`, and this crate deals in
+/// files, not SQL.
+///
+/// A hash that isn't a valid digest is ignored rather than trusted, so a
+/// malformed `keep` entry can never cause a delete outside the blob store.
+pub fn prune_chart_blobs(
+    layout: &BundleLayout,
+    keep: &std::collections::HashSet<String>,
+) -> Result<u64, ApplyError> {
+    let keep: std::collections::HashSet<String> =
+        keep.iter().map(|h| h.to_ascii_lowercase()).collect();
+    let mut freed = 0;
+    for hash in layout.installed_chart_hashes() {
+        if keep.contains(&hash.to_ascii_lowercase()) {
+            continue;
+        }
+        let Some(path) = layout.chart_blob_path(&hash) else {
+            continue;
+        };
+        freed += fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(io_error(&path, source)),
+        }
+    }
+    Ok(freed)
+}
+
+/// Chart directories from the pre-content-addressing layout
+/// (`charts/<cycle_id>/`), which nothing reads any more.
+fn legacy_chart_dirs(layout: &BundleLayout) -> Vec<PathBuf> {
+    let charts_root = layout.root().join("charts");
+    let Ok(entries) = fs::read_dir(&charts_root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry.file_name() != "blobs" && entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+        })
+        .map(|entry| entry.path())
+        .collect()
 }
 
 /// Cycle ids come off the network (`CycleManifest::cycle_id`) and are used
@@ -302,6 +395,15 @@ mod tests {
             let staged = downloads.join("staged.partial");
             fs::write(&staged, contents).unwrap();
             apply_downloaded_bundle(&self.layout, cycle_id, &staged, sha256)
+        }
+
+        /// Puts a chart archive of `size` bytes in the blob store under
+        /// `hash`, as a finished download would.
+        fn install_blob(&self, hash: &str, size: usize) -> PathBuf {
+            let path = self.layout.chart_blob_path(hash).expect("valid digest");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, vec![0u8; size]).unwrap();
+            path
         }
 
         fn active_bundle_contents(&self) -> Option<Vec<u8>> {
@@ -411,26 +513,87 @@ mod tests {
     }
 
     #[test]
-    fn pruning_removes_older_cycles_and_their_charts_but_not_the_active_one() {
+    fn pruning_removes_older_cycles_but_never_the_active_one() {
         let fixture = Fixture::new();
         fixture.apply("2026-07-09", b"cycle one").unwrap();
-        let old_chart = fixture.layout.chart_path("2026-07-09", "seattle");
-        fs::create_dir_all(old_chart.parent().unwrap()).unwrap();
-        fs::write(&old_chart, vec![0u8; 1024]).unwrap();
         fixture.apply("2026-08-06", b"cycle two").unwrap();
 
         let freed = prune_superseded_cycles(&fixture.layout).unwrap();
 
-        assert!(
-            freed >= 1024,
-            "expected the chart's bytes counted, got {freed}"
-        );
-        assert!(!old_chart.exists());
+        assert!(freed > 0, "expected the old bundle's bytes counted");
         assert_eq!(
             fixture.layout.installed_cycle_ids(),
             vec!["2026-08-06".to_string()]
         );
         assert_eq!(fixture.active_bundle_contents().unwrap(), b"cycle two");
+    }
+
+    /// The behaviour content addressing exists for: superseding a cycle
+    /// must not throw away chart archives, because the next cycle almost
+    /// certainly still wants most of them.
+    #[test]
+    fn pruning_a_cycle_leaves_the_chart_blobs_alone() {
+        let fixture = Fixture::new();
+        fixture.apply("2026-07-09", b"cycle one").unwrap();
+        let blob = fixture.install_blob(&"a".repeat(64), 1024);
+        fixture.apply("2026-08-06", b"cycle two").unwrap();
+
+        prune_superseded_cycles(&fixture.layout).unwrap();
+
+        assert!(
+            blob.exists(),
+            "the chart survived the cycle that brought it"
+        );
+    }
+
+    #[test]
+    fn pruning_blobs_keeps_what_is_still_catalogued_and_reclaims_the_rest() {
+        let fixture = Fixture::new();
+        fixture.apply("2026-07-09", b"cycle one").unwrap();
+        let kept = fixture.install_blob(&"a".repeat(64), 1024);
+        let dropped = fixture.install_blob(&"b".repeat(64), 2048);
+
+        let freed = prune_chart_blobs(
+            &fixture.layout,
+            &std::collections::HashSet::from(["a".repeat(64)]),
+        )
+        .unwrap();
+
+        assert_eq!(freed, 2048);
+        assert!(kept.exists());
+        assert!(!dropped.exists());
+    }
+
+    #[test]
+    fn a_hash_that_is_not_a_digest_never_becomes_a_path() {
+        let fixture = Fixture::new();
+        for hostile in ["../../escape", "", &"z".repeat(64), &"a".repeat(63)] {
+            assert!(
+                fixture.layout.chart_blob_path(hostile).is_none(),
+                "{hostile:?} should not resolve to a path"
+            );
+        }
+    }
+
+    /// Devices that ran the per-cycle layout have chart files nothing reads
+    /// any more; pruning is what reclaims them.
+    #[test]
+    fn pruning_clears_chart_directories_from_the_old_layout() {
+        let fixture = Fixture::new();
+        fixture.apply("2026-07-09", b"cycle one").unwrap();
+        let legacy = fixture.layout.root().join("charts").join("2026-07-09");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("seattle.pmtiles"), vec![0u8; 4096]).unwrap();
+        let blob = fixture.install_blob(&"a".repeat(64), 512);
+
+        let freed = prune_superseded_cycles(&fixture.layout).unwrap();
+
+        assert!(
+            freed >= 4096,
+            "expected the legacy chart counted, got {freed}"
+        );
+        assert!(!legacy.exists());
+        assert!(blob.exists(), "the blob store is not legacy");
     }
 
     #[test]

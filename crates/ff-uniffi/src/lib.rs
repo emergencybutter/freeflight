@@ -92,7 +92,7 @@ impl Freeflight {
             effective_date: query::cycle_effective_date(conn),
             airport_count: query::count(conn, "airport"),
             procedure_count: query::count(conn, "procedure"),
-            installed_chart_ids: self.installed_chart_ids(&cycle_id),
+            installed_chart_ids: self.installed_chart_ids(conn),
             cycle_id,
             bundle_bytes,
         })
@@ -149,24 +149,43 @@ impl Freeflight {
         Ok(())
     }
 
-    /// Delete cycles older than the active one and the charts installed
-    /// alongside them; returns the bytes reclaimed.
+    /// Delete superseded cycles, and any chart archive the active cycle no
+    /// longer refers to; returns the bytes reclaimed.
+    ///
+    /// Charts shared with the active cycle survive — that is the point of
+    /// addressing them by content. Only genuinely orphaned archives go.
     pub fn prune_old_cycles(&self) -> Result<u64, CoreError> {
         let mut state = self.lock()?;
         state.charts.forget_all();
-        Ok(prune_superseded_cycles(&self.layout)?)
+        let mut freed = prune_superseded_cycles(&self.layout)?;
+        // Read the surviving catalogue *after* the cycle prune, so the
+        // keep-set reflects what is actually still installed.
+        let keep: std::collections::HashSet<String> =
+            query::catalogued_chart_hashes(self.connection(&mut state)?)?
+                .into_iter()
+                .collect();
+        freed += ff_sync::prune_chart_blobs(&self.layout, &keep)?;
+        Ok(freed)
     }
 
     // ---- charts ----------------------------------------------------------
 
     /// Every chart this cycle catalogues, each marked with whether its
-    /// PMTiles archive is already on the device.
+    /// archive is already on the device.
+    ///
+    /// "Already on the device" is answered by content hash, so a chart
+    /// carried over unchanged from the previous cycle reports as installed
+    /// the moment the new cycle is applied — nothing to re-download.
     pub fn charts(&self) -> Result<Vec<Chart>, CoreError> {
-        let cycle_id = self.require_cycle()?;
+        self.require_cycle()?;
         let mut state = self.lock()?;
-        let mut charts = query::charts(self.connection(&mut state)?)?;
+        let conn = self.connection(&mut state)?;
+        let mut charts = query::charts(conn)?;
         for chart in &mut charts {
-            let path = self.layout.chart_path(&cycle_id, &chart.id);
+            let (hash, _) = query::chart_hash(conn, &chart.id)?;
+            let Some(path) = self.layout.chart_blob_path(&hash) else {
+                continue;
+            };
             if let Ok(meta) = fs::metadata(&path) {
                 chart.installed = true;
                 chart.installed_bytes = meta.len();
@@ -179,36 +198,61 @@ impl Freeflight {
         Ok(charts)
     }
 
-    /// Move a downloaded PMTiles archive into place for the active cycle.
-    /// No checksum: unlike the bundle, `ff-api` publishes no digest for
-    /// chart files, and a damaged archive degrades to missing tiles rather
-    /// than to wrong data — so it is caught at read time and reported, not
-    /// guarded here with a check that would have nothing to compare against.
+    /// Verify a downloaded chart archive and move it into the blob store.
+    ///
+    /// The checksum comes from `chart_catalog.sha256`, so unlike before,
+    /// a truncated or corrupted chart download is now caught here rather
+    /// than surfacing later as missing tiles. Bundles published before that
+    /// column existed have nothing to compare against; those install
+    /// unverified (see `query::chart_blob_key`).
     pub fn install_chart(
         &self,
         chart_id: String,
         downloaded_path: String,
     ) -> Result<(), CoreError> {
-        let cycle_id = self.require_cycle()?;
+        self.require_cycle()?;
+        let downloaded = Path::new(&downloaded_path);
+        let mut state = self.lock()?;
+        let (expected, verifiable) = query::chart_hash(self.connection(&mut state)?, &chart_id)?;
+
+        if verifiable {
+            let actual = ff_sync::sha256_file_hex(downloaded)
+                .map_err(|e| CoreError::Chart(e.to_string()))?;
+            if !actual.eq_ignore_ascii_case(&expected) {
+                // Left where it is: the downloader resumes from a partial
+                // file, and deleting it here would turn a corrupted tail
+                // into a full re-download.
+                return Err(CoreError::Chart(format!(
+                    "{chart_id} failed checksum verification                      (expected {expected}, got {actual})"
+                )));
+            }
+        }
+
         let target = self
             .layout
-            .chart_path(&cycle_id, &sanitize_chart_id(&chart_id)?);
-        let parent = target.parent().expect("chart path always has a parent");
-        fs::create_dir_all(parent).map_err(|e| CoreError::Chart(e.to_string()))?;
-        let mut state = self.lock()?;
-        state.charts.forget(&chart_id);
-        fs::rename(Path::new(&downloaded_path), &target)
+            .chart_blob_path(&expected)
+            .ok_or_else(|| CoreError::Chart(format!("unusable content hash for {chart_id}")))?;
+        fs::create_dir_all(self.layout.chart_blobs_dir())
+            .map_err(|e| CoreError::Chart(e.to_string()))?;
+        state.charts.forget(&expected);
+        fs::rename(downloaded, &target)
             .map_err(|e| CoreError::Chart(format!("installing {chart_id}: {e}")))?;
         Ok(())
     }
 
+    /// Delete this chart's archive.
+    ///
+    /// Removes the blob, which is shared: if another chart in this cycle
+    /// resolves to the same content it goes too. That only happens when the
+    /// archives are byte-identical, so it is the same file either way.
     pub fn remove_chart(&self, chart_id: String) -> Result<(), CoreError> {
-        let cycle_id = self.require_cycle()?;
-        let target = self
-            .layout
-            .chart_path(&cycle_id, &sanitize_chart_id(&chart_id)?);
+        self.require_cycle()?;
         let mut state = self.lock()?;
-        state.charts.forget(&chart_id);
+        let (hash, _) = query::chart_hash(self.connection(&mut state)?, &chart_id)?;
+        let Some(target) = self.layout.chart_blob_path(&hash) else {
+            return Ok(());
+        };
+        state.charts.forget(&hash);
         match fs::remove_file(&target) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -226,14 +270,18 @@ impl Freeflight {
         x: u32,
         y: u32,
     ) -> Result<Option<Vec<u8>>, CoreError> {
-        let cycle_id = self.require_cycle()?;
-        let safe_id = sanitize_chart_id(&chart_id)?;
-        let path = self.layout.chart_path(&cycle_id, &safe_id);
+        self.require_cycle()?;
+        let mut state = self.lock()?;
+        let (hash, _) = query::chart_hash(self.connection(&mut state)?, &chart_id)?;
+        let Some(path) = self.layout.chart_blob_path(&hash) else {
+            return Ok(None);
+        };
         if !path.is_file() {
             return Ok(None);
         }
-        let mut state = self.lock()?;
-        state.charts.tile(&chart_id, &path, z, x as u64, y as u64)
+        // Keyed on the content hash, not the chart id: two cycles naming
+        // the same archive share one open handle.
+        state.charts.tile(&hash, &path, z, x as u64, y as u64)
     }
 
     // ---- cycle queries ---------------------------------------------------
@@ -313,38 +361,26 @@ impl Freeflight {
         Ok(&state.db.as_ref().expect("opened just above").1)
     }
 
-    fn installed_chart_ids(&self, cycle_id: &str) -> Vec<String> {
-        let Ok(entries) = fs::read_dir(self.layout.charts_dir(cycle_id)) else {
+    /// Charts this cycle catalogues whose archive is on disk. Derived from
+    /// the catalogue rather than from the blob directory, because a blob is
+    /// just a hash — only the catalogue knows which chart it is.
+    fn installed_chart_ids(&self, conn: &Connection) -> Vec<String> {
+        let Ok(charts) = query::charts(conn) else {
             return Vec::new();
         };
-        let mut ids: Vec<String> = entries
-            .flatten()
-            .filter_map(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .strip_suffix(".pmtiles")
-                    .map(str::to_string)
+        let mut ids: Vec<String> = charts
+            .into_iter()
+            .filter(|chart| {
+                query::chart_hash(conn, &chart.id)
+                    .ok()
+                    .and_then(|(hash, _)| self.layout.chart_blob_path(&hash))
+                    .map(|path| path.is_file())
+                    .unwrap_or(false)
             })
+            .map(|chart| chart.id)
             .collect();
         ids.sort();
         ids
-    }
-}
-
-/// Chart ids come from `chart_catalog` and become filenames, so they get
-/// the same treatment cycle ids get in `ff-sync`: checked, not sanitized.
-/// `ff-etl` writes ids like `2026-07-09-seattle`.
-fn sanitize_chart_id(chart_id: &str) -> Result<String, CoreError> {
-    let ok = !chart_id.is_empty()
-        && chart_id.len() <= 128
-        && chart_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if ok {
-        Ok(chart_id.to_string())
-    } else {
-        Err(CoreError::Chart(format!("unusable chart id {chart_id:?}")))
     }
 }
 

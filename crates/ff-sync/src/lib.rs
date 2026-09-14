@@ -14,7 +14,9 @@ pub mod checksum;
 pub mod client;
 pub mod manifest;
 
-pub use apply::{apply_downloaded_bundle, prune_superseded_cycles, ApplyError, BundleLayout};
+pub use apply::{
+    apply_downloaded_bundle, prune_chart_blobs, prune_superseded_cycles, ApplyError, BundleLayout,
+};
 pub use checksum::{sha256_file_hex, sha256_hex, verify as verify_checksum, ChecksumError};
 #[cfg(feature = "client")]
 pub use client::{download_and_apply, fetch_latest_manifest, SyncError};

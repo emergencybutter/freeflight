@@ -1,0 +1,23 @@
+-- Content hash of each chart's published PMTiles archive.
+--
+-- Two things depend on it, both on the offline client (DESIGN.md §8):
+--
+-- 1. Integrity. Chart archives were the one artifact a client installed
+--    without verifying anything — the cycle bundle has had a checksum in
+--    its manifest since the beginning, but a chart was whatever bytes
+--    arrived, and a truncated download simply became missing tiles.
+--
+-- 2. Reuse across cycles, which is the reason this exists now. Chart ids
+--    embed the cycle date (`2026-07-09-seattle`), so every chart looked
+--    new every cycle and a device re-downloaded all of them — about 20GB
+--    every 56 days for a full set. FAA sectionals are on their own,
+--    mostly slower, revision schedule, so in practice most are unchanged
+--    from one AIRAC cycle to the next and are byte-identical. Keyed by
+--    content hash instead of by cycle, an unchanged chart is already
+--    installed and costs nothing.
+--
+-- Nullable because bundles published before this migration have no hashes
+-- and clients still have to read them: a chart without one is installed
+-- under the hash the client computes itself, so it is still
+-- content-addressed, just not verified against the server.
+ALTER TABLE chart_catalog ADD COLUMN sha256 TEXT;
