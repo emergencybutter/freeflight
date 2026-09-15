@@ -78,6 +78,7 @@ so it and its data live under **one hostname**. nginx splits by path:
 | File | Installed to (vya2) | Purpose |
 |---|---|---|
 | `Dockerfile` | build context = workspace root | multi-stage Rust build of `ff-api` |
+| `Dockerfile.chart-hash-backfill` | build context = workspace root | one-off `backfill_chart_hashes` (see "Chart hashes" below) |
 | `compose.yml` | `/containers/freeflight/compose.yml` | runs the `freeflight-api` container |
 | `ship-image.sh` | — | build the image locally and ship it to vya2 (see runbook step 1) |
 | `backup-db.sh` | `/containers/freeflight/backup-db.sh` | daily `pg_dump` of the account DB → local + Dedibackup (see "Account database" below) |
@@ -91,6 +92,58 @@ its own `deploy.sh`. See "nginx config change" in the runbook below.
 
 The nginx `docker-compose.yml` (also in `vya-ws/nginx`) carries the
 static-root volume line: `- /var/www/freeflight:/srv/freeflight:ro`.
+
+## Chart hashes and sizes (one-off, per pre-0007 cycle)
+
+Cycles published before `ff-storage` migrations 0007/0008 carry no
+`chart_catalog.sha256` or `.bytes`. The Android client needs both, and
+without them three things stay switched off (DESIGN.md §8):
+
+- chart downloads install **unverified** — the bundle has always had a
+  checksum, chart archives did not;
+- a chart set can't say what it will **cost** before you start it, so the
+  UI has to show "size unknown";
+- archives are **not reused across cycles**, so every AIRAC update
+  re-downloads the full ~20GB of sectionals, almost all of which are
+  byte-identical to the ones already on the device.
+
+A full `ff-etl` re-run would recover two columns by re-fetching and
+re-tiling all that imagery through GDAL. The published archives are
+already on the server next to the bundle, so `backfill_chart_hashes`
+reads the hash and size straight off them instead — pure metadata, no
+GDAL, and it edits the bundle **in place**.
+
+It is idempotent: rows that already have both are skipped, so a re-run
+costs a catalogue scan rather than re-reading everything. Set
+`FF_BACKFILL_FORCE=1` only if published files were replaced without the
+catalogue being updated.
+
+```sh
+# on vya2, from a checkout of this repo
+docker build -f deploy/Dockerfile.chart-hash-backfill -t ff-chart-hash-backfill:latest .
+
+# ff-api holds /data read-only, so this needs its own read-write mount.
+# Stop nothing: ff-api reopens the bundle per request and the writes are
+# additive, but taking a copy first is cheap insurance on a 145MB file.
+cp /containers/freeflight/data/cycles/<cycle>/cycle.sqlite /tmp/cycle.sqlite.bak
+
+docker run --rm   -v /containers/freeflight/data:/data   -e FF_ETL_DATA_DIR=/data   ff-chart-hash-backfill:latest
+```
+
+Expect roughly a minute per 2–3GB of archives — about 6–8 minutes for a
+full nationwide cycle (~19GB), since it is reading every byte of every
+chart. It logs one line per chart hashed and finishes with
+`filled=… skipped=… missing=…`; `missing` counts charts catalogued but
+not present on that disk, which is normal for a partial mirror and is not
+an error.
+
+Verify afterwards:
+
+```sh
+sqlite3 /containers/freeflight/data/cycles/<cycle>/cycle.sqlite   "SELECT COUNT(*) total, COUNT(sha256) hashed, COUNT(bytes) sized FROM chart_catalog;"
+```
+
+No `ff-api` restart is needed — it opens the bundle fresh per request.
 
 ## Account database (one-time setup)
 

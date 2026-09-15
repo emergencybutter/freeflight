@@ -5,6 +5,7 @@ pub mod aixm;
 pub mod openaip;
 pub mod airspace;
 pub mod bundle;
+pub mod chart_hashes;
 pub mod chart_prep;
 pub mod dtpp;
 pub mod fetch;

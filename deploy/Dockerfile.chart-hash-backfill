@@ -1,0 +1,15 @@
+# Builds the one-off backfill_chart_hashes tool — records each published
+# chart's content hash and size in the cycle bundle. Pure metadata read off
+# archives that already exist, so unlike Dockerfile.tiler this needs no
+# GDAL. Build context is the workspace root.
+FROM rust:1-bookworm AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p ff-etl --bin backfill_chart_hashes
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/backfill_chart_hashes /usr/local/bin/backfill_chart_hashes
+CMD ["backfill_chart_hashes"]
