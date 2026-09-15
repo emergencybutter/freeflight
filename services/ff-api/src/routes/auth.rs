@@ -148,10 +148,15 @@ impl AuthState {
         }
     }
 
-    /// True if a browser-supplied SPA origin is allowed to receive a session
-    /// token. Localhost (any port/scheme) is always permitted so dev needs
-    /// no `FF_WEB_ORIGINS`; everything else must be explicitly allowlisted.
-    fn origin_allowed(&self, origin: &str) -> bool {
+    /// True if a browser-supplied SPA origin is one of ours. Localhost (any
+    /// port/scheme) is always permitted so dev needs no `FF_WEB_ORIGINS`;
+    /// everything else must be explicitly allowlisted.
+    ///
+    /// Two callers, asking the same question: the post-login fragment
+    /// redirect (which must not hand a session token to an arbitrary
+    /// origin) and the CORS layer (`crate::cors`). Deliberately one
+    /// allowlist rather than two — see that module's docs.
+    pub(crate) fn origin_allowed(&self, origin: &str) -> bool {
         if is_localhost_origin(origin) {
             return true;
         }

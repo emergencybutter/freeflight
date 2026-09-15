@@ -93,6 +93,58 @@ its own `deploy.sh`. See "nginx config change" in the runbook below.
 The nginx `docker-compose.yml` (also in `vya-ws/nginx`) carries the
 static-root volume line: `- /var/www/freeflight:/srv/freeflight:ro`.
 
+## Abuse resistance: rate limiting and CORS
+
+`ff-api` is a public, unauthenticated proxy, so DESIGN.md §11 requires
+per-IP rate limiting on the routes that spend an upstream budget, and CORS
+restricted to our own origins. Both are on by default; the deployment only
+has to tell them where the real client address comes from.
+
+| Variable | Set it to | Why |
+|---|---|---|
+| `FF_TRUSTED_CLIENT_IP_HEADER` | `cf-connecting-ip` | **Important.** See below. |
+| `FF_WEB_ORIGINS` | `https://freeflight.flyvoyager.net` | CORS allowlist, shared with the OAuth redirect guard. Localhost is always allowed. |
+| `FF_RATE_LIMIT_RPS` | *(unset → 2)* | Sustained requests/sec per client on `/weather/*` and `/notams`. `0` disables limiting. |
+| `FF_RATE_LIMIT_BURST` | *(unset → 30)* | Back-to-back allowance from idle; covers one map pan's worth of weather calls. |
+
+**The one that matters.** `ff-api` sees nginx's `vya2net` container
+address as the socket peer, identical for every request on earth. Left
+unset, the limiter keys on that, so the whole internet shares one bucket
+and real users start getting 429s at a combined ~2 req/s — which looks
+like the service is broken, not misconfigured. The service logs a warning
+on the first such request, but set the variable and don't rely on
+noticing it:
+
+```
+FF_TRUSTED_CLIENT_IP_HEADER=cf-connecting-ip
+```
+
+in `/containers/freeflight/.env`, then `docker compose up -d`.
+
+That header is only trusted when configured, because trusting it blindly
+would let anyone bypass the limit with a fresh value per request — so
+**check nginx actually sets it before turning it on.** Cloudflare sends
+`CF-Connecting-IP` to the origin; the freeflight vhost must pass it
+through (`proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;`, or
+rely on the header arriving unmodified). The vhost lives in the separate
+`vya-ws/nginx` repo. If nginx strips or does not forward it, the limiter
+silently falls back to the peer address and you are back to one shared
+bucket. Verify from outside:
+
+```sh
+# Well under the limit: expect 200s.
+curl -s -o /dev/null -w "%{http_code}
+" https://freeflight.flyvoyager.net/weather/flightcat
+
+# A burst from one address: expect 200s then 429s with a Retry-After.
+for i in $(seq 1 40); do
+  curl -s -o /dev/null -w "%{http_code} " https://freeflight.flyvoyager.net/weather/flightcat
+done; echo
+```
+
+If a second machine gets 429s immediately after the first machine's
+burst, the header is not reaching ff-api and everyone is sharing a bucket.
+
 ## Chart hashes and sizes (one-off, per pre-0007 cycle)
 
 Cycles published before `ff-storage` migrations 0007/0008 carry no

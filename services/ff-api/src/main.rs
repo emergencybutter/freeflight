@@ -1,3 +1,5 @@
+mod cors;
+mod ratelimit;
 mod routes;
 mod state;
 
@@ -36,10 +38,16 @@ async fn main() {
         .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
     tracing::info!("ff-api listening on {addr}");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server error");
+    // `into_make_service_with_connect_info` so the rate limiter can see the
+    // socket peer address; without it there is no address to key on when
+    // no trusted proxy header is configured.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("server error");
 }
 
 /// Periodically pulls aviationweather.gov's bulk METAR cache into

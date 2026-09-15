@@ -1694,15 +1694,31 @@ are mirrored.
   terms — each state's AIP licence is reviewed before its data is included
   in a published bundle; a state that forbids redistribution is not
   re-hosted.
-- **Abuse resistance** (currently unmet): `ff-api` is an unauthenticated
-  public proxy with permissive CORS — as-is, anyone can use it as a free
-  METAR relay, and once NOTAM credentials are configured, anonymous
-  traffic spends *our* NMS quota and could get those credentials
-  rate-limited or revoked. Before any non-local deployment: per-IP rate
-  limiting on the weather/NOTAM proxy routes at minimum; restrict CORS
-  to the real web origin(s); consider a lightweight app token for the
-  clients. Fine to skip while everything runs on localhost — not fine to
-  forget (risk [api-availability]).
+- **Abuse resistance**: `ff-api` is an unauthenticated public proxy, so
+  anyone could use it as a free METAR relay, and once NOTAM credentials
+  are configured anonymous traffic spends *our* NMS quota and could get
+  those credentials rate-limited or revoked. Both minimum measures are
+  now in place (risk [api-availability]):
+  - **Per-IP rate limiting** on exactly the routes that spend an upstream
+    budget — `/weather/*` and `/notams`. A token bucket per client
+    (default 2 req/s sustained, 30 burst, `FF_RATE_LIMIT_RPS`/`_BURST`),
+    because real traffic is bursty: one map pan asks for METAR, TAF,
+    AIRMET, SIGMET, CWA, PIREPs and winds at once. Serving our own data
+    — bundles, chart tiles, `/data/*` — is never throttled, since it
+    costs no one else anything. Behind a proxy the socket peer is nginx,
+    so the client address must come from a header the proxy overwrites
+    (`FF_TRUSTED_CLIENT_IP_HEADER`); that header is used *only* when
+    explicitly configured, because trusting it unconditionally would let
+    anyone bypass the limit by sending a fresh value per request.
+  - **CORS restricted** to our own origins, reusing the `FF_WEB_ORIGINS`
+    allowlist the OAuth flow already keeps (localhost always allowed, so
+    dev needs no config). One allowlist rather than two: both answer the
+    same question, and separate variables would let a deployment be half
+    configured. The deployed SPA is unaffected either way — nginx serves
+    it and the API under one hostname, so those calls are same-origin.
+
+  Still open: a lightweight app token for the clients, which would let
+  the limits be per-client rather than per-address.
 - **Availability**: `ff-api` is a single point of failure by design in
   Phase 1 — web is fully down without it, and Android can't fetch new
   cycles or fresh weather (existing synced data keeps working). One

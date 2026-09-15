@@ -8,13 +8,19 @@ pub mod health;
 pub mod notams;
 pub mod weather;
 
+use crate::ratelimit::RateLimiter;
 use crate::state::AppState;
 use axum::routing::{get, post, put};
 use axum::Router;
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 pub fn router(state: AppState) -> Router {
+    router_with(state, RateLimiter::from_env())
+}
+
+/// Split out so tests can build a router with a known limiter (or none)
+/// instead of reaching through the environment.
+pub fn router_with(state: AppState, limiter: Option<RateLimiter>) -> Router {
     // Published cycle artifacts (cycle.sqlite, chart.pmtiles) are served
     // as plain static files with HTTP Range support — PMTiles is fetched
     // via range requests by MapLibre's pmtiles protocol, so a
@@ -26,16 +32,6 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health::health))
         .route("/data/butterlog/user/:user_id/current", get(butterlog::get_current))
         .route("/data/butterlog/by-discord/:discord_id/current", get(butterlog::get_current_by_discord))
-        .route("/weather/metar", get(weather::get_metars))
-        .route("/weather/flightcat", get(weather::get_flight_categories))
-        .route("/weather/taf", get(weather::get_tafs))
-        .route("/weather/atis", get(weather::get_datis))
-        .route("/weather/gairmet", get(weather::get_gairmets))
-        .route("/weather/sigmet", get(weather::get_sigmets))
-        .route("/weather/isigmet", get(weather::get_intl_sigmets))
-        .route("/weather/cwa", get(weather::get_cwas))
-        .route("/weather/pirep", get(weather::get_pireps))
-        .route("/weather/windtemp", get(weather::get_winds_aloft))
         .route("/cycles/latest", get(cycles::latest))
         .route("/data/airports", get(data::airports))
         .route("/data/attributions", get(data::attributions))
@@ -52,7 +48,6 @@ pub fn router(state: AppState) -> Router {
         .route("/data/charts", get(data::charts))
         .route("/data/airspace", get(data::airspace))
         .route("/data/nearest_fix", get(data::nearest_fix))
-        .route("/notams", get(notams::get_notams))
         .route("/dtpp/plate", get(dtpp::plate))
         // OAuth sign-in (Google/Discord). `login`/`callback` are top-level
         // browser redirects; `me`/`logout` are bearer-token XHR from the SPA.
@@ -76,10 +71,37 @@ pub fn router(state: AppState) -> Router {
             put(aircraft::replace_performance),
         )
         .nest_service("/bundles", bundles)
+        .merge(proxy_routes(state.clone(), limiter))
+        .layer(crate::cors::layer_for(state.auth.clone()))
         .with_state(state)
-        // Permissive: this proxies only public FAA/NOAA data and takes no
-        // credentials from the browser, so there's no cross-origin risk
-        // worth restricting during Phase 1 (DESIGN.md §11 revisits this
-        // once `ff-sync` carries account state).
-        .layer(CorsLayer::permissive())
+}
+
+/// The routes that spend an upstream budget rather than serving our own
+/// data: `/weather/*` fans out to aviationweather.gov, `/notams` spends
+/// the FAA NMS quota attached to our credentials. These are what §11 asks
+/// to rate limit, and they are grouped here so the limiter covers exactly
+/// them — a pilot pulling chart tiles or querying the local bundle is not
+/// costing anyone else anything and should never be throttled for it.
+fn proxy_routes(state: AppState, limiter: Option<RateLimiter>) -> Router<AppState> {
+    let routes = Router::new()
+        .route("/weather/metar", get(weather::get_metars))
+        .route("/weather/flightcat", get(weather::get_flight_categories))
+        .route("/weather/taf", get(weather::get_tafs))
+        .route("/weather/atis", get(weather::get_datis))
+        .route("/weather/gairmet", get(weather::get_gairmets))
+        .route("/weather/sigmet", get(weather::get_sigmets))
+        .route("/weather/isigmet", get(weather::get_intl_sigmets))
+        .route("/weather/cwa", get(weather::get_cwas))
+        .route("/weather/pirep", get(weather::get_pireps))
+        .route("/weather/windtemp", get(weather::get_winds_aloft))
+        .route("/notams", get(notams::get_notams));
+
+    match limiter {
+        Some(limiter) => routes.layer(axum::middleware::from_fn_with_state(
+            limiter,
+            crate::ratelimit::enforce,
+        )),
+        None => routes,
+    }
+    .with_state(state)
 }
