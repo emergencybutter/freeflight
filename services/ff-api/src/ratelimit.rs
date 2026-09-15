@@ -117,28 +117,41 @@ impl RateLimiter {
         }
     }
 
-    /// Shout, once, if we are limiting on what is obviously a proxy.
+    /// Shout, once, if the address we are limiting on cannot be a real
+    /// client.
     ///
-    /// The failure this catches is silent and nasty: deployed behind nginx
-    /// with no `FF_TRUSTED_CLIENT_IP_HEADER`, every request in the world
-    /// arrives from the same container address, so the entire internet
-    /// shares one bucket and real users start seeing 429s at a combined
-    /// couple of requests per second. Nothing about that looks like a
-    /// configuration error from the outside — it looks like the service is
-    /// broken. A private or loopback peer address with no trusted header
-    /// configured is a reliable tell, so say so.
+    /// The failure this catches is silent and nasty: behind a reverse proxy
+    /// every request arrives from the same container address, so the whole
+    /// internet shares one bucket and real users start seeing 429s at a
+    /// combined couple of requests per second. From outside that looks like
+    /// a broken service, not a missing variable.
+    ///
+    /// It fires on the *resolved* key, deliberately, and not only when no
+    /// header is configured. Naming a header that the proxy does not
+    /// actually send is the more likely mistake of the two — the fallback
+    /// to the socket peer is silent, and it lands in exactly this state —
+    /// so the check that would have skipped it was the wrong check.
     fn warn_if_keying_on_a_proxy(&self, key: IpAddr) {
-        if self.inner.client_ip_header.is_some() || !is_private_or_loopback(key) {
+        if !is_private_or_loopback(key) {
             return;
         }
         if !self.inner.warned_about_proxy.swap(true, Ordering::Relaxed) {
-            tracing::warn!(
-                peer = %key,
-                "rate limiting on a private/loopback peer address — if this service \
-                 is behind a reverse proxy, every client shares one bucket. Set \
-                 FF_TRUSTED_CLIENT_IP_HEADER (e.g. cf-connecting-ip) to the header \
-                 your proxy overwrites."
-            );
+            match &self.inner.client_ip_header {
+                Some(header) => tracing::warn!(
+                    key = %key, header = %header,
+                    "rate limiting on a private/loopback address even though a trusted \
+                     client-IP header is configured — the proxy is not sending that \
+                     header, so every client is sharing one bucket. Check the header \
+                     name against what the proxy actually sets."
+                ),
+                None => tracing::warn!(
+                    key = %key,
+                    "rate limiting on a private/loopback peer address — if this service \
+                     is behind a reverse proxy, every client shares one bucket. Set \
+                     FF_TRUSTED_CLIENT_IP_HEADER (e.g. cf-connecting-ip) to the header \
+                     your proxy overwrites."
+                ),
+            }
         }
     }
 
