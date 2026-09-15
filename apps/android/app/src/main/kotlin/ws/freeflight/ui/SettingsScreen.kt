@@ -63,8 +63,9 @@ fun SettingsScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier
                     }
                 }
                 Text(
-                    "Release builds allow plain HTTP only to the emulator's host loopback " +
-                        "(10.0.2.2). Anywhere else must be HTTPS.",
+                    "Defaults to freeflight.flyvoyager.net. Release builds allow plain HTTP " +
+                        "only to the emulator's host loopback (10.0.2.2); anywhere else must " +
+                        "be HTTPS.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

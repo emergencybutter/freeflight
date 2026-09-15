@@ -110,17 +110,27 @@ Every `LOAD` line should show an alignment of `0x4000` or more.
 
 ## Running
 
-The app is useless until it has a cycle, and it gets one from `ff-api`:
+The app talks to `ff-api`, and by default that is the production
+deployment at **https://freeflight.flyvoyager.net** — nginx there serves
+the web client at `/` and proxies `/cycles`, `/bundles`, `/weather`,
+`/notams`, `/data` and `/health` to `ff-api`, so the app and its data
+share one hostname (see `deploy/README.md`). A sideloaded APK therefore
+needs no configuration: install it, then **Data → Download cycle**, and a
+chart covering where you fly.
+
+To run against your own machine instead:
 
 ```sh
 cargo run -p ff-etl    # build and publish a cycle (see the web README)
 cargo run -p ff-api    # serve it (default :8080)
+./gradlew assembleDebug -Pff.defaultApiBaseUrl=http://10.0.2.2:8080
 ```
 
-Then **Data → Download cycle**, and a chart covering where you are flying.
-The default server address is `http://10.0.2.2:8080` — the host machine as
-seen from the emulator — and is changeable in Settings. Release builds
-allow plain HTTP only to that address; anywhere else must be HTTPS.
+`10.0.2.2` is the host as seen from the emulator. For a physical device,
+`adb reverse tcp:8080 tcp:8080` and use `http://127.0.0.1:8080`, or point
+at your LAN IP — debug builds permit cleartext anywhere, release builds
+only to `10.0.2.2`. The address is also editable at runtime in Settings,
+which overrides the built-in default for that install.
 
 Everything works in airplane mode once a cycle and a chart are installed.
 
