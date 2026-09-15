@@ -170,16 +170,39 @@ costs a catalogue scan rather than re-reading everything. Set
 `FF_BACKFILL_FORCE=1` only if published files were replaced without the
 catalogue being updated.
 
+There is no checkout on vya2, so build locally and ship the image, the
+same way `ship-image.sh` deploys `ff-api`:
+
 ```sh
-# on vya2, from a checkout of this repo
-docker build -f deploy/Dockerfile.chart-hash-backfill -t ff-chart-hash-backfill:latest .
+# locally
+docker build --provenance=false -f deploy/Dockerfile.chart-hash-backfill   -t ff-chart-hash-backfill:latest .
+docker save ff-chart-hash-backfill:latest | gzip   | ssh root@vya2.flyvoyager.net 'gunzip | docker load'
+```
 
-# ff-api holds /data read-only, so this needs its own read-write mount.
-# Stop nothing: ff-api reopens the bundle per request and the writes are
-# additive, but taking a copy first is cheap insurance on a 145MB file.
-cp /containers/freeflight/data/cycles/<cycle>/cycle.sqlite /tmp/cycle.sqlite.bak
+Then, on vya2, run it against a **copy** and swap that in when it
+succeeds. `ff-api` reopens the bundle per request, so a live swap needs no
+restart — and working on a copy keeps the migrations' `ALTER TABLE` off
+the file the service is reading, which is the only part of this that takes
+an exclusive lock:
 
-docker run --rm   -v /containers/freeflight/data:/data   -e FF_ETL_DATA_DIR=/data   ff-chart-hash-backfill:latest
+```sh
+CYC=2026-08-06
+cd /containers/freeflight/data/cycles/$CYC
+cp cycle.sqlite /containers/freeflight/cycle.sqlite.bak-$(date +%Y%m%d-%H%M%S)
+cp cycle.sqlite cycle.sqlite.new          # beside the archives, which the tool reads
+
+# Point the tool at the copy without touching the live latest.json.
+mkdir -p /tmp/ffbackfill
+python3 -c 'import json;d=json.load(open("/containers/freeflight/data/latest.json"));d["sqlite_path"]="cycles/'$CYC'/cycle.sqlite.new";json.dump(d,open("/tmp/ffbackfill/latest.json","w"))'
+
+# /data is mounted read-write here; ff-api's own mount stays read-only.
+docker run --rm   -v /containers/freeflight/data:/data   -v /tmp/ffbackfill/latest.json:/latestdir/latest.json:ro   ff-chart-hash-backfill:latest sh -c '
+    mkdir -p /work && cp /latestdir/latest.json /work/latest.json
+    ln -s /data/cycles /work/cycles
+    FF_ETL_DATA_DIR=/work backfill_chart_hashes'
+
+mv cycle.sqlite.new cycle.sqlite          # atomic, same filesystem
+rm -rf /tmp/ffbackfill
 ```
 
 Expect roughly a minute per 2–3GB of archives — about 6–8 minutes for a
@@ -189,13 +212,24 @@ chart. It logs one line per chart hashed and finishes with
 not present on that disk, which is normal for a partial mirror and is not
 an error.
 
-Verify afterwards:
+Verify before swapping (there is no `sqlite3` binary on vya2, but
+`python3` is there):
 
 ```sh
-sqlite3 /containers/freeflight/data/cycles/<cycle>/cycle.sqlite   "SELECT COUNT(*) total, COUNT(sha256) hashed, COUNT(bytes) sized FROM chart_catalog;"
+python3 -c '
+import sqlite3
+c = sqlite3.connect("cycle.sqlite.new")
+print(c.execute("SELECT COUNT(*), COUNT(sha256), COUNT(bytes) FROM chart_catalog").fetchone())
+print([r[0] for r in c.execute("SELECT version FROM schema_migrations ORDER BY version")])
+print(c.execute("SELECT COUNT(*) FROM airport").fetchone())'
 ```
 
-No `ff-api` restart is needed — it opens the bundle fresh per request.
+All three counts should match, the migrations should include 7 and 8, and
+the airport count should be unchanged — that last one is the check that
+you are about to swap in a bundle that is still a bundle.
+
+Run on 2026-08-06 (2026-09-15): `filled=181 skipped=0 missing=0`, about
+70 seconds to read 23.9GB of archives.
 
 ## Account database (one-time setup)
 
