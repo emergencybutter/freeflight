@@ -74,10 +74,11 @@ data class ChartSet(
             // whatever ff-etl publishes rather than a list kept in step by
             // hand.
             charts.groupBy { it.kind }
-                .toSortedMap()
+                .toList()
+                .sortedBy { (kind, _) -> ChartKinds.order(kind) }
                 .forEach { (kind, group) ->
                     sets += ChartSet(
-                        name = "All ${kind.humanKind()}",
+                        name = "All ${ChartKinds.label(kind)} charts",
                         description = "${group.size} charts",
                         charts = group,
                     )
@@ -91,17 +92,6 @@ data class ChartSet(
             return sets
         }
 
-        /** "IfrEnrouteLow" -> "IFR Enroute Low", for a label. */
-        private fun String.humanKind(): String = when (this) {
-            "Sectional" -> "sectionals"
-            "IfrEnrouteLow" -> "IFR Enroute Low charts"
-            "IfrEnrouteHigh" -> "IFR Enroute High charts"
-            "TerminalAreaChart" -> "Terminal Area charts"
-            "VfrFlyway" -> "VFR Flyway charts"
-            "WorldAeronauticalChart" -> "World Aeronautical charts"
-            "HelicopterRoute" -> "Helicopter Route charts"
-            else -> this
-        }
     }
 }
 

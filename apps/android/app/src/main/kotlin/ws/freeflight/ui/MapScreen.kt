@@ -65,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.ff_uniffi.BoundingBox
 import uniffi.ff_uniffi.ProcedureDetail
+import ws.freeflight.data.ChartKinds
 import ws.freeflight.map.ChartLayer
 import ws.freeflight.map.ChartMap
 import ws.freeflight.map.GeoJson
@@ -86,7 +87,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val controller = remember { MapController() }
     val mapState by viewModel.map.collectAsState()
     val cycle by viewModel.cycle.collectAsState()
-    val selectedChartId by viewModel.settings.selectedChartId.collectAsState()
+    val selectedChartKind by viewModel.settings.selectedChartKind.collectAsState()
     val charts by viewModel.charts.collectAsState()
     val airport by viewModel.airport.collectAsState()
     val procedure by viewModel.procedure.collectAsState()
@@ -143,11 +144,15 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     // The chart layer follows the selection, but only once the chart is
     // actually installed — pointing a raster source at an archive that
     // isn't there produces a screenful of 404s rather than an empty map.
-    val selectedChart = charts.firstOrNull { it.id == selectedChartId && it.installed }
-    LaunchedEffect(selectedChart?.id, selectedChart?.maxZoom) {
-        controller.setChart(
-            selectedChart?.let {
+    // Every installed sheet of the chosen series. Restricted to what is on
+    // disk because pointing a raster source at an archive that isn't there
+    // produces a screenful of 404s rather than an empty map.
+    val selectedCharts = charts.filter { it.installed && it.kind == selectedChartKind }
+    LaunchedEffect(selectedChartKind, selectedCharts.map { it.id }) {
+        controller.setCharts(
+            selectedCharts.map {
                 ChartLayer(
+                    chartId = it.id,
                     tileUrlTemplate = viewModel.tileUrlTemplate(it.id),
                     minZoom = it.minZoom.toInt(),
                     maxZoom = it.maxZoom.toInt(),
@@ -313,7 +318,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             viewModel = viewModel,
             controller = controller,
             charts = charts,
-            selectedChartId = selectedChartId,
+            selectedChartKind = selectedChartKind,
             weatherLoading = mapState.weatherLoading,
             locationTrackingMode = locationTrackingMode,
             hasRoute = routeWaypoints.isNotEmpty(),
@@ -558,7 +563,7 @@ private fun MapControls(
     viewModel: FreeflightViewModel,
     controller: MapController,
     charts: List<uniffi.ff_uniffi.Chart>,
-    selectedChartId: String?,
+    selectedChartKind: String?,
     weatherLoading: Boolean,
     locationTrackingMode: LocationTrackingMode,
     hasRoute: Boolean,
@@ -657,22 +662,41 @@ private fun MapControls(
                 DropdownMenuItem(
                     text = { Text("No chart") },
                     onClick = {
-                        viewModel.settings.setSelectedChartId(null)
+                        viewModel.settings.setSelectedChartKind(null)
                         layersOpen = false
                     },
-                    trailingIcon = { if (selectedChartId == null) Text("✓") },
+                    trailingIcon = { if (selectedChartKind == null) Text("✓") },
                 )
-                // Only what is actually on the device: an uninstalled chart
-                // offered here would draw nothing and look broken. The Data
-                // tab is where charts are downloaded.
-                charts.filter { it.installed }.forEach { chart ->
+                // Series, not sheets — the same choice the web client
+                // offers. A nationwide cycle catalogues 181 charts, which
+                // is not a menu; six kinds is. Only kinds with something
+                // installed are listed, since the rest would draw nothing:
+                // that is the one place this differs from web, which
+                // streams every chart from the server. The Data tab is
+                // where charts are downloaded.
+                val installedKinds = ChartKinds.ordered(
+                    charts.filter { it.installed }.map { it.kind }
+                )
+                installedKinds.forEach { kind ->
+                    val sheets = charts.count { it.installed && it.kind == kind }
                     DropdownMenuItem(
-                        text = { Text(chart.name) },
+                        text = { Text(ChartKinds.label(kind)) },
                         onClick = {
-                            viewModel.settings.setSelectedChartId(chart.id)
+                            viewModel.settings.setSelectedChartKind(kind)
                             layersOpen = false
                         },
-                        trailingIcon = { if (selectedChartId == chart.id) Text("✓") },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "$sheets",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (selectedChartKind == kind) {
+                                    Text("  ✓")
+                                }
+                            }
+                        },
                     )
                 }
                 if (charts.none { it.installed }) {

@@ -129,8 +129,8 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.padding(top = 8.dp),
             )
             Text(
-                "Each chart works with no network once it is here. Pick which one the map " +
-                    "draws from the layers button.",
+                "Each chart works with no network once it is here. The layers button picks " +
+                    "which series the map draws; every sheet you have from that series is used.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

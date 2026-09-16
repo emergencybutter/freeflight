@@ -84,17 +84,25 @@ class Settings(context: Context) {
     }
 
     /**
-     * Which catalogued chart the map draws under everything else, or null
-     * for no chart at all. Stored by `chart_catalog.id`, which embeds the
-     * cycle — so a chart selected under an older cycle simply stops
-     * matching after an update rather than silently drawing stale imagery.
+     * Which chart *series* the map draws under everything else, as a
+     * `chart_catalog.kind` — or null for no chart.
+     *
+     * A kind rather than a single `chart_catalog.id`, matching the web
+     * client: a nationwide cycle catalogues 181 sheets, which is not a
+     * menu, and picking one sheet means the map goes blank the moment a
+     * flight crosses onto the next sectional. A kind survives a cycle
+     * update too, where an id would not — ids embed the cycle date.
+     *
+     * Defaults to [ChartKinds.DEFAULT] on a fresh install, so a pilot who
+     * downloads a sectional sees it without first finding this setting.
      */
-    private val _selectedChartId = MutableStateFlow(prefs.getString(KEY_CHART_ID, null))
-    val selectedChartId: StateFlow<String?> = _selectedChartId.asStateFlow()
+    private val _selectedChartKind =
+        MutableStateFlow(prefs.getString(KEY_CHART_KIND, ChartKinds.DEFAULT))
+    val selectedChartKind: StateFlow<String?> = _selectedChartKind.asStateFlow()
 
-    fun setSelectedChartId(value: String?) {
-        prefs.edit().putString(KEY_CHART_ID, value).apply()
-        _selectedChartId.value = value
+    fun setSelectedChartKind(value: String?) {
+        prefs.edit().putString(KEY_CHART_KIND, value).apply()
+        _selectedChartKind.value = value
     }
 
     private companion object {
@@ -106,7 +114,8 @@ class Settings(context: Context) {
         const val KEY_SHOW_CWAS = "show_cwas"
         const val KEY_SHOW_PIREPS = "show_pireps"
         const val KEY_SHOW_BASEMAP = "show_basemap"
-        const val KEY_CHART_ID = "selected_chart_id"
+        // Superseded `selected_chart_id`, which stored a single sheet.
+        const val KEY_CHART_KIND = "selected_chart_kind"
     }
 }
 

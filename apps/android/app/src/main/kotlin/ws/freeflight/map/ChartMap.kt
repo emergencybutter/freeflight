@@ -59,7 +59,13 @@ enum class LocationTrackingMode {
 }
 
 /** A chart the map can draw: where its tiles come from, and over what zooms. */
-data class ChartLayer(val tileUrlTemplate: String, val minZoom: Int, val maxZoom: Int)
+data class ChartLayer(
+    /** `chart_catalog.id`, used to name this chart's source and layer. */
+    val chartId: String,
+    val tileUrlTemplate: String,
+    val minZoom: Int,
+    val maxZoom: Int,
+)
 
 class MapController {
 
@@ -88,7 +94,11 @@ class MapController {
     var currentTrackingMode: LocationTrackingMode = LocationTrackingMode.NONE
         private set
 
-    private var pendingChartTemplate: ChartLayer? = null
+    private var pendingCharts: List<ChartLayer> = emptyList()
+
+    /** Ids of the chart sources/layers currently installed, so they can
+     *  be removed precisely rather than by sweeping the style. */
+    private var chartLayerIds: List<String> = emptyList()
     private var pendingAirports: String = GeoJson.empty
     private var pendingAirspace: String = GeoJson.empty
     private var pendingGairmets: String = GeoJson.empty
@@ -131,7 +141,7 @@ class MapController {
             setupLocationComponentIfPermitted(surface.context, loaded)
             // Anything the screen asked for before the style finished
             // loading — which is most things on a cold start.
-            pendingChartTemplate?.let { applyChart(it) }
+            applyCharts(pendingCharts)
             source(AIRPORTS_SOURCE)?.setGeoJson(pendingAirports)
             source(AIRSPACE_SOURCE)?.setGeoJson(pendingAirspace)
             source(GAIRMET_SOURCE)?.setGeoJson(pendingGairmets)
@@ -267,9 +277,18 @@ class MapController {
      * fixed at construction, and the tile server's port and the chart id
      * both live in that URL.
      */
-    fun setChart(chart: ChartLayer?) {
-        pendingChartTemplate = chart
-        applyChart(chart)
+    /**
+     * Draw these charts as the base layer, replacing whatever was there.
+     *
+     * A list rather than one chart because the selector picks a *series* —
+     * "Sectional" — not a sheet. A flight that crosses from the Seattle
+     * sectional onto Great Falls should not need the pilot to notice and
+     * switch; every installed chart of the chosen kind is drawn, and
+     * MapLibre shows whichever one covers where the map is.
+     */
+    fun setCharts(charts: List<ChartLayer>) {
+        pendingCharts = charts
+        applyCharts(charts)
     }
 
     fun setBasemapVisible(visible: Boolean) {
@@ -358,31 +377,44 @@ class MapController {
         )
     }
 
-    private fun applyChart(chart: ChartLayer?) {
+    private fun applyCharts(charts: List<ChartLayer>) {
         val loaded = style ?: return
-        loaded.getLayer(CHART_LAYER)?.let { loaded.removeLayer(it) }
-        loaded.getSource(CHART_SOURCE)?.let { loaded.removeSource(it) }
-        if (chart == null) return
 
-        val tileSet = TileSet("2.1.0", chart.tileUrlTemplate).apply {
-            // Straight from the archive's own header. Outside this range a
-            // raster source draws nothing, so guessing it wide blanks the
-            // chart exactly when the pilot zooms in past the deepest tiles
-            // that were rendered; given the true maximum, MapLibre scales
-            // those up instead.
-            minZoom = chart.minZoom.toFloat()
-            maxZoom = chart.maxZoom.toFloat()
+        // Remove what was there first. Tracked by id rather than swept out
+        // of `loaded.layers`, so this can never take out the basemap or an
+        // overlay that happens to sit nearby.
+        for (id in chartLayerIds) {
+            loaded.getLayer(id)?.let { loaded.removeLayer(it) }
+            loaded.getSource(id)?.let { loaded.removeSource(it) }
         }
-        loaded.addSource(RasterSource(CHART_SOURCE, tileSet, 256))
-        val chartLayer = RasterLayer(CHART_LAYER, CHART_SOURCE)
-            .withProperties(PropertyFactory.rasterOpacity(1.0f))
-        val airspaceLayer = loaded.getLayer(AIRSPACE_FILL_LAYER)
-        if (airspaceLayer != null) {
-            loaded.addLayerBelow(chartLayer, AIRSPACE_FILL_LAYER)
-        } else {
-            loaded.addLayer(chartLayer)
+        chartLayerIds = charts.map { chartLayerId(it.chartId) }
+
+        for (chart in charts) {
+            val id = chartLayerId(chart.chartId)
+            val tileSet = TileSet("2.1.0", chart.tileUrlTemplate).apply {
+                // Straight from the archive's own header. Outside this
+                // range a raster source draws nothing, so guessing it wide
+                // blanks the chart exactly when the pilot zooms in past the
+                // deepest tiles that were rendered; given the true maximum,
+                // MapLibre scales those up instead.
+                minZoom = chart.minZoom.toFloat()
+                maxZoom = chart.maxZoom.toFloat()
+            }
+            loaded.addSource(RasterSource(id, tileSet, 256))
+            val chartLayer = RasterLayer(id, id)
+                .withProperties(PropertyFactory.rasterOpacity(1.0f))
+            // Under the overlays, which have to stay readable on top of it.
+            val airspaceLayer = loaded.getLayer(AIRSPACE_FILL_LAYER)
+            if (airspaceLayer != null) {
+                loaded.addLayerBelow(chartLayer, AIRSPACE_FILL_LAYER)
+            } else {
+                loaded.addLayer(chartLayer)
+            }
         }
     }
+
+    /** Source and layer share one id per chart; both are ours to remove. */
+    private fun chartLayerId(chartId: String) = "$CHART_LAYER_PREFIX$chartId"
 
     private fun installLayers(loaded: Style) {
         loaded.addSource(GeoJsonSource(AIRSPACE_SOURCE, pendingAirspace))
@@ -683,8 +715,8 @@ class MapController {
         private const val BACKGROUND_LAYER = "background"
         private const val BASEMAP_SOURCE = "basemap"
         private const val BASEMAP_LAYER = "basemap-tiles"
-        private const val CHART_SOURCE = "chart"
-        private const val CHART_LAYER = "chart-raster"
+        /** One source and layer per drawn chart, named `chart-<catalog id>`. */
+        private const val CHART_LAYER_PREFIX = "chart-"
         private const val AIRSPACE_SOURCE = "airspace"
         private const val AIRSPACE_FILL_LAYER = "airspace-fill"
         private const val AIRSPACE_LINE_LAYER = "airspace-line"
