@@ -30,6 +30,7 @@ import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.sources.GeoJsonSource
@@ -269,7 +270,10 @@ class MapController {
     fun setBasemapVisible(visible: Boolean) {
         pendingBasemapVisible = visible
         val layer = style?.getLayer(BASEMAP_LAYER) as? RasterLayer ?: return
-        layer.setProperties(PropertyFactory.rasterOpacity(if (visible) 1.0f else 0.0f))
+        layer.setProperties(
+            PropertyFactory.visibility(if (visible) Property.VISIBLE else Property.NONE),
+            PropertyFactory.rasterOpacity(if (visible) 1.0f else 0.0f),
+        )
     }
 
     fun setAirports(geoJson: String) {
@@ -713,16 +717,17 @@ class MapController {
             {
               "version": 8,
               "name": "freeflight",
+              "center": [-98.5795, 39.8283],
+              "zoom": 3.8,
               "sources": {
                 "basemap": {
                   "type": "raster",
                   "tiles": [
-                    "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-                    "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-                    "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-                    "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"
+                    "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"
                   ],
-                  "tileSize": 256,
+                  "tileSize": 512,
+                  "minzoom": 0,
+                  "maxzoom": 19,
                   "attribution": "© OpenStreetMap contributors, © CARTO"
                 }
               },
@@ -736,7 +741,10 @@ class MapController {
                   "id": "basemap-tiles",
                   "type": "raster",
                   "source": "basemap",
-                  "paint": { "raster-opacity": 1.0 }
+                  "paint": {
+                    "raster-opacity": 1.0,
+                    "raster-fade-duration": 0
+                  }
                 }
               ]
             }

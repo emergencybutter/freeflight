@@ -61,6 +61,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import uniffi.ff_uniffi.BoundingBox
 import uniffi.ff_uniffi.ProcedureDetail
 import ws.freeflight.map.ChartLayer
@@ -154,22 +156,40 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
         )
     }
     LaunchedEffect(mapState.airports, mapState.flightCategories) {
-        controller.setAirports(GeoJson.airports(mapState.airports, mapState.flightCategories))
+        val geoJson = withContext(Dispatchers.Default) {
+            GeoJson.airports(mapState.airports, mapState.flightCategories)
+        }
+        controller.setAirports(geoJson)
     }
     LaunchedEffect(mapState.airspace) {
-        controller.setAirspace(GeoJson.airspace(mapState.airspace))
+        val geoJson = withContext(Dispatchers.Default) {
+            GeoJson.airspace(mapState.airspace)
+        }
+        controller.setAirspace(geoJson)
     }
     LaunchedEffect(mapState.gairmets, showGairmets) {
-        controller.setGairmets(if (showGairmets) GeoJson.gairmets(mapState.gairmets) else GeoJson.empty)
+        val geoJson = withContext(Dispatchers.Default) {
+            if (showGairmets) GeoJson.gairmets(mapState.gairmets) else GeoJson.empty
+        }
+        controller.setGairmets(geoJson)
     }
     LaunchedEffect(mapState.sigmets, showSigmets) {
-        controller.setSigmets(if (showSigmets) GeoJson.sigmets(mapState.sigmets) else GeoJson.empty)
+        val geoJson = withContext(Dispatchers.Default) {
+            if (showSigmets) GeoJson.sigmets(mapState.sigmets) else GeoJson.empty
+        }
+        controller.setSigmets(geoJson)
     }
     LaunchedEffect(mapState.cwas, showCwas) {
-        controller.setCwas(if (showCwas) GeoJson.cwas(mapState.cwas) else GeoJson.empty)
+        val geoJson = withContext(Dispatchers.Default) {
+            if (showCwas) GeoJson.cwas(mapState.cwas) else GeoJson.empty
+        }
+        controller.setCwas(geoJson)
     }
     LaunchedEffect(mapState.pireps, showPireps) {
-        controller.setPireps(if (showPireps) GeoJson.pireps(mapState.pireps) else GeoJson.empty)
+        val geoJson = withContext(Dispatchers.Default) {
+            if (showPireps) GeoJson.pireps(mapState.pireps) else GeoJson.empty
+        }
+        controller.setPireps(geoJson)
     }
     LaunchedEffect(showBasemap) {
         controller.setBasemapVisible(showBasemap)

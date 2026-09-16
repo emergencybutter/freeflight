@@ -654,7 +654,7 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     private companion object {
-        const val VIEWPORT_DEBOUNCE_MS = 180L
+        const val VIEWPORT_DEBOUNCE_MS = 300L
         const val SEARCH_DEBOUNCE_MS = 160L
         const val SEARCH_LIMIT = 20u
         const val AIRPORT_LIMIT = 400u
