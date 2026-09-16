@@ -235,7 +235,9 @@ class CycleRepository(
             for (chart in pending) {
                 try {
                     val staged = File(core.downloadsDir(), "${chart.id}.pmtiles.partial")
-                    api.download(chart.tileUrl, staged) { got, _ -> publish(chart.name, got) }
+                    api.download(chart.tileUrl, staged) { got, _ ->
+                        publish(ChartSheets.label(chart), got)
+                    }
                     withContext(Dispatchers.IO) {
                         core.installChart(chart.id, staged.absolutePath)
                     }
@@ -243,7 +245,7 @@ class CycleRepository(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    failures += "${chart.name}: ${e.readableMessage()}"
+                    failures += "${ChartSheets.label(chart)}: ${e.readableMessage()}"
                 }
                 done++
                 publish(null, 0)

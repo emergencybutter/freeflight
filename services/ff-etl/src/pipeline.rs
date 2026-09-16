@@ -324,7 +324,14 @@ pub fn run() -> Result<(), EtlError> {
                         geotiff_path: rgb_tif,
                         pmtiles_out: pmtiles_path.clone(),
                         cycle_id: cifp.cycle_date.clone(),
-                        name: format!("{series_label} {panel_name}"),
+                        // `part.label`, not `panel_name`: a panel can ship
+                        // several .tif parts (L-6 as north/south halves, L-23
+                        // and L-34 each with an inset), and naming them after
+                        // the panel gave two catalogue rows the same name —
+                        // indistinguishable in a client's chart list, where
+                        // they are two separate downloads. The id already
+                        // used `part.label`; the name was the one that didn't.
+                        name: format!("{series_label} {}", part.label.to_lowercase()),
                         tile_url: format!("/bundles/{}/{pmtiles_filename}", cifp.cycle_date),
                         kind,
                     },

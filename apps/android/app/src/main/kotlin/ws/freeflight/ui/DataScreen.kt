@@ -25,6 +25,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import uniffi.ff_uniffi.Chart
 import ws.freeflight.data.ChartDownload
+import ws.freeflight.data.ChartKinds
+import ws.freeflight.data.ChartSheets
 import ws.freeflight.data.ChartSet
 import ws.freeflight.data.ChartSetDownload
 import ws.freeflight.data.SyncState
@@ -342,10 +344,10 @@ private fun ChartRow(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(chart.name, style = MaterialTheme.typography.bodyLarge)
+                    Text(ChartSheets.label(chart), style = MaterialTheme.typography.bodyLarge)
                     Text(
                         buildString {
-                            append(chart.kind)
+                            append(ChartKinds.label(chart.kind))
                             if (chart.installed) append(" · ${formatBytes(chart.installedBytes.toLong())}")
                         },
                         style = MaterialTheme.typography.labelSmall,

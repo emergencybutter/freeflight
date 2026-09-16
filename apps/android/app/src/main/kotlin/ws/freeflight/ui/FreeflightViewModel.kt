@@ -9,6 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +28,9 @@ import uniffi.ff_uniffi.Procedure
 import uniffi.ff_uniffi.ProcedureDetail
 import uniffi.ff_uniffi.SearchHit
 import ws.freeflight.AppContainer
+import ws.freeflight.data.ChartKinds
 import ws.freeflight.data.ChartSet
+import ws.freeflight.data.ChartSheets
 import ws.freeflight.data.Cwa
 import ws.freeflight.data.GAirmet
 import ws.freeflight.data.Metar
@@ -71,7 +76,18 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
 
     val cycle = container.cycles.cycle
     val sync = container.cycles.sync
+    /**
+     * The catalogue in the order it is offered: kinds grouped the way
+     * the layers menu groups them, and sheets within a kind in their own
+     * order — which for IFR is by panel number, so L-2 precedes L-10.
+     */
     val charts = container.cycles.charts
+        .map { list ->
+            list.sortedWith(
+                compareBy({ ChartKinds.order(it.kind) }, { ChartSheets.sortKey(it) }),
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val chartDownloads = container.cycles.chartDownloads
     val setDownload = container.cycles.setDownload
 
