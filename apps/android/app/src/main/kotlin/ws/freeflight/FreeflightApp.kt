@@ -41,6 +41,8 @@ class AppContainer(context: Context) {
 
     val cycles = CycleRepository(core, api, appScope)
 
+    val plates = ws.freeflight.data.PlateRepository(core, api, appScope)
+
     val flightRecording = ws.freeflight.data.FlightRecordingRepository(context, appScope)
 
     val routePlanning = ws.freeflight.data.RoutePlanRepository(context, appScope)

@@ -25,13 +25,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import uniffi.ff_uniffi.Plate
 import uniffi.ff_uniffi.Procedure
+import ws.freeflight.data.PlateDownload
 
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 
 /**
  * Everything the bundle knows about one airport, plus its current weather
@@ -52,6 +57,9 @@ fun AirportSheet(
     onShowOnMap: () -> Unit,
     onViewPlate: ((url: String, title: String, subtitle: String?) -> Unit)? = null,
     onAddRouteWaypoint: ((ident: String, name: String?, lat: Double, lon: Double) -> Unit)? = null,
+    plateDownload: PlateDownload? = null,
+    onDownloadPlates: (() -> Unit)? = null,
+    onCancelPlateDownload: (() -> Unit)? = null,
 ) {
     val airport = state.detail.airport
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -105,6 +113,19 @@ fun AirportSheet(
                     Spacer(Modifier.width(8.dp))
                     Text("View Airport Diagram")
                 }
+            }
+
+            if (state.plates.isNotEmpty() && onViewPlate != null) {
+                SectionSpacer()
+                PlatesSection(
+                    plates = state.plates,
+                    airportIcao = airport.icao,
+                    airportName = airport.name,
+                    download = plateDownload?.takeIf { it.icao.equals(airport.icao, true) },
+                    onDownloadAll = onDownloadPlates,
+                    onCancel = onCancelPlateDownload,
+                    onViewPlate = onViewPlate,
+                )
             }
 
             SectionSpacer()
@@ -289,4 +310,89 @@ internal fun SectionSpacer() {
     Spacer(Modifier.height(10.dp))
     HorizontalDivider()
     Spacer(Modifier.height(6.dp))
+}
+
+/**
+ * The plates this airport publishes, and whether each is on the device.
+ *
+ * The tick is the whole point of this section. The cycle bundle knows
+ * every plate exists the moment it is installed, but knowing a plate
+ * exists is no use at 8,000 ft with no signal — so what a pilot needs to
+ * see on the ground is which ones they are actually carrying, and one
+ * action to carry the rest (§8).
+ */
+@Composable
+private fun PlatesSection(
+    plates: List<Plate>,
+    airportIcao: String,
+    airportName: String,
+    download: PlateDownload?,
+    onDownloadAll: (() -> Unit)?,
+    onCancel: (() -> Unit)?,
+    onViewPlate: (url: String, title: String, subtitle: String?) -> Unit,
+) {
+    val here = plates.count { it.installed }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionHeader("Plates", Modifier.weight(1f))
+        if (download != null && !download.isFinished) {
+            TextButton(onClick = { onCancel?.invoke() }) { Text("Stop") }
+        } else if (here < plates.size && onDownloadAll != null) {
+            TextButton(onClick = onDownloadAll) { Text("Download all ${plates.size - here}") }
+        }
+    }
+
+    Text(
+        if (download != null && !download.isFinished) {
+            "Downloading ${download.completed + 1} of ${download.total}" +
+                (download.currentPlate?.let { " · $it" } ?: "")
+        } else {
+            "$here of ${plates.size} on this device"
+        },
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    if (download != null && !download.isFinished) {
+        LinearProgressIndicator(
+            progress = { download.completed.toFloat() / download.total.coerceAtLeast(1) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+        )
+    }
+
+    download?.failures?.takeIf { it.isNotEmpty() }?.let { failures ->
+        Text(
+            "Couldn't fetch ${failures.size}: ${failures.first()}" +
+                if (failures.size > 1) " (and ${failures.size - 1} more)" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+
+    Spacer(Modifier.height(4.dp))
+    for (plate in plates) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable {
+                    onViewPlate(plate.pdfUrl, "$airportIcao ${plate.chartName}", airportName)
+                }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (plate.installed) Icons.Default.CheckCircle else Icons.Default.CloudDownload,
+                contentDescription = if (plate.installed) "On this device" else "Not downloaded",
+                tint = if (plate.installed) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(plate.chartName, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
 }

@@ -44,6 +44,7 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val downloads by viewModel.chartDownloads.collectAsState()
     val chartSets by viewModel.chartSets.collectAsState()
     val setDownload by viewModel.setDownload.collectAsState()
+    val plateBytes by viewModel.plateBytes.collectAsState()
 
     LazyColumn(
         modifier.fillMaxSize().padding(16.dp),
@@ -91,6 +92,14 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                     if (cycle != null) {
                         TextButton(onClick = viewModel::pruneOldCycles) {
                             Text("Free space from older cycles")
+                        }
+                    }
+                    // Plates are kept, not cached, so the space they take
+                    // has to be visible and reclaimable here rather than
+                    // quietly growing.
+                    if (plateBytes > 0) {
+                        TextButton(onClick = viewModel::clearPlates) {
+                            Text("Free ${formatBytes(plateBytes)} of plates")
                         }
                     }
                 }

@@ -1856,7 +1856,21 @@ document survive insertions/removals.
   read from the on-device bundle. Live METAR/TAF is the only screen that
   needs the network, and it says so when it can't reach it. Verified
   end-to-end against a real 2026-07-09 cycle on an emulator in airplane
-  mode. Own-ship GPS position (heading/north up tracking), inline plate-chart viewer with d-TPP integration, and full graphical weather hazard overlays (G-AIRMET polygons/lines, SIGMET / Convective SIGMET polygons, CWA polygons, and severity-coded PIREP markers with interactive tap sheets) are all fully implemented on Android in complete parity with web.
+  mode. Own-ship GPS position (heading/north-up tracking) and the full
+  graphical weather hazard overlays (G-AIRMET polygons/lines, SIGMET /
+  Convective SIGMET polygons, CWA polygons, and severity-coded PIREP
+  markers with interactive tap sheets) match web. Plates go further than
+  web has to: the bundle carries the d-TPP *index* offline, and the PDFs
+  themselves are downloaded per airport ahead of time into
+  `plates/<sha256-of-url>.pdf` beside the chart blobs, so the viewer
+  reads from disk and an approach plate opens with the radios off. Web,
+  being connected-only, fetches each plate on demand. Two consequences
+  worth stating: plates are *kept*, not cached — they were in `cacheDir`
+  at first, which Android may evict under storage pressure, exactly the
+  failure a pilot would discover in the air — and the Data screen shows
+  what they occupy with a way to reclaim it. Keying on the URL hash
+  rather than a 32-bit `String.hashCode` also removes a collision that
+  would have silently shown the wrong approach.
 - **Phase 2 — Flight planning**: fully implemented on both web and Android.
   Route builder, nav log, W&B calculator, and aircraft profiles running
   `ff-planning` math client-side (`ff-wasm` on web, `ff-uniffi` on Android).

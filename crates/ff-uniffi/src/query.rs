@@ -12,8 +12,8 @@
 
 use crate::error::CoreError;
 use crate::types::{
-    Airport, AirportDetail, Airspace, BoundingBox, Chart, DataSourceCredit, Frequency, Procedure,
-    ProcedureDetail, ProcedureLeg, ProcedureTransition, Runway, SearchHit,
+    Airport, AirportDetail, Airspace, BoundingBox, Chart, DataSourceCredit, Frequency, Plate,
+    Procedure, ProcedureDetail, ProcedureLeg, ProcedureTransition, Runway, SearchHit,
 };
 use rusqlite::{params, Connection, Row};
 
@@ -570,4 +570,39 @@ pub fn attributions(conn: &Connection) -> Result<Vec<DataSourceCredit>> {
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Every plate this airport publishes, diagram first, then by name.
+///
+/// Deduplicated on `pdf_url` rather than on procedure ident: a single PDF
+/// routinely covers several idents (one approach chart serving RWY 4L and
+/// 4R), and listing it twice would make a pilot think there were two
+/// downloads to take. `installed` is left false here — only the caller
+/// knows the data directory — and filled in by `Freeflight::airport_plates`.
+pub fn airport_plates(conn: &Connection, icao: &str) -> Result<Vec<Plate>> {
+    let icao = icao.trim().to_uppercase();
+    let mut stmt = conn.prepare(
+        "SELECT chart_name, pdf_url, procedure_ident FROM dtpp_chart
+         WHERE airport_icao = ?1 GROUP BY pdf_url ORDER BY MIN(id)",
+    )?;
+    let mut plates: Vec<Plate> = stmt
+        .query_map(params![icao], |row| {
+            Ok(Plate {
+                chart_name: row.get(0)?,
+                pdf_url: row.get(1)?,
+                procedure_ident: row.get(2)?,
+                installed: false,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+
+    // The diagram is the one plate a pilot reaches for on the ground, so
+    // it leads regardless of the order d-TPP happened to list it in.
+    plates.sort_by(|a, b| {
+        let rank = |p: &Plate| (p.procedure_ident != AIRPORT_DIAGRAM_IDENT) as u8;
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.chart_name.cmp(&b.chart_name))
+    });
+    Ok(plates)
 }

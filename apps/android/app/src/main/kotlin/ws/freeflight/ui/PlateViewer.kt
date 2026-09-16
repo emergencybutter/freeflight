@@ -53,9 +53,9 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import ws.freeflight.data.ApiClient
+import ws.freeflight.data.PlateRepository
 import java.io.File
-import java.net.URLEncoder
+
 import kotlin.math.max
 import kotlin.math.min
 
@@ -69,15 +69,16 @@ data class PlateTarget(
 /**
  * Native PDF Plate Viewer for FAA d-TPP procedure plates and airport diagrams.
  *
- * Downloads and caches the PDF file to local storage, renders pages using
- * Android's native [PdfRenderer], and supports pinch-to-zoom, panning,
- * double-tap zoom, page navigation, and a night-mode color inversion for
- * cockpit use.
+ * Reads the PDF from the on-device plate store, falling back to fetching
+ * it only when it isn't there — so a plate carried along on the ground
+ * opens with no signal. Renders pages with Android's native [PdfRenderer],
+ * and supports pinch-to-zoom, panning, double-tap zoom, page navigation,
+ * and a night-mode colour inversion for cockpit use.
  */
 @Composable
 fun PlateViewer(
     target: PlateTarget,
-    apiClient: ApiClient,
+    plates: PlateRepository,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -102,38 +103,28 @@ fun PlateViewer(
             isLoading = true
             errorMsg = null
             try {
-                val platesDir = File(context.cacheDir, "plates").apply { mkdirs() }
-                val safeName = target.url.hashCode().toString() + ".pdf"
-                val localFile = File(platesDir, safeName)
-
-                if (!localFile.exists() || localFile.length() == 0L) {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            apiClient.download(target.url, localFile) { bytes, total ->
-                                if (total > 0) {
-                                    val pct = (bytes * 100 / total).toInt()
-                                    progressText = "Downloading plate ($pct%)..."
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // Fallback to API proxy if direct fetch fails
-                            val encodedUrl = URLEncoder.encode(target.url, "UTF-8")
-                            val proxyPath = "/dtpp/plate?url=$encodedUrl"
-                            apiClient.download(proxyPath, localFile) { bytes, total ->
-                                if (total > 0) {
-                                    val pct = (bytes * 100 / total).toInt()
-                                    progressText = "Downloading plate ($pct%)..."
-                                }
-                            }
+                // Disk first, and without touching the network: a plate
+                // taken along on the ground has to open with no signal,
+                // which is the whole reason this client exists (§8).
+                val local = plates.localPath(target.url)
+                if (local != null) {
+                    fileState = File(local)
+                } else {
+                    progressText = "Downloading plate..."
+                    val fetched = plates.fetch(target.url) { bytes, total ->
+                        if (total > 0) {
+                            val pct = (bytes * 100 / total).toInt()
+                            progressText = "Downloading plate ($pct%)..."
                         }
                     }
+                    fileState = File(fetched)
                 }
-                if (!localFile.exists() || localFile.length() == 0L) {
-                    throw Exception("Downloaded plate file is empty")
-                }
-                fileState = localFile
             } catch (e: Exception) {
-                errorMsg = e.localizedMessage ?: "Failed to load plate PDF"
+                // Naming the remedy matters more than naming the fault:
+                // in the air the only useful thing to say is that this one
+                // wasn't carried along.
+                errorMsg = "This plate isn't on the device and can't be reached right now. " +
+                    "Download an airport's plates before you fly to have them without a signal."
             } finally {
                 isLoading = false
             }

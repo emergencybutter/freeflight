@@ -215,6 +215,14 @@ fn seed(conn: &Connection, cycle_id: &str, chart_sha256: &str) {
         [],
     )
     .unwrap();
+    // The same PDF serving a second ident, which d-TPP does routinely for
+    // parallel runways. One download, so it must be listed once.
+    conn.execute(
+        "INSERT INTO dtpp_chart (airport_icao, procedure_ident, chart_name, pdf_url, cycle)
+         VALUES ('KSEA', 'ILS 16R', 'ILS OR LOC RWY 16L', 'https://example.test/i16l.pdf', '2601')",
+        [],
+    )
+    .unwrap();
 
     conn.execute(
         "INSERT INTO airspace (id, name, class, floor, ceiling, boundary_geojson,
@@ -363,7 +371,10 @@ fn a_bundle_whose_checksum_does_not_match_never_becomes_current() {
 
     assert!(matches!(err, CoreError::Sync(_)), "got {err:?}");
     // §8: the previous cycle is still there and still usable.
-    assert_eq!(fixture.core.current_cycle().unwrap().unwrap().cycle_id, "2026-07-09");
+    assert_eq!(
+        fixture.core.current_cycle().unwrap().unwrap().cycle_id,
+        "2026-07-09"
+    );
     assert_eq!(
         fixture
             .core
@@ -379,7 +390,10 @@ fn a_bundle_whose_checksum_does_not_match_never_becomes_current() {
 fn a_cycle_swapped_in_under_a_running_app_is_picked_up_without_a_restart() {
     let fixture = Fixture::with_cycle("2026-07-09");
     // Open the bundle, so there is a cached connection to go stale.
-    assert_eq!(fixture.core.current_cycle().unwrap().unwrap().airport_count, 3);
+    assert_eq!(
+        fixture.core.current_cycle().unwrap().unwrap().airport_count,
+        3
+    );
 
     let staged = fixture.stage_bundle("2026-08-06");
     let conn = ff_storage::open(&staged.display().to_string()).unwrap();
@@ -637,7 +651,12 @@ fn a_catalogued_chart_reads_as_not_installed_until_it_is() {
     // nothing outside this range, so a wrong guess blanks the chart.
     assert_eq!((charts[0].min_zoom, charts[0].max_zoom), (8, 8));
     assert_eq!(
-        fixture.core.current_cycle().unwrap().unwrap().installed_chart_ids,
+        fixture
+            .core
+            .current_cycle()
+            .unwrap()
+            .unwrap()
+            .installed_chart_ids,
         vec!["2026-07-09-seattle".to_string()]
     );
 }
@@ -794,7 +813,10 @@ fn pruning_reclaims_the_superseded_cycle_but_keeps_charts_it_still_uses() {
     let freed = fixture.core.prune_old_cycles().unwrap();
 
     assert!(freed > 0, "the superseded bundle's bytes");
-    assert_eq!(fixture.core.current_cycle().unwrap().unwrap().cycle_id, "2026-08-06");
+    assert_eq!(
+        fixture.core.current_cycle().unwrap().unwrap().cycle_id,
+        "2026-08-06"
+    );
     assert_eq!(
         fixture
             .core
@@ -872,11 +894,18 @@ fn postflight_track_analyzes_and_exports_through_binding() {
         {"ts":"2026-09-16T10:01:00Z","lat":45.002,"lon":-73.002,"alt_ft":150.0},
         {"ts":"2026-09-16T10:05:00Z","lat":45.08,"lon":-73.08,"alt_ft":3000.0},
         {"ts":"2026-09-16T10:10:00Z","lat":45.0,"lon":-73.0,"alt_ft":150.0}
-    ]"#.to_string();
+    ]"#
+    .to_string();
 
     let analyzed_json = analyze_track_json(track_json.clone()).unwrap();
-    assert!(analyzed_json.contains("total_time_seconds"), "got {analyzed_json}");
-    assert!(analyzed_json.contains("airborne_time_seconds"), "got {analyzed_json}");
+    assert!(
+        analyzed_json.contains("total_time_seconds"),
+        "got {analyzed_json}"
+    );
+    assert!(
+        analyzed_json.contains("airborne_time_seconds"),
+        "got {analyzed_json}"
+    );
 
     let gpx = export_track_gpx(track_json, "Morning Flight".to_string()).unwrap();
     assert!(gpx.contains("<gpx"), "got {gpx}");
@@ -884,6 +913,92 @@ fn postflight_track_analyzes_and_exports_through_binding() {
 
     let csv = export_flight_csv(analyzed_json, "Morning Flight".to_string()).unwrap();
     assert!(csv.contains("# Flight: Morning Flight"), "got {csv}");
-    assert!(csv.contains("timestamp_utc,latitude,longitude,altitude_ft,ground_speed_kt"), "got {csv}");
+    assert!(
+        csv.contains("timestamp_utc,latitude,longitude,altitude_ft,ground_speed_kt"),
+        "got {csv}"
+    );
 }
 
+#[test]
+fn an_airports_plates_are_listed_once_each_with_the_diagram_first() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+
+    let plates = fixture.core.airport_plates("ksea".to_string()).unwrap();
+
+    // Three dtpp rows, two distinct PDFs — the approach chart serves both
+    // 16L and 16R but is a single download.
+    assert_eq!(plates.len(), 2);
+    assert_eq!(plates[0].procedure_ident, "AIRPORT DIAGRAM");
+    assert_eq!(plates[1].chart_name, "ILS OR LOC RWY 16L");
+    assert!(plates.iter().all(|p| !p.installed));
+}
+
+#[test]
+fn a_plate_reads_as_not_installed_until_its_pdf_is_on_disk() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    let url = "https://example.test/apd.pdf".to_string();
+
+    assert_eq!(fixture.core.plate_path(url.clone()), None);
+
+    let staged = fixture.core.plate_target_path(url.clone()).unwrap();
+    std::fs::write(&staged, b"%PDF-1.4 fake plate").unwrap();
+    fixture.core.install_plate(url.clone(), staged).unwrap();
+
+    assert!(fixture.core.plate_path(url.clone()).is_some());
+    let plates = fixture.core.airport_plates("KSEA".to_string()).unwrap();
+    let diagram = plates.iter().find(|p| p.pdf_url == url).unwrap();
+    assert!(diagram.installed);
+    // The other plate is untouched by that install.
+    assert!(plates.iter().any(|p| !p.installed));
+}
+
+#[test]
+fn something_that_is_not_a_pdf_is_refused_rather_than_stored_as_a_plate() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    let url = "https://example.test/apd.pdf".to_string();
+    let staged = fixture.core.plate_target_path(url.clone()).unwrap();
+    // What a captive portal hands back instead of the file you asked for.
+    std::fs::write(&staged, b"<html><body>Sign in to continue</body></html>").unwrap();
+
+    let err = fixture.core.install_plate(url.clone(), staged).unwrap_err();
+
+    assert!(matches!(err, CoreError::Chart(_)), "got {err:?}");
+    // Crucially it does not read as installed afterwards — a pilot must
+    // not see a tick beside a plate that will not open in the air.
+    assert_eq!(fixture.core.plate_path(url), None);
+}
+
+#[test]
+fn clearing_plates_reports_what_it_freed_and_leaves_charts_alone() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    let url = "https://example.test/apd.pdf".to_string();
+    let staged = fixture.core.plate_target_path(url.clone()).unwrap();
+    std::fs::write(&staged, b"%PDF-1.4 fake plate").unwrap();
+    fixture.core.install_plate(url.clone(), staged).unwrap();
+    assert_eq!(fixture.core.plates_bytes(), 19);
+
+    let freed = fixture.core.clear_plates().unwrap();
+
+    assert_eq!(freed, 19);
+    assert_eq!(fixture.core.plates_bytes(), 0);
+    assert_eq!(fixture.core.plate_path(url), None);
+    // Still a usable cycle — clearing plates is not clearing data.
+    assert!(fixture.core.current_cycle().unwrap().is_some());
+}
+
+#[test]
+fn plates_from_different_cycles_of_the_same_approach_do_not_collide() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    // d-TPP embeds the cycle in the URL, so these are the same approach
+    // published twice. Serving the stale one would be showing a pilot the
+    // wrong minima.
+    let old = "https://example.test/2601/i16l.pdf".to_string();
+    let new = "https://example.test/2602/i16l.pdf".to_string();
+
+    let staged = fixture.core.plate_target_path(old.clone()).unwrap();
+    std::fs::write(&staged, b"%PDF-1.4 old").unwrap();
+    fixture.core.install_plate(old.clone(), staged).unwrap();
+
+    assert!(fixture.core.plate_path(old).is_some());
+    assert_eq!(fixture.core.plate_path(new), None);
+}

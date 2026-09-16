@@ -279,5 +279,5 @@ class CycleRepository(
 
 }
 
-private fun Exception.readableMessage(): String =
+internal fun Exception.readableMessage(): String =
     message?.takeIf { it.isNotBlank() } ?: this::class.simpleName ?: "unknown error"

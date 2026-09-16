@@ -203,3 +203,20 @@ pub struct DataSourceCredit {
     pub url: Option<String>,
     pub attribution: String,
 }
+
+/// One d-TPP plate an airport publishes this cycle.
+///
+/// The bundle carries the *index* (name and URL) but never the PDF bytes,
+/// which are hundreds of megabytes nationwide and are fetched per plate
+/// (§8). So this is what a pilot picks from while deciding what to take
+/// along; `Freeflight::plate_path` says which of them are actually here.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Plate {
+    /// The plate's own title, e.g. "ILS OR LOC RWY 4L".
+    pub chart_name: String,
+    pub pdf_url: String,
+    /// The procedure this plate belongs to, or "AIRPORT DIAGRAM".
+    pub procedure_ident: String,
+    /// Whether the PDF is on this device right now.
+    pub installed: bool,
+}

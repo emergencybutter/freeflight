@@ -19,7 +19,7 @@
 //! and at worst some `.incoming-*` litter, which [`apply_downloaded_bundle`]
 //! clears on its next run.
 
-use crate::checksum::{sha256_file_hex, ChecksumError};
+use crate::checksum::{sha256_file_hex, sha256_hex, ChecksumError};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -52,6 +52,7 @@ pub enum ApplyError {
 ///   cycles/<cycle_id>/cycle.sqlite       the bundle itself
 ///   cycles/.incoming-<cycle_id>/         half-applied, never read
 ///   charts/blobs/<sha256>.pmtiles        chart tiles, keyed by content
+///   plates/<sha256-of-url>.pdf           d-TPP plates, keyed by URL
 /// ```
 ///
 /// Chart archives are stored under the hash of their own contents, not
@@ -107,6 +108,23 @@ impl BundleLayout {
             self.chart_blobs_dir()
                 .join(format!("{}.pmtiles", sha256.to_ascii_lowercase()))
         })
+    }
+
+    pub fn plates_dir(&self) -> PathBuf {
+        self.root.join("plates")
+    }
+
+    /// Where the d-TPP PDF published at `pdf_url` lives once downloaded.
+    ///
+    /// Keyed by the hash of the *URL*, not of the file, because unlike
+    /// `chart_catalog.sha256` the bundle publishes no digest for a plate —
+    /// and the path has to be known before the download to answer "is this
+    /// one already here?". A d-TPP URL embeds its own cycle number, so two
+    /// cycles' copies of the same approach are distinct keys and a stale
+    /// plate can never be served for a current one.
+    pub fn plate_path(&self, pdf_url: &str) -> PathBuf {
+        self.plates_dir()
+            .join(format!("{}.pdf", sha256_hex(pdf_url.as_bytes())))
     }
 
     /// Content hashes of every chart archive on disk.

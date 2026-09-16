@@ -92,6 +92,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val airport by viewModel.airport.collectAsState()
     val procedure by viewModel.procedure.collectAsState()
     val activePlate by viewModel.activePlate.collectAsState()
+    val plateDownload by viewModel.plateDownload.collectAsState()
 
     val routeWaypoints by viewModel.routeWaypoints.collectAsState()
     val aircraftProfile by viewModel.aircraftProfile.collectAsState()
@@ -368,6 +369,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 onAddRouteWaypoint = { ident, name, lat, lon ->
                     viewModel.addWaypoint(ident, name, lat, lon)
                 },
+                plateDownload = plateDownload,
+                onDownloadPlates = viewModel::downloadAirportPlates,
+                onCancelPlateDownload = viewModel::cancelPlateDownload,
             )
         }
 
@@ -384,7 +388,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
         activePlate?.let { target ->
             PlateViewer(
                 target = target,
-                apiClient = viewModel.api,
+                plates = viewModel.plates,
                 onDismiss = viewModel::closePlate,
             )
         }

@@ -20,6 +20,7 @@ import uniffi.ff_uniffi.AirportDetail
 import uniffi.ff_uniffi.Airspace
 import uniffi.ff_uniffi.BoundingBox
 import uniffi.ff_uniffi.CoreException
+import uniffi.ff_uniffi.Plate
 import uniffi.ff_uniffi.Procedure
 import uniffi.ff_uniffi.ProcedureDetail
 import uniffi.ff_uniffi.SearchHit
@@ -60,6 +61,8 @@ data class AirportUiState(
     val weatherLoading: Boolean = false,
     val weatherError: String? = null,
     val fetchedAtMillis: Long? = null,
+    /** Plates this airport publishes, with `installed` as of the last read. */
+    val plates: List<Plate> = emptyList(),
 )
 
 class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
@@ -82,6 +85,14 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     val map: StateFlow<MapUiState> = _map.asStateFlow()
 
     val api = container.api
+
+    /** The plate store, for the viewer to read from disk. */
+    val plates = container.plates
+
+    val plateDownload = container.plates.download
+
+    private val _plateBytes = MutableStateFlow(0L)
+    val plateBytes: StateFlow<Long> = _plateBytes.asStateFlow()
 
     private val _searchResults = MutableStateFlow<List<SearchHit>>(emptyList())
     val searchResults: StateFlow<List<SearchHit>> = _searchResults.asStateFlow()
@@ -372,6 +383,15 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
             charts.collect { refreshChartSets() }
         }
 
+        // Every plate that lands changes a tick in the open airport sheet,
+        // so the list tracks the store rather than the moment it opened.
+        viewModelScope.launch {
+            container.plates.revision.collect {
+                _airport.value?.detail?.airport?.icao?.let { refreshPlates(it) }
+                _plateBytes.value = container.plates.storedBytes()
+            }
+        }
+
         // Restore active flight plan from SQLite
         viewModelScope.launch {
             val active = container.routePlanning.loadActiveRoute()
@@ -496,12 +516,37 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                 emptyList()
             }
             _airport.value = _airport.value?.copy(procedures = procedures)
+            refreshPlates(icao)
             fetchAirportWeather(icao)
         }
     }
 
     fun closeAirport() {
         _airport.value = null
+    }
+
+    /** Re-read the plate list so ticks track what is actually on disk. */
+    fun refreshPlates(icao: String) {
+        viewModelScope.launch {
+            val plates = container.plates.plates(icao)
+            if (_airport.value?.detail?.airport?.icao.equals(icao, ignoreCase = true)) {
+                _airport.value = _airport.value?.copy(plates = plates)
+            }
+        }
+    }
+
+    /** Take every plate this airport publishes that isn't already here. */
+    fun downloadAirportPlates() {
+        val state = _airport.value ?: return
+        container.plates.downloadAll(state.detail.airport.icao, state.plates)
+    }
+
+    fun cancelPlateDownload() = container.plates.cancel()
+
+    fun dismissPlateDownload() = container.plates.dismiss()
+
+    fun clearPlates() {
+        viewModelScope.launch { container.plates.clear() }
     }
 
     /**

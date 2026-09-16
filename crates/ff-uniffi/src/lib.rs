@@ -326,6 +326,94 @@ impl Freeflight {
         self.with_db(query::attributions)
     }
 
+    /// Every plate this airport publishes, with `installed` reflecting
+    /// what is on disk right now.
+    pub fn airport_plates(&self, icao: String) -> Result<Vec<Plate>, CoreError> {
+        let mut plates = self.with_db(|conn| query::airport_plates(conn, &icao))?;
+        for plate in &mut plates {
+            plate.installed = self.layout.plate_path(&plate.pdf_url).is_file();
+        }
+        Ok(plates)
+    }
+
+    /// Absolute path to this plate's PDF, or `null` when it isn't here.
+    ///
+    /// The viewer asks this first and only falls back to the network when
+    /// it comes back null, so a plate taken along on the ground opens with
+    /// the radios off — which is the whole point of the Android client
+    /// (DESIGN.md §8).
+    pub fn plate_path(&self, pdf_url: String) -> Option<String> {
+        let path = self.layout.plate_path(&pdf_url);
+        path.is_file().then(|| path.to_string_lossy().into_owned())
+    }
+
+    /// Where a plate download should be written before [`Self::install_plate`].
+    pub fn plate_target_path(&self, pdf_url: String) -> Result<String, CoreError> {
+        let path = self.layout.plate_path(&pdf_url);
+        fs::create_dir_all(self.layout.plates_dir())
+            .map_err(|e| CoreError::Chart(format!("preparing the plate store: {e}")))?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
+    /// Move a finished download into the plate store.
+    ///
+    /// No checksum to verify against — the bundle publishes none for
+    /// plates — so this checks the file is a PDF rather than installing
+    /// whatever arrived. A captive-portal login page saved as an approach
+    /// plate would otherwise sit there looking downloaded until a pilot
+    /// opened it in the air.
+    pub fn install_plate(&self, pdf_url: String, downloaded_path: String) -> Result<(), CoreError> {
+        let downloaded = Path::new(&downloaded_path);
+        let mut header = [0u8; 5];
+        let read = fs::File::open(downloaded)
+            .and_then(|mut f| {
+                use std::io::Read;
+                f.read(&mut header)
+            })
+            .map_err(|e| CoreError::Chart(format!("reading the downloaded plate: {e}")))?;
+        if &header[..read] != b"%PDF-" {
+            let _ = fs::remove_file(downloaded);
+            return Err(CoreError::Chart(
+                "the downloaded plate is not a PDF — check the network connection".to_string(),
+            ));
+        }
+
+        let target = self.layout.plate_path(&pdf_url);
+        fs::create_dir_all(self.layout.plates_dir())
+            .map_err(|e| CoreError::Chart(e.to_string()))?;
+        if downloaded != target {
+            fs::rename(downloaded, &target)
+                .map_err(|e| CoreError::Chart(format!("installing the plate: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Delete every plate on disk, and report how many bytes that freed.
+    pub fn clear_plates(&self) -> Result<u64, CoreError> {
+        let Ok(entries) = fs::read_dir(self.layout.plates_dir()) else {
+            return Ok(0);
+        };
+        let mut freed = 0u64;
+        for entry in entries.flatten() {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if fs::remove_file(entry.path()).is_ok() {
+                freed += size;
+            }
+        }
+        Ok(freed)
+    }
+
+    /// Bytes the plate store currently occupies.
+    pub fn plates_bytes(&self) -> u64 {
+        let Ok(entries) = fs::read_dir(self.layout.plates_dir()) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+            .sum()
+    }
+
     // ---- internals -------------------------------------------------------
 }
 
@@ -460,4 +548,3 @@ pub fn export_flight_csv(analyzed_track_json: String, flight_name: String) -> Re
 
 #[cfg(test)]
 mod tests;
-
