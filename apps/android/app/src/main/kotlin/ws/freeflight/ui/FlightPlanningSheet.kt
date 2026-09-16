@@ -1,15 +1,14 @@
 package ws.freeflight.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,9 +16,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Scale
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,22 +41,28 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import ws.freeflight.data.AirspaceCrossingWarning
 import ws.freeflight.data.AircraftProfileData
 import ws.freeflight.data.FlightPlanSummaryData
 import ws.freeflight.data.PlannedWaypoint
+import ws.freeflight.data.SavedRoutePlan
 import kotlin.math.roundToInt
 
 /**
- * Interactive Flight Planning, Nav Log, and Weight & Balance sheet.
+ * Interactive Flight Planning, Nav Log, Weight & Balance, and Route Library sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,11 +70,18 @@ fun FlightPlanningSheet(
     waypoints: List<PlannedWaypoint>,
     profile: AircraftProfileData,
     planSummary: FlightPlanSummaryData?,
+    windsStatus: String? = null,
+    crossedAirspace: List<AirspaceCrossingWarning> = emptyList(),
+    savedPlans: List<SavedRoutePlan> = emptyList(),
     onDismiss: () -> Unit,
     onRemoveWaypoint: (Int) -> Unit,
     onClearRoute: () -> Unit,
     onAddWaypointClick: () -> Unit,
     onProfileChange: (AircraftProfileData) -> Unit,
+    onSaveRoute: (String) -> Unit = {},
+    onLoadRoute: (SavedRoutePlan) -> Unit = {},
+    onDeleteRoute: (Long) -> Unit = {},
+    onRefreshWinds: () -> Unit = {},
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -130,6 +147,17 @@ fun FlightPlanningSheet(
                         }
                     },
                 )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Bookmark, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Routes")
+                        }
+                    },
+                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -138,12 +166,25 @@ fun FlightPlanningSheet(
                 0 -> NavLogTab(
                     waypoints = waypoints,
                     summary = planSummary,
+                    windsStatus = windsStatus,
+                    crossedAirspace = crossedAirspace,
                     onRemoveWaypoint = onRemoveWaypoint,
                     onAddWaypointClick = onAddWaypointClick,
+                    onRefreshWinds = onRefreshWinds,
                 )
                 1 -> AircraftAndWbTab(
                     profile = profile,
                     onProfileChange = onProfileChange,
+                )
+                2 -> SavedRoutesTab(
+                    waypoints = waypoints,
+                    savedPlans = savedPlans,
+                    onSaveRoute = onSaveRoute,
+                    onLoadRoute = { plan ->
+                        onLoadRoute(plan)
+                        selectedTab = 0
+                    },
+                    onDeleteRoute = onDeleteRoute,
                 )
             }
         }
@@ -154,8 +195,11 @@ fun FlightPlanningSheet(
 private fun NavLogTab(
     waypoints: List<PlannedWaypoint>,
     summary: FlightPlanSummaryData?,
+    windsStatus: String?,
+    crossedAirspace: List<AirspaceCrossingWarning>,
     onRemoveWaypoint: (Int) -> Unit,
     onAddWaypointClick: () -> Unit,
+    onRefreshWinds: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // Summary Card
@@ -183,6 +227,43 @@ private fun NavLogTab(
                     label = "REQ FUEL",
                     value = summary?.let { "${"%.1f".format(it.fuel.requiredGal)} GAL" } ?: "0 GAL",
                 )
+            }
+        }
+
+        // Airspace Crossings Warnings Card
+        if (crossedAirspace.isNotEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
+                ),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Airspace Crossings Along Route",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    crossedAirspace.forEach { warning ->
+                        Text(
+                            "• ${warning.formattedClass}: ${warning.name} (${warning.floor}–${warning.ceiling})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
             }
         }
 
@@ -243,11 +324,51 @@ private fun NavLogTab(
         // Nav Log Table
         if (summary != null && summary.legs.isNotEmpty()) {
             HorizontalDivider()
-            Text(
-                "Navigation Log",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    "Navigation Log",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // Winds Aloft Status indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        RoundedCornerShape(6.dp),
+                    )
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Icon(
+                    Icons.Default.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = if (windsStatus != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (windsStatus != null) "Winds aloft: $windsStatus" else "Winds aloft: Offline / no winds data (GS = TAS)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = onRefreshWinds,
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh winds", modifier = Modifier.size(14.dp))
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
 
             Row(Modifier.fillMaxWidth()) {
                 HeaderCell("LEG", 80.dp)
@@ -350,60 +471,53 @@ private fun AircraftAndWbTab(
         HorizontalDivider()
 
         Text(
-            "Weight & Balance Calculator",
+            "Weight & Balance",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
 
-        // Status Box
-        val totalWeight = profile.totalWeightLb
-        val maxWeight = profile.maxGrossWeightLb
-        val isOver = profile.isOverweight
-        val statusBg = if (isOver) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer
-        val statusTextColor = if (isOver) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
-
+        // Status Card
         Card(
-            colors = CardDefaults.cardColors(containerColor = statusBg),
+            colors = CardDefaults.cardColors(
+                containerColor = if (profile.isOverweight) {
+                    MaterialTheme.colorScheme.errorContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                }
+            ),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (isOver) "OVERWEIGHT" else "WEIGHT & CG NORMAL",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = statusTextColor,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        "${totalWeight.roundToInt()} / ${maxWeight.roundToInt()} lbs",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = statusTextColor,
-                    )
-                }
-                Text(
-                    "Calculated CG: ${"%.1f".format(profile.centerOfGravityIn)} in",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = statusTextColor.copy(alpha = 0.8f),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceAround,
+            ) {
+                SummaryMetric(
+                    label = "TOTAL WT",
+                    value = "${profile.totalWeightLb.roundToInt()} LB",
+                    color = if (profile.isOverweight) MaterialTheme.colorScheme.error else Color.Unspecified,
+                )
+                SummaryMetric(
+                    label = "MAX GROSS",
+                    value = "${profile.maxGrossWeightLb.roundToInt()} LB",
+                )
+                SummaryMetric(
+                    label = "C.G.",
+                    value = "%.1f\"".format(profile.centerOfGravityIn),
                 )
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            NumberInputField(
-                label = "Empty Wt (lb)",
-                value = profile.emptyWeightLb,
-                onValueChange = { onProfileChange(profile.copy(emptyWeightLb = it)) },
-                modifier = Modifier.weight(1f),
-            )
-            NumberInputField(
-                label = "Empty CG (in)",
-                value = profile.emptyCgIn,
-                onValueChange = { onProfileChange(profile.copy(emptyCgIn = it)) },
-                modifier = Modifier.weight(1f),
+        if (profile.isOverweight) {
+            Text(
+                "⚠ Aircraft exceeds maximum gross weight (${(profile.totalWeightLb - profile.maxGrossWeightLb).roundToInt()} lb over)",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelMedium,
             )
         }
+
+        Text("Loading", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             NumberInputField(
@@ -438,7 +552,132 @@ private fun AircraftAndWbTab(
 }
 
 @Composable
-private fun SummaryMetric(label: String, value: String) {
+private fun SavedRoutesTab(
+    waypoints: List<PlannedWaypoint>,
+    savedPlans: List<SavedRoutePlan>,
+    onSaveRoute: (String) -> Unit,
+    onLoadRoute: (SavedRoutePlan) -> Unit,
+    onDeleteRoute: (Long) -> Unit,
+) {
+    var routeName by remember { mutableStateOf("") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // Save active route card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Save Active Route",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    if (waypoints.isNotEmpty()) {
+                        waypoints.joinToString(" → ") { it.ident }
+                    } else {
+                        "Add waypoints in Nav Log to save this flight plan"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    OutlinedTextField(
+                        value = routeName,
+                        onValueChange = { routeName = it },
+                        placeholder = { Text(if (waypoints.isNotEmpty()) waypoints.joinToString(" - ") { it.ident } else "Route name") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = {
+                            val name = routeName.ifBlank {
+                                if (waypoints.isNotEmpty()) waypoints.joinToString(" - ") { it.ident } else "Route"
+                            }
+                            onSaveRoute(name)
+                            routeName = ""
+                        },
+                        enabled = waypoints.isNotEmpty(),
+                    ) {
+                        Text("Save")
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider()
+
+        Text(
+            "Saved Route Library",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+
+        if (savedPlans.isEmpty()) {
+            Text(
+                "No saved routes yet. Plan a route above and save it to reload anytime.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            savedPlans.forEach { plan ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                plan.name,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                plan.summaryText,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                "${plan.waypoints.size} waypoints",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = { onLoadRoute(plan) }) {
+                            Text("Load")
+                        }
+                        IconButton(onClick = { onDeleteRoute(plan.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete route")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryMetric(
+    label: String,
+    value: String,
+    color: Color = Color.Unspecified,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             label,
@@ -447,11 +686,22 @@ private fun SummaryMetric(label: String, value: String) {
         )
         Text(
             value,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
+            color = color,
         )
     }
+}
+
+@Composable
+private fun HeaderCell(text: String, width: Dp) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.width(width),
+    )
 }
 
 @Composable
@@ -461,31 +711,24 @@ private fun NumberInputField(
     onValueChange: (Double) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var text by remember(value) { mutableStateOf(if (value % 1.0 == 0.0) value.toInt().toString() else "%.1f".format(value)) }
+
     OutlinedTextField(
-        value = if (value % 1.0 == 0.0) value.toLong().toString() else value.toString(),
-        onValueChange = { str ->
-            str.toDoubleOrNull()?.let(onValueChange)
+        value = text,
+        onValueChange = {
+            text = it
+            it.toDoubleOrNull()?.let(onValueChange)
         },
-        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier,
     )
 }
 
-@Composable
-private fun HeaderCell(text: String, width: androidx.compose.ui.unit.Dp) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.width(width),
-    )
-}
-
 private fun formatEte(hours: Double): String {
-    val totalMins = (hours * 60).roundToInt()
-    val h = totalMins / 60
-    val m = totalMins % 60
+    val totalMinutes = (hours * 60).roundToInt()
+    val h = totalMinutes / 60
+    val m = totalMinutes % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
 }

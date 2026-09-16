@@ -94,6 +94,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val aircraftProfile by viewModel.aircraftProfile.collectAsState()
     val planSummary by viewModel.planSummary.collectAsState()
     val isPlanningOpen by viewModel.isPlanningOpen.collectAsState()
+    val windsStatus by viewModel.windsStatus.collectAsState()
+    val crossedAirspace by viewModel.crossedAirspace.collectAsState()
+    val savedRoutePlans by viewModel.savedRoutePlans.collectAsState()
 
     val isRecording by viewModel.isRecording.collectAsState()
     val activePoints by viewModel.activeRecordingPoints.collectAsState()
@@ -337,6 +340,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 waypoints = routeWaypoints,
                 profile = aircraftProfile,
                 planSummary = planSummary,
+                windsStatus = windsStatus,
+                crossedAirspace = crossedAirspace,
+                savedPlans = savedRoutePlans,
                 onDismiss = viewModel::closePlanningSheet,
                 onRemoveWaypoint = viewModel::removeWaypoint,
                 onClearRoute = viewModel::clearRoute,
@@ -344,6 +350,10 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                     viewModel.closePlanningSheet()
                 },
                 onProfileChange = viewModel::updateProfile,
+                onSaveRoute = viewModel::saveCurrentRoute,
+                onLoadRoute = viewModel::loadSavedRoute,
+                onDeleteRoute = viewModel::deleteSavedRoute,
+                onRefreshWinds = viewModel::fetchWindsAloft,
             )
         }
 

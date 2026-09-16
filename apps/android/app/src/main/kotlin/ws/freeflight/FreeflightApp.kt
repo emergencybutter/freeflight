@@ -43,6 +43,8 @@ class AppContainer(context: Context) {
 
     val flightRecording = ws.freeflight.data.FlightRecordingRepository(context, appScope)
 
+    val routePlanning = ws.freeflight.data.RoutePlanRepository(context, appScope)
+
     val tileServer = TileServer(core).also { it.start() }
 }
 

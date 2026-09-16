@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.nullable
 import uniffi.ff_uniffi.Airport
 import uniffi.ff_uniffi.AirportDetail
 import uniffi.ff_uniffi.Airspace
@@ -103,10 +104,24 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     private val _planSummary = MutableStateFlow<ws.freeflight.data.FlightPlanSummaryData?>(null)
     val planSummary: StateFlow<ws.freeflight.data.FlightPlanSummaryData?> = _planSummary.asStateFlow()
 
+    private val _windsBulletin = MutableStateFlow<ws.freeflight.data.WindsAloftBulletin?>(null)
+    private val _windsStatus = MutableStateFlow<String?>(null)
+    val windsStatus: StateFlow<String?> = _windsStatus.asStateFlow()
+
+    private val _crossedAirspace = MutableStateFlow<List<ws.freeflight.data.AirspaceCrossingWarning>>(emptyList())
+    val crossedAirspace: StateFlow<List<ws.freeflight.data.AirspaceCrossingWarning>> = _crossedAirspace.asStateFlow()
+
+    val savedRoutePlans: StateFlow<List<ws.freeflight.data.SavedRoutePlan>> = container.routePlanning.savedPlans
+
     private val _isPlanningOpen = MutableStateFlow(false)
     val isPlanningOpen: StateFlow<Boolean> = _isPlanningOpen.asStateFlow()
 
-    fun openPlanningSheet() { _isPlanningOpen.value = true }
+    fun openPlanningSheet() {
+        _isPlanningOpen.value = true
+        if (_windsBulletin.value == null) {
+            fetchWindsAloft()
+        }
+    }
     fun closePlanningSheet() { _isPlanningOpen.value = false }
 
     fun addWaypoint(ident: String, name: String? = null, lat: Double, lon: Double) {
@@ -128,6 +143,10 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     fun clearRoute() {
         _routeWaypoints.value = emptyList()
         _planSummary.value = null
+        _crossedAirspace.value = emptyList()
+        viewModelScope.launch {
+            container.routePlanning.clearActiveRoute()
+        }
     }
 
     fun updateProfile(profile: ws.freeflight.data.AircraftProfileData) {
@@ -135,13 +154,76 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
         recalculatePlan()
     }
 
+    fun saveCurrentRoute(name: String) {
+        val waypoints = _routeWaypoints.value
+        if (waypoints.isEmpty()) return
+        viewModelScope.launch {
+            container.routePlanning.saveNamedPlan(name, waypoints)
+        }
+    }
+
+    fun loadSavedRoute(plan: ws.freeflight.data.SavedRoutePlan) {
+        _routeWaypoints.value = plan.waypoints
+        recalculatePlan()
+    }
+
+    fun deleteSavedRoute(id: Long) {
+        viewModelScope.launch {
+            container.routePlanning.deleteSavedPlan(id)
+        }
+    }
+
+    fun fetchWindsAloft() {
+        viewModelScope.launch {
+            try {
+                val bulletin = container.api.windsAloft()
+                _windsBulletin.value = bulletin
+                _windsStatus.value = "NOAA ${bulletin.validTime} forecast"
+                recalculatePlan()
+            } catch (_: Exception) {
+                _windsStatus.value = null
+            }
+        }
+    }
+
     private fun recalculatePlan() {
         viewModelScope.launch(Dispatchers.Default) {
             val waypoints = _routeWaypoints.value
+            val profile = _aircraftProfile.value
+
+            // Auto-persist active route to SQLite
+            container.routePlanning.saveActiveRoute(waypoints, profile)
+
             if (waypoints.size < 2) {
                 _planSummary.value = null
+                _crossedAirspace.value = emptyList()
                 return@launch
             }
+
+            // 1. Winds-aloft interpolation per leg
+            val winds = _windsBulletin.value?.let { bulletin ->
+                ws.freeflight.data.WindsAloftResolver.windsForRoute(
+                    points = waypoints,
+                    cruiseAltitudeFt = profile.cruiseAltitudeFt ?: 5500.0,
+                    bulletin = bulletin,
+                )
+            } ?: emptyList()
+
+            val windsJson = if (winds.isNotEmpty()) {
+                jsonSerializer.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(
+                        ws.freeflight.data.PlanningWind.serializer().nullable
+                    ),
+                    winds,
+                )
+            } else {
+                "[]"
+            }
+
+            // 2. Compute dynamic decimal year for magnetic declination model
+            val now = java.time.LocalDate.now()
+            val year = now.year + (now.dayOfYear.toDouble() / (if (now.isLeapYear) 366.0 else 365.0))
+
             try {
                 val pointsJson = jsonSerializer.encodeToString(
                     kotlinx.serialization.builtins.ListSerializer(ws.freeflight.data.PlannedWaypoint.serializer()),
@@ -149,10 +231,8 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                 )
                 val profileJson = jsonSerializer.encodeToString(
                     ws.freeflight.data.AircraftProfileData.serializer(),
-                    _aircraftProfile.value,
+                    profile,
                 )
-                val windsJson = "[]"
-                val year = 2026.5
 
                 val resultJson = uniffi.ff_uniffi.planRouteJson(
                     pointsJson = pointsJson,
@@ -165,8 +245,27 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                     resultJson,
                 )
                 _planSummary.value = summary
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Ignore calculation errors for incomplete route
+            }
+
+            // 3. Airspace crossing detection along route
+            try {
+                val lats = waypoints.map { it.lat }
+                val lons = waypoints.map { it.lon }
+                val minLat = (lats.minOrNull() ?: 0.0) - 0.5
+                val maxLat = (lats.maxOrNull() ?: 0.0) + 0.5
+                val minLon = (lons.minOrNull() ?: 0.0) - 0.5
+                val maxLon = (lons.maxOrNull() ?: 0.0) + 0.5
+
+                val bbox = uniffi.ff_uniffi.BoundingBox(minLat, minLon, maxLat, maxLon)
+                val volumes = withContext(Dispatchers.IO) {
+                    runCatching { core.airspaceInBbox(bbox) }.getOrDefault(emptyList())
+                }
+                val crossings = ws.freeflight.data.AirspaceCrossingDetector.findCrossedAirspace(waypoints, volumes)
+                _crossedAirspace.value = crossings
+            } catch (_: Exception) {
+                _crossedAirspace.value = emptyList()
             }
         }
     }
@@ -251,6 +350,19 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             charts.collect { refreshChartSets() }
         }
+
+        // Restore active flight plan from SQLite
+        viewModelScope.launch {
+            val active = container.routePlanning.loadActiveRoute()
+            if (active != null) {
+                _routeWaypoints.value = active.first
+                _aircraftProfile.value = active.second
+                recalculatePlan()
+            }
+        }
+
+        // Fetch winds aloft forecast on boot
+        fetchWindsAloft()
     }
 
     private fun refreshChartSets() {

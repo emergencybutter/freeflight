@@ -1859,28 +1859,18 @@ document survive insertions/removals.
   mode. Still missing on Android: own-ship GPS position, the plate-chart
   viewer web has (§9.1), and the weather overlays beyond station
   METAR/TAF.
-- **Phase 2 — Flight planning**: route builder, nav log, basic W&B,
-  aircraft profiles. Web slice implemented: `ff-planning`'s math now
-  runs client-side via `ff-wasm` (previously built but not wired into
-  the web app — see `apps/web/README.md`), behind a route
-  builder/nav-log/W&B UI. Session-only (no persistence — the web client
-  still has no local database, §8). Winds-aloft correction is wired in:
-  setting a cruise altitude picks the nearest reporting station/level to
-  each leg from the same NOAA bulletin the map already fetches (`ff-api`
-  now resolves each station's ident to a coordinate against the current
-  cycle bundle — the raw NWS product only carries idents — so the web
-  client can do a nearest-station lookup at all; see
-  `apps/web/src/planning/windsAloft.ts`). Departure/arrival/middle fixes
-  can also be set straight from the map's Airport/Waypoint tap tabs
-  (§9.1/§9.3), and a VFR-only warning flags real Class B/C/D/Special Use
-  Airspace the route actually crosses (§9.3). Android's equivalent is
-  still unstarted as a *feature*, though the ground under it is now in
-  place: `ff-uniffi` exposes and tests the same `ff-planning` entry points
-  `ff-wasm` gives web, and the local bundle it opens already carries the
-  `aircraft_profile`/`route_plan`/`route_leg` tables (they are below
-  `0001_init.sql`'s client-local marker, and the Android client opens the
-  bundle through `ff-storage`, so they exist on device). What is missing
-  is the route-builder UI and the code that writes those tables.
+- **Phase 2 — Flight planning**: fully implemented on both web and Android.
+  Route builder, nav log, W&B calculator, and aircraft profiles running
+  `ff-planning` math client-side (`ff-wasm` on web, `ff-uniffi` on Android).
+  Winds-aloft correction is fully wired on both clients: nearest reporting
+  station and nearest altitude level from the NOAA winds/temp bulletin
+  interpolate wind vectors per leg, calculating real-world wind correction
+  angles, groundspeed, and burn times. Real-time lateral airspace crossing
+  detection flags Class B/C/D and Special Use Airspace (MOA, Restricted, Prohibited,
+  Warning, Alert) intersected along route legs. On Android, route plans and active
+  route state are durably persisted in local SQLite (`route_plan` and `route_leg`
+  tables) with a complete saved-route library allowing pilots to save, load, and manage
+  multiple flight plans offline.
 - **Phase 3 — Post-flight analysis**: implemented on Android and shared core (`ff-postflight`,
   `ff-uniffi`, `ff-wasm`). In-flight GPS track recording via Android Foreground Service
   (`FlightRecordingService`) with persistent status notification, automated phase-of-flight

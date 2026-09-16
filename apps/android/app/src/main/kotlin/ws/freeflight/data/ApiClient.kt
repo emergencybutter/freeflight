@@ -57,6 +57,15 @@ class ApiClient(private val settings: Settings) {
         return json.decodeFromString(body)
     }
 
+    suspend fun windsAloft(
+        level: String = "low",
+        fcst: String = "06",
+        region: String = "all",
+    ): WindsAloftBulletin = withContext(Dispatchers.IO) {
+        val body = getString("/weather/windtemp?level=$level&fcst=$fcst&region=$region")
+        WindsAloftParser.parse(body)
+    }
+
     private suspend fun getString(path: String): String = withContext(Dispatchers.IO) {
         http.newCall(request(path).build()).execute().use { response ->
             if (!response.isSuccessful) {
