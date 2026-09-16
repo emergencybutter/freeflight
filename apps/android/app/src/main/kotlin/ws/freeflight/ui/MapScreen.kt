@@ -102,6 +102,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val showSigmets by viewModel.settings.showSigmets.collectAsState()
     val showCwas by viewModel.settings.showCwas.collectAsState()
     val showPireps by viewModel.settings.showPireps.collectAsState()
+    val showBasemap by viewModel.settings.showBasemap.collectAsState()
     val selectedWeatherHazard by viewModel.selectedWeatherHazard.collectAsState()
 
     val isRecording by viewModel.isRecording.collectAsState()
@@ -169,6 +170,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     }
     LaunchedEffect(mapState.pireps, showPireps) {
         controller.setPireps(if (showPireps) GeoJson.pireps(mapState.pireps) else GeoJson.empty)
+    }
+    LaunchedEffect(showBasemap) {
+        controller.setBasemapVisible(showBasemap)
     }
     LaunchedEffect(procedure) {
         controller.setProcedure(procedure?.let(GeoJson::procedure) ?: GeoJson.empty)
@@ -305,8 +309,12 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             modifier = Modifier.align(Alignment.CenterEnd).padding(12.dp),
         )
 
-        if (cycle == null) {
-            NoCycleCard(Modifier.align(Alignment.Center).padding(24.dp))
+        var noCycleCardDismissed by remember { mutableStateOf(false) }
+        if (cycle == null && !noCycleCardDismissed) {
+            NoCycleCard(
+                onDismiss = { noCycleCardDismissed = true },
+                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+            )
         }
 
         mapState.message?.let { message ->
@@ -540,6 +548,7 @@ private fun MapControls(
 ) {
     val context = LocalContext.current
     var layersOpen by remember { mutableStateOf(false) }
+    val showBasemap by viewModel.settings.showBasemap.collectAsState()
     val showAirspace by viewModel.settings.showAirspace.collectAsState()
     val showAirports by viewModel.settings.showAirports.collectAsState()
     val showGairmets by viewModel.settings.showGairmets.collectAsState()
@@ -656,6 +665,13 @@ private fun MapControls(
                 }
                 HorizontalDivider()
                 DropdownMenuItem(
+                    text = { Text("Basemap") },
+                    onClick = {
+                        viewModel.settings.setShowBasemap(!showBasemap)
+                    },
+                    trailingIcon = { Switch(checked = showBasemap, onCheckedChange = null) },
+                )
+                DropdownMenuItem(
                     text = { Text("Airports") },
                     onClick = {
                         viewModel.settings.setShowAirports(!showAirports)
@@ -735,10 +751,19 @@ private fun MapControls(
 }
 
 @Composable
-private fun NoCycleCard(modifier: Modifier = Modifier) {
+private fun NoCycleCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     Card(modifier) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("No aeronautical data yet", style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("No aeronautical data yet", style = MaterialTheme.typography.titleMedium)
+                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Default.Clear, contentDescription = "Dismiss")
+                }
+            }
             Text(
                 "Download a cycle from the Data tab to use charts, airports and " +
                     "procedures offline.",

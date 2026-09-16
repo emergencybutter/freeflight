@@ -75,6 +75,14 @@ class Settings(context: Context) {
         _showPireps.value = value
     }
 
+    private val _showBasemap = MutableStateFlow(prefs.getBoolean(KEY_SHOW_BASEMAP, true))
+    val showBasemap: StateFlow<Boolean> = _showBasemap.asStateFlow()
+
+    fun setShowBasemap(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_BASEMAP, value).apply()
+        _showBasemap.value = value
+    }
+
     /**
      * Which catalogued chart the map draws under everything else, or null
      * for no chart at all. Stored by `chart_catalog.id`, which embeds the
@@ -97,6 +105,7 @@ class Settings(context: Context) {
         const val KEY_SHOW_SIGMETS = "show_sigmets"
         const val KEY_SHOW_CWAS = "show_cwas"
         const val KEY_SHOW_PIREPS = "show_pireps"
+        const val KEY_SHOW_BASEMAP = "show_basemap"
         const val KEY_CHART_ID = "selected_chart_id"
     }
 }

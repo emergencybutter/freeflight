@@ -95,6 +95,7 @@ class MapController {
     private var pendingProcedure: String = GeoJson.empty
     private var pendingRoute: String = GeoJson.empty
     private var pendingTrack: String = GeoJson.empty
+    private var pendingBasemapVisible: Boolean = true
 
     fun attach(mapLibreMap: MapLibreMap, surface: MapView) {
         map = mapLibreMap
@@ -107,8 +108,19 @@ class MapController {
         mapLibreMap.uiSettings.isRotateGesturesEnabled = true
         mapLibreMap.uiSettings.isTiltGesturesEnabled = false
 
+        // Center on CONUS overview if starting at unpositioned default (0, 0)
+        val target = mapLibreMap.cameraPosition.target
+        val isDefaultPosition = mapLibreMap.cameraPosition.zoom <= 1.0 &&
+            (target == null || (target.latitude == 0.0 && target.longitude == 0.0))
+        if (isDefaultPosition) {
+            mapLibreMap.moveCamera(
+                CameraUpdateFactory.newLatLngZoom(LatLng(39.8283, -98.5795), 3.8)
+            )
+        }
+
         mapLibreMap.setStyle(Style.Builder().fromJson(BASE_STYLE)) { loaded ->
             style = loaded
+            setBasemapVisible(pendingBasemapVisible)
             installLayers(loaded)
             setupLocationComponentIfPermitted(surface.context, loaded)
             // Anything the screen asked for before the style finished
@@ -254,6 +266,12 @@ class MapController {
         applyChart(chart)
     }
 
+    fun setBasemapVisible(visible: Boolean) {
+        pendingBasemapVisible = visible
+        val layer = style?.getLayer(BASEMAP_LAYER) as? RasterLayer ?: return
+        layer.setProperties(PropertyFactory.rasterOpacity(if (visible) 1.0f else 0.0f))
+    }
+
     fun setAirports(geoJson: String) {
         pendingAirports = geoJson
         source(AIRPORTS_SOURCE)?.setGeoJson(geoJson)
@@ -347,10 +365,11 @@ class MapController {
             maxZoom = chart.maxZoom.toFloat()
         }
         loaded.addSource(RasterSource(CHART_SOURCE, tileSet, 256))
+        val belowLayer = if (loaded.getLayer(BASEMAP_LAYER) != null) BASEMAP_LAYER else BACKGROUND_LAYER
         loaded.addLayerAbove(
             RasterLayer(CHART_LAYER, CHART_SOURCE)
                 .withProperties(PropertyFactory.rasterOpacity(1.0f)),
-            BACKGROUND_LAYER,
+            belowLayer,
         )
     }
 
@@ -651,6 +670,8 @@ class MapController {
 
     companion object {
         private const val BACKGROUND_LAYER = "background"
+        private const val BASEMAP_SOURCE = "basemap"
+        private const val BASEMAP_LAYER = "basemap-tiles"
         private const val CHART_SOURCE = "chart"
         private const val CHART_LAYER = "chart-raster"
         private const val AIRSPACE_SOURCE = "airspace"
@@ -682,19 +703,40 @@ class MapController {
 
         /**
          * No `glyphs` and no `sprite` entries, on purpose — see the class
-         * docs. Every layer added at runtime is geometry, never text, so the
-         * style has no network dependency of any kind.
+         * docs. Every vector overlay added at runtime is geometry, never text,
+         * so the style has no glyph server dependency of any kind.
+         *
+         * The default raster basemap provides global geography, coastlines,
+         * and terrain context when no FAA chart is loaded.
          */
         private const val BASE_STYLE = """
             {
               "version": 8,
               "name": "freeflight",
-              "sources": {},
+              "sources": {
+                "basemap": {
+                  "type": "raster",
+                  "tiles": [
+                    "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+                    "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+                    "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+                    "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"
+                  ],
+                  "tileSize": 256,
+                  "attribution": "© OpenStreetMap contributors, © CARTO"
+                }
+              },
               "layers": [
                 {
                   "id": "background",
                   "type": "background",
                   "paint": { "background-color": "#0E1116" }
+                },
+                {
+                  "id": "basemap-tiles",
+                  "type": "raster",
+                  "source": "basemap",
+                  "paint": { "raster-opacity": 1.0 }
                 }
               ]
             }
