@@ -72,6 +72,10 @@ pub fn router_with(state: AppState, limiter: Option<RateLimiter>) -> Router {
         )
         .nest_service("/bundles", bundles)
         .merge(proxy_routes(state.clone(), limiter))
+        // Version negotiation sits inside CORS so a refusal still carries
+        // the CORS headers a browser needs to read it — otherwise the SPA
+        // would see an opaque network failure instead of the explanation.
+        .layer(axum::middleware::from_fn(crate::version::negotiate_version))
         .layer(crate::cors::layer_for(state.auth.clone()))
         .with_state(state)
 }

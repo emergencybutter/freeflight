@@ -1,5 +1,9 @@
 package ws.freeflight.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +24,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -30,6 +36,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -46,14 +53,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import uniffi.ff_uniffi.BoundingBox
 import uniffi.ff_uniffi.ProcedureDetail
 import ws.freeflight.map.ChartLayer
 import ws.freeflight.map.ChartMap
 import ws.freeflight.map.GeoJson
+import ws.freeflight.map.LocationTrackingMode
 import ws.freeflight.map.MapController
 
 /**
@@ -64,6 +74,7 @@ import ws.freeflight.map.MapController
  */
 @Composable
 fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val controller = remember { MapController() }
     val mapState by viewModel.map.collectAsState()
     val cycle by viewModel.cycle.collectAsState()
@@ -72,10 +83,25 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val airport by viewModel.airport.collectAsState()
     val procedure by viewModel.procedure.collectAsState()
 
+    var locationTrackingMode by remember { mutableStateOf(controller.currentTrackingMode) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (fineGranted || coarseGranted) {
+            controller.cycleLocationTrackingMode(context)
+        }
+    }
+
     LaunchedEffect(controller) {
         controller.onViewportChanged = viewModel::onViewportChanged
         controller.onAirportTapped = { icao ->
             if (icao != null) viewModel.openAirport(icao) else viewModel.closeAirport()
+        }
+        controller.onLocationTrackingModeChanged = { mode ->
+            locationTrackingMode = mode
         }
     }
 
@@ -127,9 +153,19 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
 
         MapControls(
             viewModel = viewModel,
+            controller = controller,
             charts = charts,
             selectedChartId = selectedChartId,
             weatherLoading = mapState.weatherLoading,
+            locationTrackingMode = locationTrackingMode,
+            onRequestLocationPermission = {
+                locationPermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    )
+                )
+            },
             modifier = Modifier.align(Alignment.CenterEnd).padding(12.dp),
         )
 
@@ -286,16 +322,58 @@ private fun CycleStatusLine(
 @Composable
 private fun MapControls(
     viewModel: FreeflightViewModel,
+    controller: MapController,
     charts: List<uniffi.ff_uniffi.Chart>,
     selectedChartId: String?,
     weatherLoading: Boolean,
+    locationTrackingMode: LocationTrackingMode,
+    onRequestLocationPermission: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var layersOpen by remember { mutableStateOf(false) }
     val showAirspace by viewModel.settings.showAirspace.collectAsState()
     val showAirports by viewModel.settings.showAirports.collectAsState()
 
+    val onLocateClick = {
+        val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fineGranted && !coarseGranted) {
+            onRequestLocationPermission()
+        } else {
+            controller.cycleLocationTrackingMode(context)
+        }
+    }
+
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val locateContainerColor = when (locationTrackingMode) {
+            LocationTrackingMode.NONE -> MaterialTheme.colorScheme.secondaryContainer
+            LocationTrackingMode.TRACKING, LocationTrackingMode.TRACKING_COMPASS -> MaterialTheme.colorScheme.primary
+        }
+        val locateContentColor = when (locationTrackingMode) {
+            LocationTrackingMode.NONE -> MaterialTheme.colorScheme.onSecondaryContainer
+            LocationTrackingMode.TRACKING, LocationTrackingMode.TRACKING_COMPASS -> MaterialTheme.colorScheme.onPrimary
+        }
+        val locateIcon = when (locationTrackingMode) {
+            LocationTrackingMode.TRACKING_COMPASS -> Icons.Default.Navigation
+            else -> Icons.Default.MyLocation
+        }
+        val locateDescription = when (locationTrackingMode) {
+            LocationTrackingMode.NONE -> "Locate me"
+            LocationTrackingMode.TRACKING -> "Tracking location (North Up)"
+            LocationTrackingMode.TRACKING_COMPASS -> "Tracking location (Heading Up)"
+        }
+
+        FilledTonalIconButton(
+            onClick = { onLocateClick() },
+            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                containerColor = locateContainerColor,
+                contentColor = locateContentColor,
+            ),
+        ) {
+            Icon(locateIcon, contentDescription = locateDescription)
+        }
+
         Box {
             FilledTonalIconButton(onClick = { layersOpen = true }) {
                 Icon(Icons.Default.Layers, contentDescription = "Layers")

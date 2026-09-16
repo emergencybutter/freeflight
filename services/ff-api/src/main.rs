@@ -2,6 +2,7 @@ mod cors;
 mod ratelimit;
 mod routes;
 mod state;
+mod version;
 
 use state::AppState;
 use std::time::{Duration, SystemTime};

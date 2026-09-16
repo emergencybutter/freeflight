@@ -1,5 +1,8 @@
 package ws.freeflight.map
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.PointF
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -7,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -14,6 +18,11 @@ import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.location.LocationComponentActivationOptions
+import org.maplibre.android.location.LocationComponentOptions
+import org.maplibre.android.location.OnCameraTrackingChangedListener
+import org.maplibre.android.location.modes.CameraMode
+import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
@@ -40,6 +49,12 @@ import uniffi.ff_uniffi.BoundingBox
  * style needs no `glyphs` URL, which would otherwise be a network
  * dependency on every text label.
  */
+enum class LocationTrackingMode {
+    NONE,
+    TRACKING,
+    TRACKING_COMPASS,
+}
+
 /** A chart the map can draw: where its tiles come from, and over what zooms. */
 data class ChartLayer(val tileUrlTemplate: String, val minZoom: Int, val maxZoom: Int)
 
@@ -61,6 +76,12 @@ class MapController {
     /** Called with the ICAO of a tapped airport, or null for a tap on nothing. */
     var onAirportTapped: ((String?) -> Unit)? = null
 
+    /** Called when location tracking mode changes (e.g., when the user moves the map). */
+    var onLocationTrackingModeChanged: ((LocationTrackingMode) -> Unit)? = null
+
+    var currentTrackingMode: LocationTrackingMode = LocationTrackingMode.NONE
+        private set
+
     private var pendingChartTemplate: ChartLayer? = null
     private var pendingAirports: String = GeoJson.empty
     private var pendingAirspace: String = GeoJson.empty
@@ -80,6 +101,7 @@ class MapController {
         mapLibreMap.setStyle(Style.Builder().fromJson(BASE_STYLE)) { loaded ->
             style = loaded
             installLayers(loaded)
+            setupLocationComponentIfPermitted(surface.context, loaded)
             // Anything the screen asked for before the style finished
             // loading — which is most things on a cold start.
             pendingChartTemplate?.let { applyChart(it) }
@@ -94,6 +116,96 @@ class MapController {
             val screenPoint = mapLibreMap.projection.toScreenLocation(point)
             onAirportTapped?.invoke(airportAt(mapLibreMap, screenPoint))
             true
+        }
+    }
+
+    fun setupLocationComponentIfPermitted(context: Context, style: Style? = this.style) {
+        val mapLibreMap = map ?: return
+        val currentStyle = style ?: return
+        val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+        if (!fineGranted && !coarseGranted) return
+
+        try {
+            val locationComponent = mapLibreMap.locationComponent
+            if (!locationComponent.isLocationComponentActivated) {
+                val options = LocationComponentOptions.builder(context)
+                    .pulseEnabled(true)
+                    .pulseColor(android.graphics.Color.parseColor("#3B82F6"))
+                    .accuracyAlpha(0.15f)
+                    .build()
+                val activationOptions = LocationComponentActivationOptions.builder(context, currentStyle)
+                    .locationComponentOptions(options)
+                    .build()
+                locationComponent.activateLocationComponent(activationOptions)
+            }
+
+            locationComponent.isLocationComponentEnabled = true
+            locationComponent.renderMode = RenderMode.COMPASS
+
+            locationComponent.addOnCameraTrackingChangedListener(object : OnCameraTrackingChangedListener {
+                override fun onCameraTrackingDismissed() {
+                    updateTrackingMode(LocationTrackingMode.NONE)
+                }
+
+                override fun onCameraTrackingChanged(currentMode: Int) {
+                    val mode = when (currentMode) {
+                        CameraMode.TRACKING -> LocationTrackingMode.TRACKING
+                        CameraMode.TRACKING_COMPASS, CameraMode.TRACKING_GPS -> LocationTrackingMode.TRACKING_COMPASS
+                        else -> LocationTrackingMode.NONE
+                    }
+                    updateTrackingMode(mode)
+                }
+            })
+        } catch (e: Exception) {
+            // Location component setup failure fallback
+        }
+    }
+
+    fun cycleLocationTrackingMode(context: Context): Boolean {
+        val mapLibreMap = map ?: return false
+        val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+        if (!fineGranted && !coarseGranted) return false
+
+        val locationComponent = mapLibreMap.locationComponent
+        if (!locationComponent.isLocationComponentActivated) {
+            setupLocationComponentIfPermitted(context)
+        }
+
+        if (!locationComponent.isLocationComponentEnabled) {
+            locationComponent.isLocationComponentEnabled = true
+        }
+
+        val nextMode = when (currentTrackingMode) {
+            LocationTrackingMode.NONE -> LocationTrackingMode.TRACKING
+            LocationTrackingMode.TRACKING -> LocationTrackingMode.TRACKING_COMPASS
+            LocationTrackingMode.TRACKING_COMPASS -> LocationTrackingMode.NONE
+        }
+
+        when (nextMode) {
+            LocationTrackingMode.NONE -> {
+                locationComponent.cameraMode = CameraMode.NONE
+            }
+            LocationTrackingMode.TRACKING -> {
+                locationComponent.cameraMode = CameraMode.TRACKING
+                locationComponent.zoomWhileTracking(11.0)
+            }
+            LocationTrackingMode.TRACKING_COMPASS -> {
+                locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
+                locationComponent.zoomWhileTracking(11.0)
+            }
+        }
+        updateTrackingMode(nextMode)
+        return true
+    }
+
+    private fun updateTrackingMode(mode: LocationTrackingMode) {
+        if (currentTrackingMode != mode) {
+            currentTrackingMode = mode
+            onLocationTrackingModeChanged?.invoke(mode)
         }
     }
 

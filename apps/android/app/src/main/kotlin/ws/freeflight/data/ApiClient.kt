@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -57,13 +58,29 @@ class ApiClient(private val settings: Settings) {
     }
 
     private suspend fun getString(path: String): String = withContext(Dispatchers.IO) {
-        http.newCall(Request.Builder().url(url(path)).build()).execute().use { response ->
+        http.newCall(request(path).build()).execute().use { response ->
             if (!response.isSuccessful) {
-                throw IOException("${response.code} from $path: ${response.message}")
+                throw response.toException(path)
             }
             response.body?.string().orEmpty()
         }
     }
+
+    /**
+     * Every request declares the API contract this build was written
+     * against (DESIGN.md §4.1).
+     *
+     * An app on a phone cannot be updated in lockstep with the server, and
+     * the failure that matters is the silent one: without this, a server
+     * that changed a response shape would hand an old APK something it
+     * misparses, and the app would show a pilot something plausible and
+     * wrong. Declaring the version turns that into a refusal the app can
+     * report — see [ApiException.OutdatedClient].
+     */
+    private fun request(pathOrUrl: String): Request.Builder =
+        Request.Builder()
+            .url(url(pathOrUrl))
+            .header(API_VERSION_HEADER, API_VERSION)
 
     /**
      * Streams `path` into [target], resuming where an interrupted attempt
@@ -87,14 +104,13 @@ class ApiClient(private val settings: Settings) {
         target.parentFile?.mkdirs()
         val alreadyHave = if (target.exists()) target.length() else 0L
 
-        val request = Request.Builder()
-            .url(url(path))
+        val request = request(path)
             .apply { if (alreadyHave > 0) header("Range", "bytes=$alreadyHave-") }
             .build()
 
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                throw IOException("${response.code} from $path: ${response.message}")
+                throw response.toException(path)
             }
             val resuming = response.code == 206
             if (!resuming && alreadyHave > 0) {
@@ -120,4 +136,35 @@ class ApiClient(private val settings: Settings) {
             }
         }
     }
+}
+
+/**
+ * The API contract this build speaks (DESIGN.md §4.1). Bump only when this
+ * client is updated to a new one.
+ */
+private const val API_VERSION = "1"
+private const val API_VERSION_HEADER = "X-Freeflight-Api-Version"
+
+/** Errors this client distinguishes, because the UI says different things. */
+sealed class ApiException(message: String) : IOException(message) {
+    /**
+     * The server has moved on and no longer serves this build's contract
+     * (HTTP 426). Not a network blip and not retryable: nothing improves
+     * until the app is updated, so the UI has to say that rather than
+     * offer to try again.
+     */
+    class OutdatedClient(val detail: String) : ApiException(
+        "this version of the app is too old for the server: $detail"
+    )
+
+    class Failed(message: String) : ApiException(message)
+}
+
+private fun Response.toException(path: String): ApiException = when (code) {
+    // 426 Upgrade Required — version negotiation refusing this build.
+    426 -> ApiException.OutdatedClient(
+        body?.string()?.trim().orEmpty().ifEmpty { message }
+    )
+
+    else -> ApiException.Failed("$code from $path: $message")
 }

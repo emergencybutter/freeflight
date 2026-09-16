@@ -582,11 +582,33 @@ Implemented today:
 Conventions: JSON only; no authentication in Phase 1 (see §11's abuse
 note); errors are plain-text bodies with appropriate status codes (502
 for upstream weather failures, 404 for unknown cycles/airports, 501 for
-unconfigured features). Versioning: none yet — the web client and
-`ff-api` deploy together in Phase 1, so breaking changes are
-coordinated, not negotiated; revisit (URL prefix `/v1/` or media-type
-versioning) before Android ships, since app-store clients can't be
-force-updated in lockstep.
+unconfigured features).
+
+**Versioning**: negotiated per request via an `X-Freeflight-Api-Version`
+header, currently v1. Android shipping is what made this necessary — the
+web client still deploys with `ff-api`, but an APK on a phone does not,
+and the failure that matters there is silent: change a response shape and
+an old install deserialises garbage and shows a pilot something plausible
+and wrong. A client states what it speaks, every response states what it
+was served as, and a version this server no longer serves gets `426
+Upgrade Required` with a body saying so.
+
+No header means **v1**, frozen — clients that send nothing predate
+negotiation, and that is a fact about software already installed rather
+than a default to revise. It is bounds-checked like any stated version, so
+dropping v1 refuses silent old clients too rather than serving them shapes
+they cannot read.
+
+The `/v1/` URL prefix this section used to propose is the more
+conventional answer and is not available: nginx on vya2 proxies to
+`ff-api` on `^/(data|bundles|weather|notams|cycles|health|dtpp|auth|
+aircraft)`, so `/v1/...` would fall through to the SPA and return
+`index.html` to a client asking for JSON. Adopting it needs a change in
+the separate `vya-ws/nginx` repo *and* a migration of every deployed
+client onto new paths — a cost with no benefit over the header until
+there is a v2. Raising `MIN_SUPPORTED` in `ff-api`'s `version` module is
+the breaking change; it is the moment old installs start being turned
+away, so it wants a deliberate decision recorded here.
 
 ## 5. Workspace / Crate Layout
 
