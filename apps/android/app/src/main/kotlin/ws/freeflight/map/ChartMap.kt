@@ -76,6 +76,9 @@ class MapController {
     /** Called with the ICAO of a tapped airport, or null for a tap on nothing. */
     var onAirportTapped: ((String?) -> Unit)? = null
 
+    /** Called with a tapped weather hazard (PIREP, SIGMET, CWA, AIRMET), or null. */
+    var onWeatherHazardTapped: ((ws.freeflight.data.WeatherHazardTap?) -> Unit)? = null
+
     /** Called when location tracking mode changes (e.g., when the user moves the map). */
     var onLocationTrackingModeChanged: ((LocationTrackingMode) -> Unit)? = null
 
@@ -85,6 +88,10 @@ class MapController {
     private var pendingChartTemplate: ChartLayer? = null
     private var pendingAirports: String = GeoJson.empty
     private var pendingAirspace: String = GeoJson.empty
+    private var pendingGairmets: String = GeoJson.empty
+    private var pendingSigmets: String = GeoJson.empty
+    private var pendingCwas: String = GeoJson.empty
+    private var pendingPireps: String = GeoJson.empty
     private var pendingProcedure: String = GeoJson.empty
     private var pendingRoute: String = GeoJson.empty
     private var pendingTrack: String = GeoJson.empty
@@ -109,6 +116,10 @@ class MapController {
             pendingChartTemplate?.let { applyChart(it) }
             source(AIRPORTS_SOURCE)?.setGeoJson(pendingAirports)
             source(AIRSPACE_SOURCE)?.setGeoJson(pendingAirspace)
+            source(GAIRMET_SOURCE)?.setGeoJson(pendingGairmets)
+            source(SIGMET_SOURCE)?.setGeoJson(pendingSigmets)
+            source(CWA_SOURCE)?.setGeoJson(pendingCwas)
+            source(PIREP_SOURCE)?.setGeoJson(pendingPireps)
             source(PROCEDURE_SOURCE)?.setGeoJson(pendingProcedure)
             source(ROUTE_SOURCE)?.setGeoJson(pendingRoute)
             source(TRACK_SOURCE)?.setGeoJson(pendingTrack)
@@ -118,10 +129,24 @@ class MapController {
         mapLibreMap.addOnCameraIdleListener { emitViewport() }
         mapLibreMap.addOnMapClickListener { point ->
             val screenPoint = mapLibreMap.projection.toScreenLocation(point)
-            onAirportTapped?.invoke(airportAt(mapLibreMap, screenPoint))
+            val airport = airportAt(mapLibreMap, screenPoint)
+            if (airport != null) {
+                onAirportTapped?.invoke(airport)
+                onWeatherHazardTapped?.invoke(null)
+            } else {
+                val hazard = weatherHazardAt(mapLibreMap, screenPoint)
+                if (hazard != null) {
+                    onAirportTapped?.invoke(null)
+                    onWeatherHazardTapped?.invoke(hazard)
+                } else {
+                    onAirportTapped?.invoke(null)
+                    onWeatherHazardTapped?.invoke(null)
+                }
+            }
             true
         }
     }
+
 
     fun setupLocationComponentIfPermitted(context: Context, style: Style? = this.style) {
         val mapLibreMap = map ?: return
@@ -239,6 +264,27 @@ class MapController {
         source(AIRSPACE_SOURCE)?.setGeoJson(geoJson)
     }
 
+    fun setGairmets(geoJson: String) {
+        pendingGairmets = geoJson
+        source(GAIRMET_SOURCE)?.setGeoJson(geoJson)
+    }
+
+    fun setSigmets(geoJson: String) {
+        pendingSigmets = geoJson
+        source(SIGMET_SOURCE)?.setGeoJson(geoJson)
+    }
+
+    fun setCwas(geoJson: String) {
+        pendingCwas = geoJson
+        source(CWA_SOURCE)?.setGeoJson(geoJson)
+    }
+
+    fun setPireps(geoJson: String) {
+        pendingPireps = geoJson
+        source(PIREP_SOURCE)?.setGeoJson(geoJson)
+    }
+
+
     fun setProcedure(geoJson: String) {
         pendingProcedure = geoJson
         source(PROCEDURE_SOURCE)?.setGeoJson(geoJson)
@@ -310,9 +356,13 @@ class MapController {
 
     private fun installLayers(loaded: Style) {
         loaded.addSource(GeoJsonSource(AIRSPACE_SOURCE, pendingAirspace))
+        loaded.addSource(GeoJsonSource(GAIRMET_SOURCE, pendingGairmets))
+        loaded.addSource(GeoJsonSource(SIGMET_SOURCE, pendingSigmets))
+        loaded.addSource(GeoJsonSource(CWA_SOURCE, pendingCwas))
         loaded.addSource(GeoJsonSource(PROCEDURE_SOURCE, pendingProcedure))
         loaded.addSource(GeoJsonSource(ROUTE_SOURCE, pendingRoute))
         loaded.addSource(GeoJsonSource(TRACK_SOURCE, pendingTrack))
+        loaded.addSource(GeoJsonSource(PIREP_SOURCE, pendingPireps))
         loaded.addSource(GeoJsonSource(AIRPORTS_SOURCE, pendingAirports))
 
         // Class B/C/D and Special Use, tinted by class. Kept translucent:
@@ -331,6 +381,51 @@ class MapController {
                 PropertyFactory.lineOpacity(0.75f),
             )
         )
+
+        // Graphical AIRMETs (Sierra, Tango, Zulu)
+        loaded.addLayer(
+            FillLayer(GAIRMET_FILL_LAYER, GAIRMET_SOURCE).withProperties(
+                PropertyFactory.fillColor(gairmetColor()),
+                PropertyFactory.fillOpacity(0.15f),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Polygon")))
+        )
+        loaded.addLayer(
+            LineLayer(GAIRMET_LINE_LAYER, GAIRMET_SOURCE).withProperties(
+                PropertyFactory.lineColor(gairmetColor()),
+                PropertyFactory.lineWidth(1.6f),
+                PropertyFactory.lineDasharray(arrayOf(3.0f, 2.0f)),
+            )
+        )
+
+        // SIGMETs & Convective SIGMETs (High hazard, red)
+        loaded.addLayer(
+            FillLayer(SIGMET_FILL_LAYER, SIGMET_SOURCE).withProperties(
+                PropertyFactory.fillColor("#E5484D"),
+                PropertyFactory.fillOpacity(0.20f),
+            )
+        )
+        loaded.addLayer(
+            LineLayer(SIGMET_LINE_LAYER, SIGMET_SOURCE).withProperties(
+                PropertyFactory.lineColor("#E5484D"),
+                PropertyFactory.lineWidth(2.2f),
+            )
+        )
+
+        // Center Weather Advisories (ARTCC short-fuse warnings, orange)
+        loaded.addLayer(
+            FillLayer(CWA_FILL_LAYER, CWA_SOURCE).withProperties(
+                PropertyFactory.fillColor("#FF8C42"),
+                PropertyFactory.fillOpacity(0.15f),
+            )
+        )
+        loaded.addLayer(
+            LineLayer(CWA_LINE_LAYER, CWA_SOURCE).withProperties(
+                PropertyFactory.lineColor("#FF8C42"),
+                PropertyFactory.lineWidth(1.6f),
+                PropertyFactory.lineDasharray(arrayOf(2.0f, 2.0f)),
+            )
+        )
+
 
         loaded.addLayer(
             LineLayer(PROCEDURE_LINE_LAYER, PROCEDURE_SOURCE).withProperties(
@@ -388,6 +483,23 @@ class MapController {
             ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("LineString")))
         )
 
+        // PIREPs: circle point markers colored by severity
+        loaded.addLayer(
+            CircleLayer(PIREP_LAYER, PIREP_SOURCE).withProperties(
+                PropertyFactory.circleRadius(
+                    Expression.switchCase(
+                        Expression.eq(Expression.get("urgent"), Expression.literal(true)),
+                        Expression.literal(7.0f),
+                        Expression.literal(4.5f),
+                    )
+                ),
+                PropertyFactory.circleColor(pirepSeverityColor()),
+                PropertyFactory.circleStrokeWidth(1.2f),
+                PropertyFactory.circleStrokeColor("#10161C"),
+                PropertyFactory.circleOpacity(0.95f),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point")))
+        )
+
         // Airports last, so they stay tappable over everything else. No
         // labels: the sectional underneath has them, and a text layer would
         // drag in a glyph server this app must work without.
@@ -429,6 +541,26 @@ class MapController {
         Expression.stop("D", Expression.literal("#4FC3F7")),
     )
 
+    private fun gairmetColor(): Expression = Expression.match(
+        Expression.coalesce(Expression.get("hazard"), Expression.literal("TURB")),
+        Expression.literal("#FFB020"),
+        Expression.stop("TURB", Expression.literal("#FFB020")),
+        Expression.stop("ICE", Expression.literal("#4FC3F7")),
+        Expression.stop("MT_OBSC", Expression.literal("#8A8A8A")),
+        Expression.stop("IFR", Expression.literal("#9B6BD6")),
+        Expression.stop("FZLVL", Expression.literal("#7FD0FF")),
+        Expression.stop("SFC_WND", Expression.literal("#E0C341")),
+    )
+
+    private fun pirepSeverityColor(): Expression = Expression.match(
+        Expression.coalesce(Expression.get("severity"), Expression.literal("NONE")),
+        Expression.literal("#7FA8D9"),
+        Expression.stop("SEVERE", Expression.literal("#E5484D")),
+        Expression.stop("MODERATE", Expression.literal("#E0973F")),
+        Expression.stop("LIGHT", Expression.literal("#E0C341")),
+        Expression.stop("NONE", Expression.literal("#7FA8D9")),
+    )
+
     private fun airportAt(mapLibreMap: MapLibreMap, point: PointF): String? {
         // A generous touch box: a 4px circle is far smaller than a fingertip.
         val slop = 24f
@@ -438,6 +570,67 @@ class MapController {
         return mapLibreMap.queryRenderedFeatures(box, AIRPORTS_LAYER)
             .firstOrNull()
             ?.getStringProperty("icao")
+    }
+
+    private fun weatherHazardAt(mapLibreMap: MapLibreMap, point: PointF): ws.freeflight.data.WeatherHazardTap? {
+        val slop = 24f
+        val box = android.graphics.RectF(
+            point.x - slop, point.y - slop, point.x + slop, point.y + slop
+        )
+        // 1. PIREPs (point markers)
+        val pirepFeature = mapLibreMap.queryRenderedFeatures(box, PIREP_LAYER).firstOrNull()
+        if (pirepFeature != null) {
+            return ws.freeflight.data.WeatherHazardTap.PirepTap(
+                summary = pirepFeature.getStringProperty("summary").orEmpty(),
+                rawOb = pirepFeature.getStringProperty("rawOb").orEmpty(),
+                severity = pirepFeature.getStringProperty("severity").orEmpty(),
+                acType = pirepFeature.getStringProperty("acType"),
+                fltLvl = pirepFeature.getNumberProperty("fltLvl")?.toInt(),
+                obsTime = pirepFeature.getNumberProperty("obsTime")?.toLong() ?: 0L,
+            )
+        }
+        // 2. CWAs (polygons)
+        val cwaFeature = mapLibreMap.queryRenderedFeatures(point, CWA_FILL_LAYER).firstOrNull()
+        if (cwaFeature != null) {
+            return ws.freeflight.data.WeatherHazardTap.CwaTap(
+                hazard = cwaFeature.getStringProperty("hazard").orEmpty(),
+                cwsu = cwaFeature.getStringProperty("cwsu").orEmpty(),
+                name = cwaFeature.getStringProperty("name").orEmpty(),
+                seriesId = cwaFeature.getStringProperty("seriesId").orEmpty(),
+                base = cwaFeature.getNumberProperty("base")?.toInt(),
+                top = cwaFeature.getNumberProperty("top")?.toInt(),
+                rawText = cwaFeature.getStringProperty("rawText").orEmpty(),
+            )
+        }
+        // 3. SIGMETs (polygons)
+        val sigmetFeature = mapLibreMap.queryRenderedFeatures(point, SIGMET_FILL_LAYER).firstOrNull()
+        if (sigmetFeature != null) {
+            return ws.freeflight.data.WeatherHazardTap.SigmetTap(
+                hazard = sigmetFeature.getStringProperty("hazard").orEmpty(),
+                seriesId = sigmetFeature.getStringProperty("seriesId").orEmpty(),
+                icaoId = sigmetFeature.getStringProperty("icaoId").orEmpty(),
+                alphaChar = sigmetFeature.getStringProperty("alphaChar").orEmpty(),
+                altitudeLow1 = sigmetFeature.getNumberProperty("altitudeLow1")?.toInt(),
+                altitudeHi1 = sigmetFeature.getNumberProperty("altitudeHi1")?.toInt(),
+                rawAirSigmet = sigmetFeature.getStringProperty("rawAirSigmet").orEmpty(),
+            )
+        }
+        // 4. G-AIRMETs (polygons)
+        val gairmetFeature = mapLibreMap.queryRenderedFeatures(point, GAIRMET_FILL_LAYER).firstOrNull()
+        if (gairmetFeature != null) {
+            return ws.freeflight.data.WeatherHazardTap.AirmetTap(
+                hazard = gairmetFeature.getStringProperty("hazard").orEmpty(),
+                tag = gairmetFeature.getStringProperty("tag").orEmpty(),
+                severity = gairmetFeature.getStringProperty("severity"),
+                base = gairmetFeature.getStringProperty("base"),
+                top = gairmetFeature.getStringProperty("top"),
+                fzlbase = gairmetFeature.getStringProperty("fzlbase"),
+                fzltop = gairmetFeature.getStringProperty("fzltop"),
+                validTime = gairmetFeature.getStringProperty("validTime").orEmpty(),
+                product = gairmetFeature.getStringProperty("product").orEmpty(),
+            )
+        }
+        return null
     }
 
     private fun source(id: String): GeoJsonSource? = style?.getSourceAs(id)
@@ -463,6 +656,15 @@ class MapController {
         private const val AIRSPACE_SOURCE = "airspace"
         private const val AIRSPACE_FILL_LAYER = "airspace-fill"
         private const val AIRSPACE_LINE_LAYER = "airspace-line"
+        private const val GAIRMET_SOURCE = "gairmets"
+        private const val GAIRMET_FILL_LAYER = "gairmet-fill"
+        private const val GAIRMET_LINE_LAYER = "gairmet-line"
+        private const val SIGMET_SOURCE = "sigmets"
+        private const val SIGMET_FILL_LAYER = "sigmet-fill"
+        private const val SIGMET_LINE_LAYER = "sigmet-line"
+        private const val CWA_SOURCE = "cwas"
+        private const val CWA_FILL_LAYER = "cwa-fill"
+        private const val CWA_LINE_LAYER = "cwa-line"
         private const val PROCEDURE_SOURCE = "procedure"
         private const val PROCEDURE_LINE_LAYER = "procedure-missed"
         private const val PROCEDURE_SOLID_LAYER = "procedure-line"
@@ -472,8 +674,11 @@ class MapController {
         private const val ROUTE_FIX_LAYER = "route-fix"
         private const val TRACK_SOURCE = "track"
         private const val TRACK_LINE_LAYER = "track-line"
+        private const val PIREP_SOURCE = "pireps"
+        private const val PIREP_LAYER = "pirep-circle"
         private const val AIRPORTS_SOURCE = "airports"
         const val AIRPORTS_LAYER = "airports-circle"
+
 
         /**
          * No `glyphs` and no `sprite` entries, on purpose — see the class

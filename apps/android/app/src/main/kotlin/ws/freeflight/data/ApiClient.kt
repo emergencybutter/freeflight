@@ -10,6 +10,7 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
+import uniffi.ff_uniffi.BoundingBox
 
 /**
  * Everything this app fetches over the network.
@@ -65,6 +66,31 @@ class ApiClient(private val settings: Settings) {
         val body = getString("/weather/windtemp?level=$level&fcst=$fcst&region=$region")
         WindsAloftParser.parse(body)
     }
+
+    suspend fun gairmets(): List<GAirmet> = withContext(Dispatchers.IO) {
+        val body = getString("/weather/gairmet")
+        json.decodeFromString(body)
+    }
+
+    suspend fun sigmets(): List<Sigmet> = withContext(Dispatchers.IO) {
+        val body = getString("/weather/sigmet")
+        json.decodeFromString(body)
+    }
+
+    suspend fun cwas(): List<Cwa> = withContext(Dispatchers.IO) {
+        val body = getString("/weather/cwa")
+        json.decodeFromString(body)
+    }
+
+    suspend fun pireps(bbox: String): List<Pirep> = withContext(Dispatchers.IO) {
+        val encoded = java.net.URLEncoder.encode(bbox, "UTF-8")
+        val body = getString("/weather/pirep?bbox=$encoded")
+        json.decodeFromString(body)
+    }
+
+    suspend fun pireps(bbox: BoundingBox): List<Pirep> =
+        pireps("${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}")
+
 
     private suspend fun getString(path: String): String = withContext(Dispatchers.IO) {
         http.newCall(request(path).build()).execute().use { response ->

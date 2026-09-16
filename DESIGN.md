@@ -1856,9 +1856,7 @@ document survive insertions/removals.
   read from the on-device bundle. Live METAR/TAF is the only screen that
   needs the network, and it says so when it can't reach it. Verified
   end-to-end against a real 2026-07-09 cycle on an emulator in airplane
-  mode. Still missing on Android: own-ship GPS position, the plate-chart
-  viewer web has (§9.1), and the weather overlays beyond station
-  METAR/TAF.
+  mode. Own-ship GPS position (heading/north up tracking), inline plate-chart viewer with d-TPP integration, and full graphical weather hazard overlays (G-AIRMET polygons/lines, SIGMET / Convective SIGMET polygons, CWA polygons, and severity-coded PIREP markers with interactive tap sheets) are all fully implemented on Android in complete parity with web.
 - **Phase 2 — Flight planning**: fully implemented on both web and Android.
   Route builder, nav log, W&B calculator, and aircraft profiles running
   `ff-planning` math client-side (`ff-wasm` on web, `ff-uniffi` on Android).

@@ -43,6 +43,38 @@ class Settings(context: Context) {
         _showAirports.value = value
     }
 
+    private val _showGairmets = MutableStateFlow(prefs.getBoolean(KEY_SHOW_GAIRMETS, true))
+    val showGairmets: StateFlow<Boolean> = _showGairmets.asStateFlow()
+
+    fun setShowGairmets(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_GAIRMETS, value).apply()
+        _showGairmets.value = value
+    }
+
+    private val _showSigmets = MutableStateFlow(prefs.getBoolean(KEY_SHOW_SIGMETS, true))
+    val showSigmets: StateFlow<Boolean> = _showSigmets.asStateFlow()
+
+    fun setShowSigmets(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_SIGMETS, value).apply()
+        _showSigmets.value = value
+    }
+
+    private val _showCwas = MutableStateFlow(prefs.getBoolean(KEY_SHOW_CWAS, true))
+    val showCwas: StateFlow<Boolean> = _showCwas.asStateFlow()
+
+    fun setShowCwas(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_CWAS, value).apply()
+        _showCwas.value = value
+    }
+
+    private val _showPireps = MutableStateFlow(prefs.getBoolean(KEY_SHOW_PIREPS, true))
+    val showPireps: StateFlow<Boolean> = _showPireps.asStateFlow()
+
+    fun setShowPireps(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_PIREPS, value).apply()
+        _showPireps.value = value
+    }
+
     /**
      * Which catalogued chart the map draws under everything else, or null
      * for no chart at all. Stored by `chart_catalog.id`, which embeds the
@@ -61,6 +93,11 @@ class Settings(context: Context) {
         const val KEY_API_BASE_URL = "api_base_url"
         const val KEY_SHOW_AIRSPACE = "show_airspace"
         const val KEY_SHOW_AIRPORTS = "show_airports"
+        const val KEY_SHOW_GAIRMETS = "show_gairmets"
+        const val KEY_SHOW_SIGMETS = "show_sigmets"
+        const val KEY_SHOW_CWAS = "show_cwas"
+        const val KEY_SHOW_PIREPS = "show_pireps"
         const val KEY_CHART_ID = "selected_chart_id"
     }
 }
+

@@ -13,6 +13,8 @@ import uniffi.ff_uniffi.Airport
 import uniffi.ff_uniffi.Airspace
 import uniffi.ff_uniffi.ProcedureDetail
 import ws.freeflight.data.PlannedWaypoint
+import ws.freeflight.data.severity
+import ws.freeflight.data.summary
 
 /**
  * Builds the GeoJSON the map's vector overlays are fed.
@@ -140,7 +142,120 @@ object GeoJson {
         return featureCollection(listOf(feature))
     }
 
+    fun gairmets(records: List<ws.freeflight.data.GAirmet>): String =
+        featureCollection(
+            records.mapNotNull { r ->
+                val coords = r.coords.mapNotNull {
+                    val lat = it.lat.toDoubleOrNull() ?: return@mapNotNull null
+                    val lon = it.lon.toDoubleOrNull() ?: return@mapNotNull null
+                    coordinate(lon, lat)
+                }
+                if (coords.isEmpty()) return@mapNotNull null
+
+                val geometry = if (r.geometryType.equals("LINE", ignoreCase = true)) {
+                    buildJsonObject {
+                        put("type", "LineString")
+                        put("coordinates", JsonArray(coords))
+                    }
+                } else {
+                    val ring = if (coords.first() != coords.last()) coords + coords.first() else coords
+                    buildJsonObject {
+                        put("type", "Polygon")
+                        put("coordinates", buildJsonArray { add(JsonArray(ring)) })
+                    }
+                }
+
+                feature(
+                    geometry = geometry,
+                    properties = buildJsonObject {
+                        put("hazard", r.hazard)
+                        put("tag", r.tag)
+                        r.severity?.let { put("severity", it) }
+                        r.base?.let { put("base", it) }
+                        r.top?.let { put("top", it) }
+                        r.fzlbase?.let { put("fzlbase", it) }
+                        r.fzltop?.let { put("fzltop", it) }
+                        put("validTime", r.validTime)
+                        put("product", r.product)
+                    },
+                )
+            }
+        )
+
+    fun sigmets(records: List<ws.freeflight.data.Sigmet>): String =
+        featureCollection(
+            records.mapNotNull { r ->
+                val coords = r.coords.map { coordinate(it.lon, it.lat) }
+                if (coords.isEmpty()) return@mapNotNull null
+                val ring = if (coords.first() != coords.last()) coords + coords.first() else coords
+                val geometry = buildJsonObject {
+                    put("type", "Polygon")
+                    put("coordinates", buildJsonArray { add(JsonArray(ring)) })
+                }
+                feature(
+                    geometry = geometry,
+                    properties = buildJsonObject {
+                        put("hazard", r.hazard)
+                        put("seriesId", r.seriesId)
+                        put("icaoId", r.icaoId)
+                        put("alphaChar", r.alphaChar)
+                        r.altitudeLow1?.let { put("altitudeLow1", it) }
+                        r.altitudeHi1?.let { put("altitudeHi1", it) }
+                        put("rawAirSigmet", r.rawAirSigmet)
+                    },
+                )
+            }
+        )
+
+    fun cwas(records: List<ws.freeflight.data.Cwa>): String =
+        featureCollection(
+            records.mapNotNull { r ->
+                val coords = r.coords.mapNotNull {
+                    val lat = it.lat.toDoubleOrNull() ?: return@mapNotNull null
+                    val lon = it.lon.toDoubleOrNull() ?: return@mapNotNull null
+                    coordinate(lon, lat)
+                }
+                if (coords.isEmpty()) return@mapNotNull null
+                val ring = if (coords.first() != coords.last()) coords + coords.first() else coords
+                val geometry = buildJsonObject {
+                    put("type", "Polygon")
+                    put("coordinates", buildJsonArray { add(JsonArray(ring)) })
+                }
+                feature(
+                    geometry = geometry,
+                    properties = buildJsonObject {
+                        put("hazard", r.hazard)
+                        put("cwsu", r.cwsu)
+                        put("name", r.name)
+                        put("seriesId", r.seriesId)
+                        r.base?.let { put("base", it) }
+                        r.top?.let { put("top", it) }
+                        put("rawText", r.rawText)
+                    },
+                )
+            }
+        )
+
+    fun pireps(records: List<ws.freeflight.data.Pirep>): String =
+        featureCollection(
+            records.map { r ->
+                feature(
+                    geometry = point(r.lon, r.lat),
+                    properties = buildJsonObject {
+                        put("severity", ws.freeflight.data.PirepSeverity.valueOf(r.severity().name).name)
+                        put("urgent", r.pirepType.equals("Urgent PIREP", ignoreCase = true))
+                        put("summary", r.summary())
+                        put("rawOb", r.rawOb)
+                        r.acType?.let { put("acType", it) }
+                        r.fltLvl?.let { put("fltLvl", it) }
+                        put("obsTime", r.obsTime)
+                    },
+                )
+            }
+        )
+
     val empty: String = featureCollection(emptyList())
+
 
     private fun featureCollection(features: List<JsonObject>): String =
         json.encodeToString(

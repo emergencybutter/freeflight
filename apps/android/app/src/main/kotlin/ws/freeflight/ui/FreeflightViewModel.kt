@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,13 +25,22 @@ import uniffi.ff_uniffi.ProcedureDetail
 import uniffi.ff_uniffi.SearchHit
 import ws.freeflight.AppContainer
 import ws.freeflight.data.ChartSet
+import ws.freeflight.data.Cwa
+import ws.freeflight.data.GAirmet
 import ws.freeflight.data.Metar
+import ws.freeflight.data.Pirep
+import ws.freeflight.data.Sigmet
 import ws.freeflight.data.Taf
+import ws.freeflight.data.WeatherHazardTap
 
 /** Everything the map screen draws, in one snapshot. */
 data class MapUiState(
     val airports: List<Airport> = emptyList(),
     val airspace: List<Airspace> = emptyList(),
+    val gairmets: List<GAirmet> = emptyList(),
+    val sigmets: List<Sigmet> = emptyList(),
+    val cwas: List<Cwa> = emptyList(),
+    val pireps: List<Pirep> = emptyList(),
     /** Live flight categories by ICAO, from the last weather fetch. */
     val flightCategories: Map<String, String> = emptyMap(),
     val weatherFetchedAtMillis: Long? = null,
@@ -91,6 +101,17 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
 
     fun closePlate() {
         _activePlate.value = null
+    }
+
+    private val _selectedWeatherHazard = MutableStateFlow<WeatherHazardTap?>(null)
+    val selectedWeatherHazard: StateFlow<WeatherHazardTap?> = _selectedWeatherHazard.asStateFlow()
+
+    fun openWeatherHazard(hazard: WeatherHazardTap?) {
+        _selectedWeatherHazard.value = hazard
+    }
+
+    fun closeWeatherHazard() {
+        _selectedWeatherHazard.value = null
     }
 
     private val jsonSerializer = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
@@ -510,7 +531,8 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /**
-     * Colour the airports in view by their current flight category.
+     * Colour the airports in view by their current flight category, and fetch
+     * active graphical weather hazards (G-AIRMETs, SIGMETs, CWAs, PIREPs).
      *
      * Explicit, never automatic on pan: it is a network call per viewport,
      * and the map has to be usable with the radio off. The timestamp it
@@ -518,15 +540,45 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
      */
     fun refreshVisibleWeather() {
         val idents = _map.value.airports.take(WEATHER_BATCH).map { it.icao }
-        if (idents.isEmpty()) return
+        val bbox = lastViewport
+        if (idents.isEmpty() && bbox == null) return
         viewModelScope.launch {
             _map.value = _map.value.copy(weatherLoading = true)
             try {
-                val metars = container.api.metars(idents)
+                val metarsDeferred = async {
+                    if (idents.isNotEmpty()) {
+                        runCatching { container.api.metars(idents) }.getOrDefault(emptyList())
+                    } else emptyList()
+                }
+                val gairmetsDeferred = async {
+                    runCatching { container.api.gairmets() }.getOrDefault(emptyList())
+                }
+                val sigmetsDeferred = async {
+                    runCatching { container.api.sigmets() }.getOrDefault(emptyList())
+                }
+                val cwasDeferred = async {
+                    runCatching { container.api.cwas() }.getOrDefault(emptyList())
+                }
+                val pirepsDeferred = async {
+                    if (bbox != null) {
+                        runCatching { container.api.pireps(bbox) }.getOrDefault(emptyList())
+                    } else emptyList()
+                }
+
+                val metars = metarsDeferred.await()
+                val gairmets = gairmetsDeferred.await()
+                val sigmets = sigmetsDeferred.await()
+                val cwas = cwasDeferred.await()
+                val pireps = pirepsDeferred.await()
+
                 _map.value = _map.value.copy(
                     flightCategories = metars.mapNotNull { metar ->
                         metar.flightCategory?.let { metar.icaoId.uppercase() to it }
                     }.toMap(),
+                    gairmets = gairmets,
+                    sigmets = sigmets,
+                    cwas = cwas,
+                    pireps = pireps,
                     weatherFetchedAtMillis = System.currentTimeMillis(),
                     weatherLoading = false,
                     message = null,

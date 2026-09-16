@@ -98,6 +98,12 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val crossedAirspace by viewModel.crossedAirspace.collectAsState()
     val savedRoutePlans by viewModel.savedRoutePlans.collectAsState()
 
+    val showGairmets by viewModel.settings.showGairmets.collectAsState()
+    val showSigmets by viewModel.settings.showSigmets.collectAsState()
+    val showCwas by viewModel.settings.showCwas.collectAsState()
+    val showPireps by viewModel.settings.showPireps.collectAsState()
+    val selectedWeatherHazard by viewModel.selectedWeatherHazard.collectAsState()
+
     val isRecording by viewModel.isRecording.collectAsState()
     val activePoints by viewModel.activeRecordingPoints.collectAsState()
     val mapTrackPoints by viewModel.mapTrackPoints.collectAsState()
@@ -122,6 +128,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
         controller.onViewportChanged = viewModel::onViewportChanged
         controller.onAirportTapped = { icao ->
             if (icao != null) viewModel.openAirport(icao) else viewModel.closeAirport()
+        }
+        controller.onWeatherHazardTapped = { hazard ->
+            viewModel.openWeatherHazard(hazard)
         }
         controller.onLocationTrackingModeChanged = { mode ->
             locationTrackingMode = mode
@@ -148,6 +157,18 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     }
     LaunchedEffect(mapState.airspace) {
         controller.setAirspace(GeoJson.airspace(mapState.airspace))
+    }
+    LaunchedEffect(mapState.gairmets, showGairmets) {
+        controller.setGairmets(if (showGairmets) GeoJson.gairmets(mapState.gairmets) else GeoJson.empty)
+    }
+    LaunchedEffect(mapState.sigmets, showSigmets) {
+        controller.setSigmets(if (showSigmets) GeoJson.sigmets(mapState.sigmets) else GeoJson.empty)
+    }
+    LaunchedEffect(mapState.cwas, showCwas) {
+        controller.setCwas(if (showCwas) GeoJson.cwas(mapState.cwas) else GeoJson.empty)
+    }
+    LaunchedEffect(mapState.pireps, showPireps) {
+        controller.setPireps(if (showPireps) GeoJson.pireps(mapState.pireps) else GeoJson.empty)
     }
     LaunchedEffect(procedure) {
         controller.setProcedure(procedure?.let(GeoJson::procedure) ?: GeoJson.empty)
@@ -367,6 +388,13 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 onDelete = { viewModel.deleteFlight(it) },
             )
         }
+
+        selectedWeatherHazard?.let { hazard ->
+            WeatherHazardSheet(
+                hazard = hazard,
+                onDismiss = viewModel::closeWeatherHazard,
+            )
+        }
     }
 }
 
@@ -514,6 +542,10 @@ private fun MapControls(
     var layersOpen by remember { mutableStateOf(false) }
     val showAirspace by viewModel.settings.showAirspace.collectAsState()
     val showAirports by viewModel.settings.showAirports.collectAsState()
+    val showGairmets by viewModel.settings.showGairmets.collectAsState()
+    val showSigmets by viewModel.settings.showSigmets.collectAsState()
+    val showCwas by viewModel.settings.showCwas.collectAsState()
+    val showPireps by viewModel.settings.showPireps.collectAsState()
 
     val onLocateClick = {
         val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -638,6 +670,56 @@ private fun MapControls(
                         viewModel.refreshViewport()
                     },
                     trailingIcon = { Switch(checked = showAirspace, onCheckedChange = null) },
+                )
+                HorizontalDivider()
+                Text(
+                    "Weather Overlays",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                DropdownMenuItem(
+                    text = { Text("G-AIRMETs") },
+                    onClick = {
+                        val next = !showGairmets
+                        viewModel.settings.setShowGairmets(next)
+                        if (next && viewModel.map.value.weatherFetchedAtMillis == null) {
+                            viewModel.refreshVisibleWeather()
+                        }
+                    },
+                    trailingIcon = { Switch(checked = showGairmets, onCheckedChange = null) },
+                )
+                DropdownMenuItem(
+                    text = { Text("SIGMETs") },
+                    onClick = {
+                        val next = !showSigmets
+                        viewModel.settings.setShowSigmets(next)
+                        if (next && viewModel.map.value.weatherFetchedAtMillis == null) {
+                            viewModel.refreshVisibleWeather()
+                        }
+                    },
+                    trailingIcon = { Switch(checked = showSigmets, onCheckedChange = null) },
+                )
+                DropdownMenuItem(
+                    text = { Text("CWAs") },
+                    onClick = {
+                        val next = !showCwas
+                        viewModel.settings.setShowCwas(next)
+                        if (next && viewModel.map.value.weatherFetchedAtMillis == null) {
+                            viewModel.refreshVisibleWeather()
+                        }
+                    },
+                    trailingIcon = { Switch(checked = showCwas, onCheckedChange = null) },
+                )
+                DropdownMenuItem(
+                    text = { Text("PIREPs") },
+                    onClick = {
+                        val next = !showPireps
+                        viewModel.settings.setShowPireps(next)
+                        if (next && viewModel.map.value.weatherFetchedAtMillis == null) {
+                            viewModel.refreshVisibleWeather()
+                        }
+                    },
+                    trailingIcon = { Switch(checked = showPireps, onCheckedChange = null) },
                 )
             }
         }
