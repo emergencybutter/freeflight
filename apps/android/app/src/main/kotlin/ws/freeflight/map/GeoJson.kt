@@ -127,6 +127,19 @@ object GeoJson {
         return featureCollection(features)
     }
 
+    fun track(points: List<ws.freeflight.data.RecordedPoint>): String {
+        if (points.size < 2) return empty
+        val coordinates = points.map { coordinate(it.lon, it.lat) }
+        val feature = feature(
+            geometry = buildJsonObject {
+                put("type", "LineString")
+                put("coordinates", JsonArray(coordinates))
+            },
+            properties = buildJsonObject {},
+        )
+        return featureCollection(listOf(feature))
+    }
+
     val empty: String = featureCollection(emptyList())
 
     private fun featureCollection(features: List<JsonObject>): String =

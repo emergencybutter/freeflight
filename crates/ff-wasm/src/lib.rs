@@ -151,3 +151,30 @@ pub fn check_weight_balance_json(items_json: &str, envelope_json: &str) -> Resul
     serde_json::to_string(&result)
         .map_err(|e| JsValue::from_str(&format!("failed to serialize result: {e}")))
 }
+
+/// Analyze a recorded GPS track from JSON for web post-flight review.
+#[wasm_bindgen]
+pub fn analyze_track_json(track_points_json: &str) -> Result<String, JsValue> {
+    let points: Vec<ff_postflight::TrackPoint> = serde_json::from_str(track_points_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid track points JSON: {e}")))?;
+    let analyzed = ff_postflight::analyze_track(&points);
+    serde_json::to_string(&analyzed)
+        .map_err(|e| JsValue::from_str(&format!("failed to serialize result: {e}")))
+}
+
+/// Export track points to GPX 1.1 format.
+#[wasm_bindgen]
+pub fn export_track_gpx(track_points_json: &str, flight_name: &str) -> Result<String, JsValue> {
+    let points: Vec<ff_postflight::TrackPoint> = serde_json::from_str(track_points_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid track points JSON: {e}")))?;
+    Ok(ff_postflight::export_gpx(&points, flight_name))
+}
+
+/// Export analyzed flight to CSV format.
+#[wasm_bindgen]
+pub fn export_flight_csv(analyzed_track_json: &str, flight_name: &str) -> Result<String, JsValue> {
+    let analyzed: ff_postflight::AnalyzedTrack = serde_json::from_str(analyzed_track_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid analyzed track JSON: {e}")))?;
+    Ok(ff_postflight::export_csv(&analyzed, flight_name))
+}
+

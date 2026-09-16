@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ff-planning.workspace = true
+ff-postflight.workspace = true
 serde_json.workspace = true
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"

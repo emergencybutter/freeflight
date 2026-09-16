@@ -87,6 +87,7 @@ class MapController {
     private var pendingAirspace: String = GeoJson.empty
     private var pendingProcedure: String = GeoJson.empty
     private var pendingRoute: String = GeoJson.empty
+    private var pendingTrack: String = GeoJson.empty
 
     fun attach(mapLibreMap: MapLibreMap, surface: MapView) {
         map = mapLibreMap
@@ -110,6 +111,7 @@ class MapController {
             source(AIRSPACE_SOURCE)?.setGeoJson(pendingAirspace)
             source(PROCEDURE_SOURCE)?.setGeoJson(pendingProcedure)
             source(ROUTE_SOURCE)?.setGeoJson(pendingRoute)
+            source(TRACK_SOURCE)?.setGeoJson(pendingTrack)
             emitViewport()
         }
 
@@ -247,6 +249,11 @@ class MapController {
         source(ROUTE_SOURCE)?.setGeoJson(geoJson)
     }
 
+    fun setTrack(geoJson: String) {
+        pendingTrack = geoJson
+        source(TRACK_SOURCE)?.setGeoJson(geoJson)
+    }
+
     fun flyTo(lat: Double, lon: Double, zoom: Double = 11.0) {
         map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(lat, lon), zoom))
     }
@@ -305,6 +312,7 @@ class MapController {
         loaded.addSource(GeoJsonSource(AIRSPACE_SOURCE, pendingAirspace))
         loaded.addSource(GeoJsonSource(PROCEDURE_SOURCE, pendingProcedure))
         loaded.addSource(GeoJsonSource(ROUTE_SOURCE, pendingRoute))
+        loaded.addSource(GeoJsonSource(TRACK_SOURCE, pendingTrack))
         loaded.addSource(GeoJsonSource(AIRPORTS_SOURCE, pendingAirports))
 
         // Class B/C/D and Special Use, tinted by class. Kept translucent:
@@ -368,6 +376,16 @@ class MapController {
                 PropertyFactory.circleStrokeColor("#FFFFFF"),
                 PropertyFactory.circleStrokeWidth(1.5f),
             ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point")))
+        )
+
+        // Recorded flight track (bright cyan)
+        loaded.addLayer(
+            LineLayer(TRACK_LINE_LAYER, TRACK_SOURCE).withProperties(
+                PropertyFactory.lineColor("#00E5FF"),
+                PropertyFactory.lineWidth(3.5f),
+                PropertyFactory.lineJoin("round"),
+                PropertyFactory.lineCap("round"),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("LineString")))
         )
 
         // Airports last, so they stay tappable over everything else. No
@@ -452,6 +470,8 @@ class MapController {
         private const val ROUTE_SOURCE = "route"
         private const val ROUTE_LINE_LAYER = "route-line"
         private const val ROUTE_FIX_LAYER = "route-fix"
+        private const val TRACK_SOURCE = "track"
+        private const val TRACK_LINE_LAYER = "track-line"
         private const val AIRPORTS_SOURCE = "airports"
         const val AIRPORTS_LAYER = "airports-circle"
 

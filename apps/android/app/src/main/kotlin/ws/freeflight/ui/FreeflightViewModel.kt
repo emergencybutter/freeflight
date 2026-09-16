@@ -1,5 +1,7 @@
 package ws.freeflight.ui
 
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -167,6 +169,74 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                 // Ignore calculation errors for incomplete route
             }
         }
+    }
+
+    // ---- Flight Recording & Post-flight Analysis ------------------------
+
+    val flightRecording = container.flightRecording
+    val isRecording = flightRecording.isRecording
+    val activeRecordingPoints = flightRecording.activePoints
+    val recordingElapsedSeconds = flightRecording.elapsedSeconds
+    val latestRecordingPoint = flightRecording.latestPoint
+    val latestRecordingSpeedKt = flightRecording.latestSpeedKt
+    val savedFlights = flightRecording.savedFlights
+    val reviewFlight = flightRecording.reviewFlight
+
+    private val _mapTrackPoints = MutableStateFlow<List<ws.freeflight.data.RecordedPoint>>(emptyList())
+    val mapTrackPoints: StateFlow<List<ws.freeflight.data.RecordedPoint>> = _mapTrackPoints.asStateFlow()
+
+    fun startFlightRecording(context: Context) {
+        ws.freeflight.data.FlightRecordingService.start(context)
+    }
+
+    fun stopFlightRecording(context: Context) {
+        ws.freeflight.data.FlightRecordingService.stop(context)
+    }
+
+    fun selectFlightForReview(flight: ws.freeflight.data.RecordedFlight?) {
+        flightRecording.selectFlightForReview(flight)
+    }
+
+    fun closeFlightReview() {
+        flightRecording.selectFlightForReview(null)
+    }
+
+    fun showFlightOnMap(flight: ws.freeflight.data.RecordedFlight) {
+        _mapTrackPoints.value = flight.points
+        closeFlightReview()
+    }
+
+    fun clearMapTrack() {
+        _mapTrackPoints.value = emptyList()
+    }
+
+    fun deleteFlight(flight: ws.freeflight.data.RecordedFlight) {
+        flightRecording.deleteFlight(flight.id)
+        if (_mapTrackPoints.value == flight.points) {
+            clearMapTrack()
+        }
+    }
+
+    fun exportFlightGpx(context: Context, flight: ws.freeflight.data.RecordedFlight) {
+        val gpx = flightRecording.exportGpx(flight)
+        if (gpx.isEmpty()) return
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/xml"
+            putExtra(Intent.EXTRA_SUBJECT, "${flight.name}.gpx")
+            putExtra(Intent.EXTRA_TEXT, gpx)
+        }
+        context.startActivity(Intent.createChooser(intent, "Export GPX Track"))
+    }
+
+    fun exportFlightCsv(context: Context, flight: ws.freeflight.data.RecordedFlight) {
+        val csv = flightRecording.exportCsv(flight)
+        if (csv.isEmpty()) return
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(Intent.EXTRA_SUBJECT, "${flight.name}.csv")
+            putExtra(Intent.EXTRA_TEXT, csv)
+        }
+        context.startActivity(Intent.createChooser(intent, "Export Flight Log CSV"))
     }
 
     private var viewportJob: Job? = null

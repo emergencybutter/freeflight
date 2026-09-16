@@ -23,6 +23,7 @@ required-features = ["cli"]
 
 [dependencies]
 ff-planning.workspace = true
+ff-postflight.workspace = true
 ff-sync.workspace = true
 ff-storage.workspace = true
 rusqlite.workspace = true

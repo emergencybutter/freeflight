@@ -27,6 +27,8 @@ pub enum CoreError {
     InvalidProfile(String),
     #[error("invalid winds JSON: {0}")]
     InvalidWinds(String),
+    #[error("invalid track JSON: {0}")]
+    InvalidTrack(String),
     #[error("failed to serialize result: {0}")]
     Serialize(String),
 }

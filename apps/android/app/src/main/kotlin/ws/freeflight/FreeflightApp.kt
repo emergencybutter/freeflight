@@ -41,8 +41,11 @@ class AppContainer(context: Context) {
 
     val cycles = CycleRepository(core, api, appScope)
 
+    val flightRecording = ws.freeflight.data.FlightRecordingRepository(context, appScope)
+
     val tileServer = TileServer(core).also { it.start() }
 }
+
 
 class FreeflightApp : Application() {
     lateinit var container: AppContainer

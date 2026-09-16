@@ -429,5 +429,35 @@ pub fn plan_route_json(
     serde_json::to_string(&summary).map_err(|e| CoreError::Serialize(e.to_string()))
 }
 
+// ---- postflight analysis & export (mirrors ff-postflight surface) ---------
+
+/// Analyze a recorded GPS track from JSON.
+/// `track_points_json` is a JSON array of `{"ts": "2026-09-16T10:00:00Z", "lat": .., "lon": .., "alt_ft": ..}`.
+/// Returns a JSON string of `AnalyzedTrack`.
+#[uniffi::export]
+pub fn analyze_track_json(track_points_json: String) -> Result<String, CoreError> {
+    let points: Vec<ff_postflight::TrackPoint> = serde_json::from_str(&track_points_json)
+        .map_err(|e| CoreError::InvalidTrack(e.to_string()))?;
+    let analyzed = ff_postflight::analyze_track(&points);
+    serde_json::to_string(&analyzed).map_err(|e| CoreError::Serialize(e.to_string()))
+}
+
+/// Export a track JSON array to GPX 1.1 XML string.
+#[uniffi::export]
+pub fn export_track_gpx(track_points_json: String, flight_name: String) -> Result<String, CoreError> {
+    let points: Vec<ff_postflight::TrackPoint> = serde_json::from_str(&track_points_json)
+        .map_err(|e| CoreError::InvalidTrack(e.to_string()))?;
+    Ok(ff_postflight::export_gpx(&points, &flight_name))
+}
+
+/// Export an AnalyzedTrack JSON to CSV logbook string.
+#[uniffi::export]
+pub fn export_flight_csv(analyzed_track_json: String, flight_name: String) -> Result<String, CoreError> {
+    let analyzed: ff_postflight::AnalyzedTrack = serde_json::from_str(&analyzed_track_json)
+        .map_err(|e| CoreError::InvalidTrack(e.to_string()))?;
+    Ok(ff_postflight::export_csv(&analyzed, &flight_name))
+}
+
 #[cfg(test)]
 mod tests;
+

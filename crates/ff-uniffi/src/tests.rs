@@ -864,3 +864,26 @@ fn bad_planning_input_reports_which_input_was_bad() {
     .unwrap_err();
     assert!(matches!(err, CoreError::InvalidPoints(_)), "got {err:?}");
 }
+
+#[test]
+fn postflight_track_analyzes_and_exports_through_binding() {
+    let track_json = r#"[
+        {"ts":"2026-09-16T10:00:00Z","lat":45.0,"lon":-73.0,"alt_ft":150.0},
+        {"ts":"2026-09-16T10:01:00Z","lat":45.002,"lon":-73.002,"alt_ft":150.0},
+        {"ts":"2026-09-16T10:05:00Z","lat":45.08,"lon":-73.08,"alt_ft":3000.0},
+        {"ts":"2026-09-16T10:10:00Z","lat":45.0,"lon":-73.0,"alt_ft":150.0}
+    ]"#.to_string();
+
+    let analyzed_json = analyze_track_json(track_json.clone()).unwrap();
+    assert!(analyzed_json.contains("total_time_seconds"), "got {analyzed_json}");
+    assert!(analyzed_json.contains("airborne_time_seconds"), "got {analyzed_json}");
+
+    let gpx = export_track_gpx(track_json, "Morning Flight".to_string()).unwrap();
+    assert!(gpx.contains("<gpx"), "got {gpx}");
+    assert!(gpx.contains("Morning Flight"), "got {gpx}");
+
+    let csv = export_flight_csv(analyzed_json, "Morning Flight".to_string()).unwrap();
+    assert!(csv.contains("# Flight: Morning Flight"), "got {csv}");
+    assert!(csv.contains("timestamp_utc,latitude,longitude,altitude_ft,ground_speed_kt"), "got {csv}");
+}
+

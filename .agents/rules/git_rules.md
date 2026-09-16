@@ -1,4 +1,7 @@
-# Git Execution Guidelines
+# Command Execution Guidelines
 
-- **Inspection**: Always allow `git diff`, `git status`, and standard git read-only inspection subcommands without asking for extra confirmation.
-- **Commit Execution**: When the user explicitly asks to "commit" (or "git commit"), stage relevant modified and untracked files (`git add`) and execute `git commit` directly using terminal tools without prompting the user for permission or confirmation.
+- **Inspection & Execution**: Always allow `git`, `cargo`, and `gradlew` (including `./gradlew`) commands and all their subcommands directly without asking for extra confirmation or permission.
+- **Git Execution**: Execute all `git` commands (`status`, `diff`, `log`, `add`, `commit`, `checkout`, `push`, etc.) directly. When the user explicitly asks to "commit" (or "git commit"), stage relevant files and execute `git commit` immediately.
+- **Cargo Execution**: Execute all `cargo` commands (`build`, `test`, `check`, `ndk`, `run`, etc.) directly without prompting.
+- **Gradle Execution**: Execute all `gradlew` and `./gradlew` commands and tasks directly without prompting.
+

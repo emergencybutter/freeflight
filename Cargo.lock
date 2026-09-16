@@ -1017,6 +1017,7 @@ name = "ff-uniffi"
 version = "0.1.0"
 dependencies = [
  "ff-planning",
+ "ff-postflight",
  "ff-storage",
  "ff-sync",
  "pmtiles2",
@@ -1033,6 +1034,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "ff-planning",
+ "ff-postflight",
  "serde_json",
  "wasm-bindgen",
 ]

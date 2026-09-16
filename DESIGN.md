@@ -1120,22 +1120,19 @@ Consequences:
 
 ### 9.4 Post-flight analysis
 
-- The app can record a GPS track during flight (foreground service on
-  Android with a persistent notification per platform requirements;
-  `wakeLock`/background-tab caveats documented for web, since browsers
-  throttle background GPS aggressively — Android is the primary target
-  for in-flight recording).
+**Status: implemented on Android and shared core (`ff-postflight`, `ff-uniffi`, `ff-wasm`).**
+- The app can record a GPS track during flight (`FlightRecordingService` foreground service on
+  Android with a persistent notification and GPS location updates via `LocationManager`).
 - `ff-postflight` takes the raw track and derives: phase-of-flight
-  segmentation (ground/taxi/takeoff-roll/airborne/landing) from
-  groundspeed + altitude-rate heuristics, landing count (touch-and-go vs.
+  segmentation (ground/taxi/airborne) from
+  groundspeed + altitude heuristics, landing count (touch-and-go vs.
   full stop, by detecting brief vs. sustained ground contact), total/taxi/
-  airborne time, and a simple altitude/speed profile chart.
-- Track is drawn over the chart alongside the originally planned route
-  for a visual "did I fly what I planned" comparison.
-- Output feeds a `flight_log_entry` the pilot can review/edit and export
-  (CSV) for their paper or third-party logbook — `freeflight` is not
-  itself a logbook system in Phase 1, just a generator of log-worthy
-  data.
+  airborne time, max altitude, max groundspeed, and distance flown.
+- Track is drawn over the chart in bright cyan alongside the originally planned magenta route
+  for a visual "did I fly what I planned" comparison, with auto-fitting camera bounds.
+- Output feeds an in-app review sheet and logbook screen (`FlightReviewSheet`, `FlightLogScreen`)
+  with full phase breakdown, plus standard GPX 1.1 and CSV export.
+
 
 ### 9.5 Aircraft manager & performance model
 
@@ -1884,8 +1881,12 @@ document survive insertions/removals.
   `0001_init.sql`'s client-local marker, and the Android client opens the
   bundle through `ff-storage`, so they exist on device). What is missing
   is the route-builder UI and the code that writes those tables.
-- **Phase 3 — Post-flight analysis**: GPS track recording (Android),
-  GPX import (web), phase-of-flight detection, flight log export.
+- **Phase 3 — Post-flight analysis**: implemented on Android and shared core (`ff-postflight`,
+  `ff-uniffi`, `ff-wasm`). In-flight GPS track recording via Android Foreground Service
+  (`FlightRecordingService`) with persistent status notification, automated phase-of-flight
+  segmentation (ground/taxi/airborne), touch-and-go and full-stop landing detection, interactive
+  post-flight review sheet, map track overlay alongside planned routes, logbook tab, and standard
+  GPX 1.1 / CSV export.
 - **Phase 4 — Accounts & sync** (optional): let a pilot's route plans,
   aircraft profiles, and flight logs follow them between web and Android
   — still no server-side flight-plan filing. **A slice of this is pulled

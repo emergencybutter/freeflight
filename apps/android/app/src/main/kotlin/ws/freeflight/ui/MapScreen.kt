@@ -23,10 +23,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -92,6 +95,14 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val planSummary by viewModel.planSummary.collectAsState()
     val isPlanningOpen by viewModel.isPlanningOpen.collectAsState()
 
+    val isRecording by viewModel.isRecording.collectAsState()
+    val activePoints by viewModel.activeRecordingPoints.collectAsState()
+    val mapTrackPoints by viewModel.mapTrackPoints.collectAsState()
+    val reviewFlight by viewModel.reviewFlight.collectAsState()
+    val recordingElapsedSeconds by viewModel.recordingElapsedSeconds.collectAsState()
+    val latestPoint by viewModel.latestRecordingPoint.collectAsState()
+    val latestSpeedKt by viewModel.latestRecordingSpeedKt.collectAsState()
+
     var locationTrackingMode by remember { mutableStateOf(controller.currentTrackingMode) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -144,6 +155,27 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     LaunchedEffect(routeWaypoints) {
         controller.setRoute(GeoJson.route(routeWaypoints))
     }
+    LaunchedEffect(mapTrackPoints, activePoints, isRecording) {
+        val points = if (isRecording) activePoints else mapTrackPoints
+        controller.setTrack(GeoJson.track(points))
+    }
+    LaunchedEffect(mapTrackPoints) {
+        if (mapTrackPoints.size >= 2 && !isRecording) {
+            val minLat = mapTrackPoints.minOf { it.lat }
+            val maxLat = mapTrackPoints.maxOf { it.lat }
+            val minLon = mapTrackPoints.minOf { it.lon }
+            val maxLon = mapTrackPoints.maxOf { it.lon }
+            val margin = 0.05
+            controller.fitBounds(
+                BoundingBox(
+                    minLat = minLat - margin,
+                    minLon = minLon - margin,
+                    maxLat = maxLat + margin,
+                    maxLon = maxLon + margin,
+                )
+            )
+        }
+    }
 
     Box(modifier.fillMaxSize()) {
         ChartMap(controller, Modifier.fillMaxSize())
@@ -161,6 +193,72 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 // one, and the card in the middle already says it.
                 zoomedOutTooFar = mapState.zoomedOutTooFar && cycle != null,
             )
+
+            if (isRecording) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).background(Color.Red, RoundedCornerShape(4.dp)))
+                            Spacer(Modifier.width(6.dp))
+                            val hours = recordingElapsedSeconds / 3600
+                            val mins = (recordingElapsedSeconds % 3600) / 60
+                            val secs = recordingElapsedSeconds % 60
+                            Text(
+                                String.format("REC %02d:%02d:%02d", hours, mins, secs),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            val alt = latestPoint?.alt_ft ?: 0.0
+                            val gs = latestSpeedKt ?: 0.0
+                            Text(
+                                "${alt.toInt()} ft • ${gs.toInt()} kt",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
+                        IconButton(
+                            onClick = { viewModel.stopFlightRecording(context) },
+                            modifier = Modifier.size(24.dp),
+                        ) {
+                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = Color.Red)
+                        }
+                    }
+                }
+            } else if (mapTrackPoints.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Flight Track (${mapTrackPoints.size} points)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        IconButton(
+                            onClick = viewModel::clearMapTrack,
+                            modifier = Modifier.size(24.dp),
+                        ) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear track")
+                        }
+                    }
+                }
+            }
         }
 
         MapControls(
@@ -171,6 +269,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             weatherLoading = mapState.weatherLoading,
             locationTrackingMode = locationTrackingMode,
             hasRoute = routeWaypoints.isNotEmpty(),
+            isRecording = isRecording,
             onRequestLocationPermission = {
                 locationPermissionLauncher.launch(
                     arrayOf(
@@ -247,8 +346,20 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 onProfileChange = viewModel::updateProfile,
             )
         }
+
+        reviewFlight?.let { flight ->
+            FlightReviewSheet(
+                flight = flight,
+                onDismiss = viewModel::closeFlightReview,
+                onShowOnMap = { viewModel.showFlightOnMap(it) },
+                onExportGpx = { viewModel.exportFlightGpx(context, it) },
+                onExportCsv = { viewModel.exportFlightCsv(context, it) },
+                onDelete = { viewModel.deleteFlight(it) },
+            )
+        }
     }
 }
+
 
 @Composable
 private fun SearchBar(viewModel: FreeflightViewModel, controller: MapController) {
@@ -385,6 +496,7 @@ private fun MapControls(
     weatherLoading: Boolean,
     locationTrackingMode: LocationTrackingMode,
     hasRoute: Boolean,
+    isRecording: Boolean,
     onRequestLocationPermission: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -404,6 +516,26 @@ private fun MapControls(
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalIconButton(
+            onClick = {
+                if (isRecording) {
+                    viewModel.stopFlightRecording(context)
+                } else {
+                    viewModel.startFlightRecording(context)
+                }
+            },
+            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                containerColor = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = if (isRecording) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSecondaryContainer,
+            ),
+        ) {
+            Icon(
+                if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                contentDescription = if (isRecording) "Stop Recording" else "Record Flight Track",
+                tint = if (isRecording) MaterialTheme.colorScheme.onError else Color.Red,
+            )
+        }
+
         FilledTonalIconButton(
             onClick = viewModel::openPlanningSheet,
             colors = IconButtonDefaults.filledTonalIconButtonColors(

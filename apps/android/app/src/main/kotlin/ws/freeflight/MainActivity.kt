@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ws.freeflight.ui.DataScreen
+import ws.freeflight.ui.FlightLogScreen
 import ws.freeflight.ui.FreeflightTheme
 import ws.freeflight.ui.FreeflightViewModel
 import ws.freeflight.ui.MapScreen
@@ -34,6 +36,7 @@ import ws.freeflight.ui.SettingsScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Map("Map", Icons.Default.Map),
+    Flights("Flights", Icons.Default.FlightTakeoff),
     Data("Data", Icons.Default.CloudDownload),
     Settings("Settings", Icons.Default.Settings),
 }
@@ -82,6 +85,7 @@ private fun FreeflightScaffold(viewModel: FreeflightViewModel) {
             if (tab != Tab.Map) {
                 Surface(Modifier.fillMaxSize()) {
                     when (tab) {
+                        Tab.Flights -> FlightLogScreen(viewModel)
                         Tab.Data -> DataScreen(viewModel)
                         Tab.Settings -> SettingsScreen(viewModel)
                         Tab.Map -> Unit
