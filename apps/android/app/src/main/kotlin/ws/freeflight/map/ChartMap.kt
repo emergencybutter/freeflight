@@ -41,14 +41,16 @@ import uniffi.ff_uniffi.BoundingBox
 /**
  * The map surface, and the only place that knows MapLibre's API.
  *
- * There is no vector basemap and no glyph server. The chart *is* the base
- * map: an FAA sectional already carries its own terrain, airspace and
- * airport labels, rendered by the FAA, and it has to work with the network
- * off (DESIGN.md §8) — so the style is a flat background plus a raster
- * layer of chart tiles from the on-device archive, and the vector overlays
- * on top of it are deliberately label-free geometry. That also means the
- * style needs no `glyphs` URL, which would otherwise be a network
- * dependency on every text label.
+ * The basemap uses OpenFreeMap (openfreemap.org) dark vector tiles for global
+ * geography, coastlines, and borders context when no FAA chart is loaded, with
+ * no API key or rate limits. When an FAA sectional or IFR chart is loaded, it
+ * draws as an opaque raster layer above the basemap and below the interactive
+ * overlays.
+ *
+ * To work reliably offline (DESIGN.md §8), the initial style is bundled locally
+ * in assets/basemap_style.json and loaded synchronously from memory. If the
+ * aircraft has no data connection, remote basemap requests fail silently while
+ * the local loopback TileServer chart tiles and GeoJSON overlays render normally.
  */
 enum class LocationTrackingMode {
     NONE,
@@ -97,6 +99,7 @@ class MapController {
     private var pendingRoute: String = GeoJson.empty
     private var pendingTrack: String = GeoJson.empty
     private var pendingBasemapVisible: Boolean = true
+    private var basemapLayerIds: List<String> = emptyList()
 
     fun attach(mapLibreMap: MapLibreMap, surface: MapView) {
         map = mapLibreMap
@@ -119,8 +122,10 @@ class MapController {
             )
         }
 
-        mapLibreMap.setStyle(Style.Builder().fromJson(BASE_STYLE)) { loaded ->
+        val basemapJson = surface.context.assets.open(BASEMAP_STYLE_ASSET).bufferedReader().use { it.readText() }
+        mapLibreMap.setStyle(Style.Builder().fromJson(basemapJson)) { loaded ->
             style = loaded
+            basemapLayerIds = loaded.layers.map { it.id }.filter { it != BACKGROUND_LAYER }
             setBasemapVisible(pendingBasemapVisible)
             installLayers(loaded)
             setupLocationComponentIfPermitted(surface.context, loaded)
@@ -269,11 +274,11 @@ class MapController {
 
     fun setBasemapVisible(visible: Boolean) {
         pendingBasemapVisible = visible
-        val layer = style?.getLayer(BASEMAP_LAYER) as? RasterLayer ?: return
-        layer.setProperties(
-            PropertyFactory.visibility(if (visible) Property.VISIBLE else Property.NONE),
-            PropertyFactory.rasterOpacity(if (visible) 1.0f else 0.0f),
-        )
+        val currentStyle = style ?: return
+        val visibility = if (visible) Property.VISIBLE else Property.NONE
+        for (id in basemapLayerIds) {
+            currentStyle.getLayer(id)?.setProperties(PropertyFactory.visibility(visibility))
+        }
     }
 
     fun setAirports(geoJson: String) {
@@ -369,12 +374,14 @@ class MapController {
             maxZoom = chart.maxZoom.toFloat()
         }
         loaded.addSource(RasterSource(CHART_SOURCE, tileSet, 256))
-        val belowLayer = if (loaded.getLayer(BASEMAP_LAYER) != null) BASEMAP_LAYER else BACKGROUND_LAYER
-        loaded.addLayerAbove(
-            RasterLayer(CHART_LAYER, CHART_SOURCE)
-                .withProperties(PropertyFactory.rasterOpacity(1.0f)),
-            belowLayer,
-        )
+        val chartLayer = RasterLayer(CHART_LAYER, CHART_SOURCE)
+            .withProperties(PropertyFactory.rasterOpacity(1.0f))
+        val airspaceLayer = loaded.getLayer(AIRSPACE_FILL_LAYER)
+        if (airspaceLayer != null) {
+            loaded.addLayerBelow(chartLayer, AIRSPACE_FILL_LAYER)
+        } else {
+            loaded.addLayer(chartLayer)
+        }
     }
 
     private fun installLayers(loaded: Style) {
@@ -705,50 +712,7 @@ class MapController {
         const val AIRPORTS_LAYER = "airports-circle"
 
 
-        /**
-         * No `glyphs` and no `sprite` entries, on purpose — see the class
-         * docs. Every vector overlay added at runtime is geometry, never text,
-         * so the style has no glyph server dependency of any kind.
-         *
-         * The default raster basemap provides global geography, coastlines,
-         * and terrain context when no FAA chart is loaded.
-         */
-        private const val BASE_STYLE = """
-            {
-              "version": 8,
-              "name": "freeflight",
-              "center": [-98.5795, 39.8283],
-              "zoom": 3.8,
-              "sources": {
-                "basemap": {
-                  "type": "raster",
-                  "tiles": [
-                    "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"
-                  ],
-                  "tileSize": 512,
-                  "minzoom": 0,
-                  "maxzoom": 19,
-                  "attribution": "© OpenStreetMap contributors, © CARTO"
-                }
-              },
-              "layers": [
-                {
-                  "id": "background",
-                  "type": "background",
-                  "paint": { "background-color": "#0E1116" }
-                },
-                {
-                  "id": "basemap-tiles",
-                  "type": "raster",
-                  "source": "basemap",
-                  "paint": {
-                    "raster-opacity": 1.0,
-                    "raster-fade-duration": 0
-                  }
-                }
-              ]
-            }
-        """
+        private const val BASEMAP_STYLE_ASSET = "basemap_style.json"
     }
 }
 
