@@ -27,6 +27,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import uniffi.ff_uniffi.Procedure
 
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+
 /**
  * Everything the bundle knows about one airport, plus its current weather
  * if the network could be reached.
@@ -44,6 +50,7 @@ fun AirportSheet(
     onRefreshWeather: () -> Unit,
     onProcedureSelected: (String) -> Unit,
     onShowOnMap: () -> Unit,
+    onViewPlate: ((url: String, title: String, subtitle: String?) -> Unit)? = null,
 ) {
     val airport = state.detail.airport
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -73,6 +80,23 @@ fun AirportSheet(
                     )
                 }
                 TextButton(onClick = onShowOnMap) { Text("Centre") }
+            }
+
+            state.detail.airportDiagramUrl?.let { diagramUrl ->
+                Spacer(Modifier.height(4.dp))
+                FilledTonalButton(
+                    onClick = {
+                        onViewPlate?.invoke(
+                            diagramUrl,
+                            "${airport.icao} Airport Diagram",
+                            airport.name,
+                        )
+                    }
+                ) {
+                    Icon(Icons.Default.Map, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("View Airport Diagram")
+                }
             }
 
             SectionSpacer()

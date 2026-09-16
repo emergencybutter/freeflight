@@ -82,6 +82,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val charts by viewModel.charts.collectAsState()
     val airport by viewModel.airport.collectAsState()
     val procedure by viewModel.procedure.collectAsState()
+    val activePlate by viewModel.activePlate.collectAsState()
 
     var locationTrackingMode by remember { mutableStateOf(controller.currentTrackingMode) }
 
@@ -193,11 +194,28 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 onShowOnMap = {
                     controller.flyTo(state.detail.airport.lat, state.detail.airport.lon)
                 },
+                onViewPlate = { url, title, subtitle ->
+                    viewModel.openPlate(url, title, subtitle)
+                },
             )
         }
 
         procedure?.let { detail ->
-            ProcedureSheet(detail = detail, onDismiss = viewModel::closeProcedure)
+            ProcedureSheet(
+                detail = detail,
+                onDismiss = viewModel::closeProcedure,
+                onViewPlate = { url, title, subtitle ->
+                    viewModel.openPlate(url, title, subtitle)
+                },
+            )
+        }
+
+        activePlate?.let { target ->
+            PlateViewer(
+                target = target,
+                apiClient = viewModel.api,
+                onDismiss = viewModel::closePlate,
+            )
         }
     }
 }

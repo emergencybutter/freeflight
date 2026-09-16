@@ -68,6 +68,8 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     private val _map = MutableStateFlow(MapUiState())
     val map: StateFlow<MapUiState> = _map.asStateFlow()
 
+    val api = container.api
+
     private val _searchResults = MutableStateFlow<List<SearchHit>>(emptyList())
     val searchResults: StateFlow<List<SearchHit>> = _searchResults.asStateFlow()
 
@@ -76,6 +78,17 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _procedure = MutableStateFlow<ProcedureDetail?>(null)
     val procedure: StateFlow<ProcedureDetail?> = _procedure.asStateFlow()
+
+    private val _activePlate = MutableStateFlow<PlateTarget?>(null)
+    val activePlate: StateFlow<PlateTarget?> = _activePlate.asStateFlow()
+
+    fun openPlate(url: String, title: String, subtitle: String? = null) {
+        _activePlate.value = PlateTarget(url, title, subtitle)
+    }
+
+    fun closePlate() {
+        _activePlate.value = null
+    }
 
     private var viewportJob: Job? = null
     private var chartSetJob: Job? = null

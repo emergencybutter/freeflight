@@ -23,6 +23,13 @@ import androidx.compose.ui.unit.dp
 import uniffi.ff_uniffi.ProcedureDetail
 import uniffi.ff_uniffi.ProcedureTransition
 
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+
 /**
  * One procedure's leg table, transition by transition, with the path drawn
  * on the map behind the sheet.
@@ -34,7 +41,11 @@ import uniffi.ff_uniffi.ProcedureTransition
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProcedureSheet(detail: ProcedureDetail, onDismiss: () -> Unit) {
+fun ProcedureSheet(
+    detail: ProcedureDetail,
+    onDismiss: () -> Unit,
+    onViewPlate: ((url: String, title: String, subtitle: String?) -> Unit)? = null,
+) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
         Column(
             Modifier
@@ -56,7 +67,22 @@ fun ProcedureSheet(detail: ProcedureDetail, onDismiss: () -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            detail.chartName?.let { name ->
+
+            val chartUrl = detail.chartUrl
+            if (chartUrl != null) {
+                Spacer(Modifier.height(8.dp))
+                FilledTonalButton(
+                    onClick = {
+                        val title = detail.chartName ?: detail.procedure.ident
+                        val subtitle = "${detail.procedure.airportIcao} · ${detail.procedure.kind}"
+                        onViewPlate?.invoke(chartUrl, title, subtitle)
+                    }
+                ) {
+                    Icon(Icons.Default.Description, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("View Instrument Plate (${detail.chartName ?: "d-TPP"})")
+                }
+            } else detail.chartName?.let { name ->
                 Text(
                     "Plate: $name",
                     style = MaterialTheme.typography.labelMedium,
