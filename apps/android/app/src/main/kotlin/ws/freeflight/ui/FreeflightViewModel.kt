@@ -90,6 +90,85 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
         _activePlate.value = null
     }
 
+    private val jsonSerializer = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private val _routeWaypoints = MutableStateFlow<List<ws.freeflight.data.PlannedWaypoint>>(emptyList())
+    val routeWaypoints: StateFlow<List<ws.freeflight.data.PlannedWaypoint>> = _routeWaypoints.asStateFlow()
+
+    private val _aircraftProfile = MutableStateFlow(ws.freeflight.data.AircraftProfileData())
+    val aircraftProfile: StateFlow<ws.freeflight.data.AircraftProfileData> = _aircraftProfile.asStateFlow()
+
+    private val _planSummary = MutableStateFlow<ws.freeflight.data.FlightPlanSummaryData?>(null)
+    val planSummary: StateFlow<ws.freeflight.data.FlightPlanSummaryData?> = _planSummary.asStateFlow()
+
+    private val _isPlanningOpen = MutableStateFlow(false)
+    val isPlanningOpen: StateFlow<Boolean> = _isPlanningOpen.asStateFlow()
+
+    fun openPlanningSheet() { _isPlanningOpen.value = true }
+    fun closePlanningSheet() { _isPlanningOpen.value = false }
+
+    fun addWaypoint(ident: String, name: String? = null, lat: Double, lon: Double) {
+        val current = _routeWaypoints.value.toMutableList()
+        current.add(ws.freeflight.data.PlannedWaypoint(ident, name, lat, lon))
+        _routeWaypoints.value = current
+        recalculatePlan()
+    }
+
+    fun removeWaypoint(index: Int) {
+        val current = _routeWaypoints.value.toMutableList()
+        if (index in current.indices) {
+            current.removeAt(index)
+            _routeWaypoints.value = current
+            recalculatePlan()
+        }
+    }
+
+    fun clearRoute() {
+        _routeWaypoints.value = emptyList()
+        _planSummary.value = null
+    }
+
+    fun updateProfile(profile: ws.freeflight.data.AircraftProfileData) {
+        _aircraftProfile.value = profile
+        recalculatePlan()
+    }
+
+    private fun recalculatePlan() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val waypoints = _routeWaypoints.value
+            if (waypoints.size < 2) {
+                _planSummary.value = null
+                return@launch
+            }
+            try {
+                val pointsJson = jsonSerializer.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(ws.freeflight.data.PlannedWaypoint.serializer()),
+                    waypoints,
+                )
+                val profileJson = jsonSerializer.encodeToString(
+                    ws.freeflight.data.AircraftProfileData.serializer(),
+                    _aircraftProfile.value,
+                )
+                val windsJson = "[]"
+                val year = 2026.5
+
+                val resultJson = uniffi.ff_uniffi.planRouteJson(
+                    pointsJson = pointsJson,
+                    profileJson = profileJson,
+                    windsJson = windsJson,
+                    decimalYear = year,
+                )
+                val summary = jsonSerializer.decodeFromString(
+                    ws.freeflight.data.FlightPlanSummaryData.serializer(),
+                    resultJson,
+                )
+                _planSummary.value = summary
+            } catch (e: Exception) {
+                // Ignore calculation errors for incomplete route
+            }
+        }
+    }
+
     private var viewportJob: Job? = null
     private var chartSetJob: Job? = null
     private var searchJob: Job? = null

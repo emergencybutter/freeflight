@@ -51,6 +51,7 @@ fun AirportSheet(
     onProcedureSelected: (String) -> Unit,
     onShowOnMap: () -> Unit,
     onViewPlate: ((url: String, title: String, subtitle: String?) -> Unit)? = null,
+    onAddRouteWaypoint: ((ident: String, name: String?, lat: Double, lon: Double) -> Unit)? = null,
 ) {
     val airport = state.detail.airport
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -79,7 +80,14 @@ fun AirportSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = onShowOnMap) { Text("Centre") }
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = onShowOnMap) { Text("Centre") }
+                    onAddRouteWaypoint?.let { onAdd ->
+                        TextButton(onClick = { onAdd(airport.icao, airport.name, airport.lat, airport.lon) }) {
+                            Text("+ FPL")
+                        }
+                    }
+                }
             }
 
             state.detail.airportDiagramUrl?.let { diagramUrl ->

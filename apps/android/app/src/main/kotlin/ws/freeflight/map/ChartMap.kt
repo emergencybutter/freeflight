@@ -86,6 +86,7 @@ class MapController {
     private var pendingAirports: String = GeoJson.empty
     private var pendingAirspace: String = GeoJson.empty
     private var pendingProcedure: String = GeoJson.empty
+    private var pendingRoute: String = GeoJson.empty
 
     fun attach(mapLibreMap: MapLibreMap, surface: MapView) {
         map = mapLibreMap
@@ -108,6 +109,7 @@ class MapController {
             source(AIRPORTS_SOURCE)?.setGeoJson(pendingAirports)
             source(AIRSPACE_SOURCE)?.setGeoJson(pendingAirspace)
             source(PROCEDURE_SOURCE)?.setGeoJson(pendingProcedure)
+            source(ROUTE_SOURCE)?.setGeoJson(pendingRoute)
             emitViewport()
         }
 
@@ -240,6 +242,11 @@ class MapController {
         source(PROCEDURE_SOURCE)?.setGeoJson(geoJson)
     }
 
+    fun setRoute(geoJson: String) {
+        pendingRoute = geoJson
+        source(ROUTE_SOURCE)?.setGeoJson(geoJson)
+    }
+
     fun flyTo(lat: Double, lon: Double, zoom: Double = 11.0) {
         map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(lat, lon), zoom))
     }
@@ -297,6 +304,7 @@ class MapController {
     private fun installLayers(loaded: Style) {
         loaded.addSource(GeoJsonSource(AIRSPACE_SOURCE, pendingAirspace))
         loaded.addSource(GeoJsonSource(PROCEDURE_SOURCE, pendingProcedure))
+        loaded.addSource(GeoJsonSource(ROUTE_SOURCE, pendingRoute))
         loaded.addSource(GeoJsonSource(AIRPORTS_SOURCE, pendingAirports))
 
         // Class B/C/D and Special Use, tinted by class. Kept translucent:
@@ -340,6 +348,24 @@ class MapController {
                 PropertyFactory.circleRadius(4.0f),
                 PropertyFactory.circleColor("#FFE082"),
                 PropertyFactory.circleStrokeColor("#4E342E"),
+                PropertyFactory.circleStrokeWidth(1.5f),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point")))
+        )
+
+        // Route line overlay (ForeFlight-style magenta)
+        loaded.addLayer(
+            LineLayer(ROUTE_LINE_LAYER, ROUTE_SOURCE).withProperties(
+                PropertyFactory.lineColor("#E91E63"),
+                PropertyFactory.lineWidth(3.5f),
+                PropertyFactory.lineJoin("round"),
+                PropertyFactory.lineCap("round"),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("LineString")))
+        )
+        loaded.addLayer(
+            CircleLayer(ROUTE_FIX_LAYER, ROUTE_SOURCE).withProperties(
+                PropertyFactory.circleRadius(5.5f),
+                PropertyFactory.circleColor("#E91E63"),
+                PropertyFactory.circleStrokeColor("#FFFFFF"),
                 PropertyFactory.circleStrokeWidth(1.5f),
             ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point")))
         )
@@ -423,6 +449,9 @@ class MapController {
         private const val PROCEDURE_LINE_LAYER = "procedure-missed"
         private const val PROCEDURE_SOLID_LAYER = "procedure-line"
         private const val PROCEDURE_FIX_LAYER = "procedure-fix"
+        private const val ROUTE_SOURCE = "route"
+        private const val ROUTE_LINE_LAYER = "route-line"
+        private const val ROUTE_FIX_LAYER = "route-fix"
         private const val AIRPORTS_SOURCE = "airports"
         const val AIRPORTS_LAYER = "airports-circle"
 

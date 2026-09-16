@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import uniffi.ff_uniffi.Airport
 import uniffi.ff_uniffi.Airspace
 import uniffi.ff_uniffi.ProcedureDetail
+import ws.freeflight.data.PlannedWaypoint
 
 /**
  * Builds the GeoJSON the map's vector overlays are fed.
@@ -35,9 +36,6 @@ object GeoJson {
                         put("name", airport.name)
                         put("hasProcedures", airport.hasProcedures)
                         put("type", airport.airportType)
-                        // Absent until a briefing has been taken; the layer
-                        // styles this as "unknown" rather than as VFR, so a
-                        // missing observation never reads as good weather.
                         flightCategories[airport.icao]?.let { put("flightCategory", it) }
                     },
                 )
@@ -47,9 +45,6 @@ object GeoJson {
     fun airspace(volumes: List<Airspace>): String =
         featureCollection(
             volumes.mapNotNull { volume ->
-                // `boundary_geojson` is a geometry object straight out of
-                // the bundle — Polygon or MultiPolygon, unparsed. Reparsing
-                // it here keeps whichever it is.
                 val geometry = runCatching {
                     json.parseToJsonElement(volume.boundaryGeojson) as? JsonObject
                 }.getOrNull() ?: return@mapNotNull null
@@ -58,9 +53,6 @@ object GeoJson {
                     properties = buildJsonObject {
                         put("id", volume.id)
                         put("name", volume.name)
-                        // Backticked because `class` is a Kotlin keyword;
-                        // the record keeps the schema's column name, so
-                        // this is the escape, not a rename.
                         put("class", volume.`class`)
                         put("floor", volume.floor)
                         put("ceiling", volume.ceiling)
@@ -69,13 +61,6 @@ object GeoJson {
             }
         )
 
-    /**
-     * A procedure drawn as its transitions: one line per transition, plus a
-     * point per leg that resolved to a coordinate. The `missed` flag drives
-     * the dashed styling — a missed approach segment is not a path the
-     * aircraft is expected to fly, and drawing it identically to the
-     * approach itself would say otherwise.
-     */
     fun procedure(detail: ProcedureDetail): String {
         val features = mutableListOf<JsonObject>()
         for (transition in detail.transitions) {
@@ -114,6 +99,34 @@ object GeoJson {
         return featureCollection(features)
     }
 
+    fun route(waypoints: List<PlannedWaypoint>): String {
+        if (waypoints.isEmpty()) return empty
+        val features = mutableListOf<JsonObject>()
+
+        if (waypoints.size >= 2) {
+            features += feature(
+                geometry = buildJsonObject {
+                    put("type", "LineString")
+                    put("coordinates", buildJsonArray {
+                        waypoints.forEach { add(coordinate(it.lon, it.lat)) }
+                    })
+                },
+                properties = buildJsonObject {},
+            )
+        }
+
+        for (wp in waypoints) {
+            features += feature(
+                geometry = point(wp.lon, wp.lat),
+                properties = buildJsonObject {
+                    put("ident", wp.ident)
+                },
+            )
+        }
+
+        return featureCollection(features)
+    }
+
     val empty: String = featureCollection(emptyList())
 
     private fun featureCollection(features: List<JsonObject>): String =
@@ -136,7 +149,6 @@ object GeoJson {
         put("coordinates", coordinate(lon, lat))
     }
 
-    /** GeoJSON is longitude-first; every caller here passes (lon, lat). */
     private fun coordinate(lon: Double, lat: Double) =
         JsonArray(listOf(JsonPrimitive(lon), JsonPrimitive(lat)))
 }

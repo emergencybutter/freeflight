@@ -66,6 +66,9 @@ import ws.freeflight.map.GeoJson
 import ws.freeflight.map.LocationTrackingMode
 import ws.freeflight.map.MapController
 
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Route
+
 /**
  * The chart view: the screen this app exists for.
  *
@@ -83,6 +86,11 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val airport by viewModel.airport.collectAsState()
     val procedure by viewModel.procedure.collectAsState()
     val activePlate by viewModel.activePlate.collectAsState()
+
+    val routeWaypoints by viewModel.routeWaypoints.collectAsState()
+    val aircraftProfile by viewModel.aircraftProfile.collectAsState()
+    val planSummary by viewModel.planSummary.collectAsState()
+    val isPlanningOpen by viewModel.isPlanningOpen.collectAsState()
 
     var locationTrackingMode by remember { mutableStateOf(controller.currentTrackingMode) }
 
@@ -133,6 +141,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
         // without moving the camera usually means drawing it off-screen.
         procedure?.extent()?.let { controller.fitBounds(it, sheetCoversBottomHalf = true) }
     }
+    LaunchedEffect(routeWaypoints) {
+        controller.setRoute(GeoJson.route(routeWaypoints))
+    }
 
     Box(modifier.fillMaxSize()) {
         ChartMap(controller, Modifier.fillMaxSize())
@@ -159,6 +170,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             selectedChartId = selectedChartId,
             weatherLoading = mapState.weatherLoading,
             locationTrackingMode = locationTrackingMode,
+            hasRoute = routeWaypoints.isNotEmpty(),
             onRequestLocationPermission = {
                 locationPermissionLauncher.launch(
                     arrayOf(
@@ -197,6 +209,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 onViewPlate = { url, title, subtitle ->
                     viewModel.openPlate(url, title, subtitle)
                 },
+                onAddRouteWaypoint = { ident, name, lat, lon ->
+                    viewModel.addWaypoint(ident, name, lat, lon)
+                },
             )
         }
 
@@ -215,6 +230,21 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 target = target,
                 apiClient = viewModel.api,
                 onDismiss = viewModel::closePlate,
+            )
+        }
+
+        if (isPlanningOpen) {
+            FlightPlanningSheet(
+                waypoints = routeWaypoints,
+                profile = aircraftProfile,
+                planSummary = planSummary,
+                onDismiss = viewModel::closePlanningSheet,
+                onRemoveWaypoint = viewModel::removeWaypoint,
+                onClearRoute = viewModel::clearRoute,
+                onAddWaypointClick = {
+                    viewModel.closePlanningSheet()
+                },
+                onProfileChange = viewModel::updateProfile,
             )
         }
     }
@@ -286,6 +316,15 @@ private fun SearchBar(viewModel: FreeflightViewModel, controller: MapController)
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            IconButton(
+                                onClick = {
+                                    viewModel.addWaypoint(hit.ident, hit.name, hit.lat, hit.lon)
+                                    query = ""
+                                    viewModel.clearSearch()
+                                }
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Add to route")
+                            }
                         }
                         HorizontalDivider()
                     }
@@ -345,6 +384,7 @@ private fun MapControls(
     selectedChartId: String?,
     weatherLoading: Boolean,
     locationTrackingMode: LocationTrackingMode,
+    hasRoute: Boolean,
     onRequestLocationPermission: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -364,6 +404,15 @@ private fun MapControls(
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalIconButton(
+            onClick = viewModel::openPlanningSheet,
+            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                containerColor = if (hasRoute) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = if (hasRoute) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+            ),
+        ) {
+            Icon(Icons.Default.Route, contentDescription = "Flight Plan & Nav Log")
+        }
         val locateContainerColor = when (locationTrackingMode) {
             LocationTrackingMode.NONE -> MaterialTheme.colorScheme.secondaryContainer
             LocationTrackingMode.TRACKING, LocationTrackingMode.TRACKING_COMPASS -> MaterialTheme.colorScheme.primary
