@@ -392,7 +392,8 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
 
                 val bbox = uniffi.ff_uniffi.BoundingBox(minLat, minLon, maxLat, maxLon)
                 val volumes = withContext(Dispatchers.IO) {
-                    runCatching { core.airspaceInBbox(bbox) }.getOrDefault(emptyList())
+                    runCatching { core.airspaceInBbox(bbox, ROUTE_AIRSPACE_LIMIT) }
+                        .getOrDefault(emptyList())
                 }
                 val crossings = ws.freeflight.data.AirspaceCrossingDetector.findCrossedAirspace(waypoints, volumes)
                 _crossedAirspace.value = crossings
@@ -572,7 +573,11 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                 core.airportsInBbox(bbox, AIRPORT_LIMIT)
             }
             val airspace = withContext(Dispatchers.IO) {
-                if (container.settings.showAirspace.value) core.airspaceInBbox(bbox) else emptyList()
+                if (container.settings.showAirspace.value) {
+                    core.airspaceInBbox(bbox, AIRSPACE_LIMIT)
+                } else {
+                    emptyList()
+                }
             }
             _map.value = _map.value.copy(
                 airports = if (container.settings.showAirports.value) airports else emptyList(),
@@ -835,6 +840,29 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
          * the bundle has no index for.
          */
         const val AIRPORT_LIMIT = 400u
+
+        /**
+         * How many airspace volumes one viewport may draw.
+         *
+         * Airports were capped from the start; airspace was not, and a
+         * viewport panned out over the country selected every volume it
+         * touched — each with a boundary polygon attached — until the heap
+         * gave out. The query hands back the highest-priority volumes first
+         * (Class B/C/D, then the Special Use you may not fly into), so what
+         * a cap discards is the wide-area Class E and G the map already
+         * draws as context rather than as a boundary to avoid.
+         */
+        const val AIRSPACE_LIMIT = 600u
+
+        /**
+         * The same cap for route crossing detection, set higher.
+         *
+         * This one is not about what fits on screen: the bbox spans the
+         * whole route, and a volume dropped here is a crossing warning not
+         * given. The priority order means a long route loses Class E before
+         * anything a warning would be about.
+         */
+        const val ROUTE_AIRSPACE_LIMIT = 2000u
 
         /**
          * Below this the map draws no airports, so the viewport query is

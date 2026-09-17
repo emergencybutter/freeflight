@@ -318,8 +318,12 @@ impl Freeflight {
         self.with_db(|conn| query::procedure_detail(conn, &id))
     }
 
-    pub fn airspace_in_bbox(&self, bbox: BoundingBox) -> Result<Vec<Airspace>, CoreError> {
-        self.with_db(|conn| query::airspace_in_bbox(conn, bbox))
+    pub fn airspace_in_bbox(
+        &self,
+        bbox: BoundingBox,
+        limit: u32,
+    ) -> Result<Vec<Airspace>, CoreError> {
+        self.with_db(|conn| query::airspace_in_bbox(conn, bbox, limit))
     }
 
     pub fn attributions(&self) -> Result<Vec<DataSourceCredit>, CoreError> {

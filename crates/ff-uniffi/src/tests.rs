@@ -224,10 +224,16 @@ fn seed(conn: &Connection, cycle_id: &str, chart_sha256: &str) {
     )
     .unwrap();
 
+    // Three volumes over the same ground, one per priority band, so a
+    // truncated query can be seen keeping the right ones.
     conn.execute(
         "INSERT INTO airspace (id, name, class, floor, ceiling, boundary_geojson,
                                min_lat, min_lon, max_lat, max_lon)
          VALUES ('KSEA-B', 'SEATTLE CLASS B', 'B', 'SFC', 'MSL:10000',
+                 '{\"type\":\"Polygon\",\"coordinates\":[]}', 47.0, -123.0, 48.0, -121.0),
+                ('KSEA-R', 'R-6701', 'RESTRICTED', 'SFC', 'MSL:5000',
+                 '{\"type\":\"Polygon\",\"coordinates\":[]}', 47.0, -123.0, 48.0, -121.0),
+                ('KSEA-E', 'SEATTLE CLASS E', 'E', 'MSL:1200', 'MSL:18000',
                  '{\"type\":\"Polygon\",\"coordinates\":[]}', 47.0, -123.0, 48.0, -121.0)",
         [],
     )
@@ -606,13 +612,33 @@ fn airspace_overlapping_the_viewport_is_returned_even_when_it_dwarfs_it() {
         max_lon: -122.2,
     };
 
-    let airspace = fixture.core.airspace_in_bbox(inside).unwrap();
+    let airspace = fixture.core.airspace_in_bbox(inside, 100).unwrap();
 
-    assert_eq!(airspace.len(), 1);
-    assert_eq!(airspace[0].class, "B");
-    assert!(airspace[0]
+    assert_eq!(airspace.len(), 3);
+    let class_b = airspace.iter().find(|a| a.class == "B").unwrap();
+    assert_eq!(class_b.name, "SEATTLE CLASS B");
+    assert!(class_b
         .boundary_geojson
         .starts_with("{\"type\":\"Polygon\""));
+}
+
+#[test]
+fn a_truncated_airspace_query_drops_the_wide_area_classes_first() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    let inside = BoundingBox {
+        min_lat: 47.4,
+        min_lon: -122.4,
+        max_lat: 47.5,
+        max_lon: -122.2,
+    };
+
+    // Zoomed far enough out that the whole set will not fit. What survives
+    // has to be the airspace you may not simply fly into — alphabetically
+    // 'E' beats 'RESTRICTED', which is why the order is explicit.
+    let airspace = fixture.core.airspace_in_bbox(inside, 2).unwrap();
+
+    let classes: Vec<&str> = airspace.iter().map(|a| a.class.as_str()).collect();
+    assert_eq!(classes, vec!["B", "RESTRICTED"]);
 }
 
 #[test]

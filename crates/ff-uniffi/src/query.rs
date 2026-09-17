@@ -431,23 +431,55 @@ fn dtpp_chart(conn: &Connection, airport_icao: &str, ident: &str) -> Option<(Str
     .ok()
 }
 
-pub fn airspace_in_bbox(conn: &Connection, bbox: BoundingBox) -> Result<Vec<Airspace>> {
+/// The order a truncated airspace query keeps.
+///
+/// Boundaries are unbounded in a way airports are not: each carries a
+/// polygon, and a viewport over the country selects tens of thousands of
+/// them. So the query takes a `limit` — but alphabetical order would then
+/// drop `WARNING`, `RESTRICTED` and `PROHIBITED` off the end while keeping
+/// `ALERT` and `ATZ`, which is precisely backwards. This ranks by what a
+/// pilot does about the volume, so truncation eats the wide-area classes
+/// first: Class E covers most of the country above 1200 AGL and the map
+/// already treats it as context rather than a boundary to avoid.
+const AIRSPACE_PRIORITY: &str = "CASE class
+    WHEN 'B' THEN 0 WHEN 'C' THEN 0 WHEN 'D' THEN 0 WHEN 'ATZ' THEN 0
+    WHEN 'PROHIBITED' THEN 1 WHEN 'RESTRICTED' THEN 1
+    WHEN 'WARNING' THEN 1 WHEN 'DANGER' THEN 1
+    WHEN 'MOA' THEN 2 WHEN 'ALERT' THEN 2 WHEN 'PARACHUTE' THEN 2
+    WHEN 'GLIDER' THEN 2 WHEN 'LOW FLYING' THEN 2
+    WHEN 'RMZ' THEN 3 WHEN 'TMZ' THEN 3
+    ELSE 4
+  END";
+
+pub fn airspace_in_bbox(
+    conn: &Connection,
+    bbox: BoundingBox,
+    limit: u32,
+) -> Result<Vec<Airspace>> {
     // Overlap, not containment: a Class B shelf far larger than the
     // viewport still has to be drawn when you are inside it.
     let sql = format!(
         "SELECT id, name, class, floor, ceiling, boundary_geojson FROM airspace
          WHERE max_lat >= ?1 AND min_lat <= ?2 AND {}
-         ORDER BY class, name",
+         ORDER BY {}, class, name
+         LIMIT ?5",
         if bbox.min_lon <= bbox.max_lon {
             "max_lon >= ?3 AND min_lon <= ?4"
         } else {
             "(max_lon >= ?3 OR min_lon <= ?4)"
-        }
+        },
+        AIRSPACE_PRIORITY
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(
-            params![bbox.min_lat, bbox.max_lat, bbox.min_lon, bbox.max_lon],
+            params![
+                bbox.min_lat,
+                bbox.max_lat,
+                bbox.min_lon,
+                bbox.max_lon,
+                limit
+            ],
             |row| {
                 Ok(Airspace {
                     id: row.get(0)?,
