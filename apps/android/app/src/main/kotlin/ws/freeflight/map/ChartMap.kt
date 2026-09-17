@@ -567,19 +567,64 @@ class MapController {
         // drag in a glyph server this app must work without.
         loaded.addLayer(
             CircleLayer(AIRPORTS_LAYER, AIRPORTS_SOURCE).withProperties(
-                PropertyFactory.circleRadius(
-                    Expression.switchCase(
-                        Expression.get("hasProcedures"), Expression.literal(6.5f),
-                        Expression.literal(4.0f),
-                    )
-                ),
+                PropertyFactory.circleRadius(airportRadius()),
                 PropertyFactory.circleColor(flightCategoryColor()),
                 PropertyFactory.circleStrokeWidth(1.5f),
                 PropertyFactory.circleStrokeColor("#10161C"),
                 PropertyFactory.circleOpacity(0.9f),
-            )
+            ).withFilter(airportDisplayFilter())
         )
     }
+
+    /**
+     * Which airports are worth drawing at the current zoom.
+     *
+     * Previously this was a cliff: nothing below zoom 6, then every
+     * airport the query returned at once. One notch of zoom took the map
+     * from empty to a few hundred identical dots, neither of which is a
+     * useful picture.
+     *
+     * So it graduates instead, on the same idea the web client uses
+     * (`AIRPORT_MIN_ZOOM` / `AIRPORT_NO_WEATHER_MIN_ZOOM` in
+     * `apps/web/src/MapView.tsx`): en-route zooms show only the airports
+     * you would actually divert to, and everything else appears as you
+     * close in on somewhere specific.
+     *
+     * Web's middle tier keys on having a current METAR. That would be the
+     * wrong signal here — this client is the one that has to work with no
+     * network, and gating on live weather would empty the tier in exactly
+     * the situation it exists for. `hasProcedures` comes out of the
+     * bundle, so it means the same thing in the air as on the ground.
+     *
+     * A filter expression rather than a re-query: MapLibre re-evaluates it
+     * per frame, so zooming is smooth and nothing refetches.
+     */
+    private fun airportDisplayFilter(): Expression = Expression.any(
+        Expression.gte(Expression.zoom(), Expression.literal(AIRPORT_ALL_ZOOM)),
+        Expression.all(
+            Expression.gte(Expression.zoom(), Expression.literal(AIRPORT_PROCEDURES_ZOOM)),
+            Expression.get("hasProcedures"),
+        ),
+    )
+
+    /**
+     * Dots grow as you close in, so a marker reads as a place rather than
+     * as speckle on the chart. Instrument airports stay the larger of the
+     * two at every zoom — the distinction a pilot is scanning for.
+     */
+    private fun airportRadius(): Expression = Expression.interpolate(
+        Expression.linear(),
+        Expression.zoom(),
+        Expression.stop(AIRPORT_PROCEDURES_ZOOM, withProcedures(3.5f, 2.5f)),
+        Expression.stop(AIRPORT_ALL_ZOOM, withProcedures(5.5f, 3.5f)),
+        Expression.stop(11.0, withProcedures(8.0f, 5.5f)),
+    )
+
+    private fun withProcedures(ifTrue: Float, ifFalse: Float): Expression =
+        Expression.switchCase(
+            Expression.get("hasProcedures"), Expression.literal(ifTrue),
+            Expression.literal(ifFalse),
+        )
 
     /**
      * The standard flight-category colours pilots already read on every
@@ -740,6 +785,13 @@ class MapController {
         private const val TRACK_LINE_LAYER = "track-line"
         private const val PIREP_SOURCE = "pireps"
         private const val PIREP_LAYER = "pirep-circle"
+        /** Below this, no airport markers at all — the chart still reads. */
+        const val AIRPORT_PROCEDURES_ZOOM = 5.0
+
+        /** At and above this, every airport in the viewport, not just
+         *  the ones with instrument procedures. */
+        const val AIRPORT_ALL_ZOOM = 8.0
+
         private const val AIRPORTS_SOURCE = "airports"
         const val AIRPORTS_LAYER = "airports-circle"
 

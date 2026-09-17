@@ -472,8 +472,10 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     private suspend fun loadViewport(bbox: BoundingBox, zoom: Double) {
-        // Below this, a nationwide bundle puts thousands of dots on screen
-        // and none of them is readable; the chart itself still is.
+        // Below this nothing is drawn at all, so there is nothing to
+        // fetch. Above it the map layer decides *which* of these to show
+        // for the zoom (ChartMap.airportDisplayFilter) — this gate is only
+        // about not querying for markers that cannot appear.
         if (zoom < MIN_AIRPORT_ZOOM) {
             _map.value = _map.value.copy(
                 airports = emptyList(),
@@ -738,8 +740,26 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
         const val VIEWPORT_DEBOUNCE_MS = 300L
         const val SEARCH_DEBOUNCE_MS = 160L
         const val SEARCH_LIMIT = 20u
+        /**
+         * How many airports one viewport query returns, most significant
+         * first (`query::airports_in_bbox` orders by "has procedures",
+         * then landplane airports). A wide viewport over the northeast
+         * holds far more than this, so the cap is doing real work.
+         *
+         * Known wart: within one significance tier the SQL tiebreak is
+         * `icao`, so a truncated result is an alphabetical slice rather
+         * than a geographic spread. Visible only when zoomed out far
+         * enough to exceed the cap, and fixing it needs spatial sampling
+         * the bundle has no index for.
+         */
         const val AIRPORT_LIMIT = 400u
-        const val MIN_AIRPORT_ZOOM = 6.0
+
+        /**
+         * Below this the map draws no airports, so the viewport query is
+         * skipped. Matches `ChartMap.AIRPORT_PROCEDURES_ZOOM`, which is
+         * where the first tier of markers starts appearing.
+         */
+        const val MIN_AIRPORT_ZOOM = 5.0
         // aviationweather.gov takes a comma-separated ident list; a whole
         // viewport's worth would be an unreasonable URL and an unreasonable
         // ask of a proxy shared with the web client.
