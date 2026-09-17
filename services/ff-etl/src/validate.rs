@@ -223,6 +223,34 @@ mod tests {
     }
 
     #[test]
+    fn the_bundle_records_which_airac_cycle_it_is() {
+        // Nothing wrote this row until `add_airac_cycle`; an empty table
+        // makes every date comparison below conclude "nothing is stale".
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cycle.sqlite");
+        bundle_with_airports(&path, &[("KSFO", 37.6, -122.4)]);
+        crate::bundle::add_airac_cycle(&path, "2026-10-01").unwrap();
+
+        let conn = Connection::open(&path).unwrap();
+        let (id, effective): (String, String) = conn
+            .query_row(
+                "SELECT id, effective_date FROM airac_cycle",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "2026-10-01");
+        assert_eq!(effective, "2026-10-01");
+
+        // Re-running the pipeline over a bundle must not duplicate it.
+        crate::bundle::add_airac_cycle(&path, "2026-10-01").unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM airac_cycle", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
     fn a_source_from_another_airac_cycle_is_allowed_and_only_warned_about() {
         // The FAA side is fetched automatically, a national AIS export is
         // downloaded by hand — one trailing the other by a cycle is normal

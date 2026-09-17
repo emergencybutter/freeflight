@@ -428,8 +428,13 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
         // bundle has to be called out rather than hidden behind it.
         viewModelScope.launch {
             cycle.collect { info ->
-                _staleSources.value =
-                    MixedCycle.staleSources(attributions(), info?.effectiveDate)
+                // Falls back to the cycle id, which is the same date
+                // string: no bundle published before `add_airac_cycle`
+                // existed carries an `airac_cycle` row, and without this
+                // the comparison would silently find nothing stale in
+                // exactly the bundles most likely to be mixed.
+                val cycleDate = info?.effectiveDate ?: info?.cycleId
+                _staleSources.value = MixedCycle.staleSources(attributions(), cycleDate)
             }
         }
 

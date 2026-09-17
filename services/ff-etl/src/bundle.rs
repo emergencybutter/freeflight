@@ -453,6 +453,25 @@ pub fn add_chart(bundle_path: &Path, chart: &ChartSource) -> Result<(), BundleEr
     Ok(())
 }
 
+/// Records which AIRAC cycle this bundle is, in `airac_cycle`.
+///
+/// The id and the effective date are the same string — the FAA CIFP cycle
+/// date the whole bundle is built from — because that is what a cycle is
+/// identified by everywhere else (the published directory name, chart ids,
+/// `is_newer` comparisons). `source_version` names where the date came
+/// from, so a bundle can say which feed set its cycle.
+///
+/// Idempotent: re-running the pipeline over a bundle replaces the row.
+pub fn add_airac_cycle(bundle_path: &Path, cycle_date: &str) -> Result<(), BundleError> {
+    let conn = rusqlite::Connection::open(bundle_path)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO airac_cycle (id, effective_date, source_version)
+         VALUES (?1, ?1, 'FAA CIFP')",
+        [cycle_date],
+    )?;
+    Ok(())
+}
+
 /// Inserts every volume from `crate::airspace`'s fetch functions into the
 /// bundle's `airspace` table, one row per volume (a busy Class B/C is
 /// several rows, one per shelf/sector — see `crate::airspace` docs), in

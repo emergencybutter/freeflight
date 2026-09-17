@@ -1,6 +1,7 @@
 use crate::airspace::{fetch_class_airspace, fetch_special_use_airspace};
 use crate::bundle::{
-    add_airspace, add_aixm, add_chart, add_dtpp_charts, add_openaip, add_preferred_routes,
+    add_airac_cycle, add_airspace, add_aixm, add_chart, add_dtpp_charts, add_openaip,
+    add_preferred_routes,
     build_bundle, BundleSource, ChartSource,
 };
 use crate::chart_prep::{crop_legend_and_collar, crop_to_neatline, expand_palette_to_rgb};
@@ -85,6 +86,16 @@ pub fn run() -> Result<(), EtlError> {
         &bundle_path,
     )?;
     tracing::info!(?stats, "built cycle bundle");
+
+    // Record which AIRAC cycle this bundle *is*. Nothing wrote this row
+    // before, so `airac_cycle` was empty in every published bundle and
+    // `cycle_effective_date` came back None — clients fell back to showing
+    // the cycle id, which happens to be the same date string, so the gap
+    // stayed invisible. It stopped being invisible once anything needed to
+    // compare a source's date against the bundle's: both the mixed-cycle
+    // warning here and the clients' notice read this row, and against an
+    // empty table they silently conclude "nothing is stale".
+    add_airac_cycle(&bundle_path, &cifp.cycle_date)?;
 
     tracing::info!("fetching Class B/C/D and Special Use Airspace boundaries");
     let mut airspace_volumes = fetch_class_airspace()?;
