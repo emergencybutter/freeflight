@@ -332,14 +332,31 @@ needed — nginx serves the files directly.
 
 **3. Data cycle (new cycle).** Regenerating a cycle needs `ff-etl` +
 GDAL CLI tools, which vya2 does **not** have — build the cycle where
-GDAL is available and copy the `data/cycles/<id>/` dir (~19 GB) plus
-`data/latest.json` to `/containers/freeflight/data/`. A resumable
-per-file `scp` loop works when `rsync` isn't available on the client
-(see `scripts`/session notes). Then:
+GDAL is available (WSL/Debian has both; a full run is ~2h40m and ~23 GB),
+then ship it.
+
+**Copy the cycle directory first and `latest.json` only afterwards.**
+`latest.json` is what makes a cycle live, so copying it alongside a
+transfer still in flight points clients at a half-present cycle. Both
+ends have `rsync`, which is resumable and verifying — the per-file `scp`
+loop this used to describe is only needed when a client lacks it.
 
 ```sh
-cd /containers/freeflight && docker compose restart   # picks up new latest.json
+# 1. the cycle itself (~23 GB; note the trailing slashes)
+rsync -a --partial   ~/cycle-build/cycles/<id>/   root@vya2.flyvoyager.net:/containers/freeflight/data/cycles/<id>/
+
+# 2. confirm it arrived whole before making it live
+ssh root@vya2.flyvoyager.net   'du -sh /containers/freeflight/data/cycles/<id>;    ls /containers/freeflight/data/cycles/<id> | wc -l'
+
+# 3. only now the pointer, then pick it up
+rsync -a ~/cycle-build/latest.json   root@vya2.flyvoyager.net:/containers/freeflight/data/latest.json
+ssh root@vya2.flyvoyager.net   'cd /containers/freeflight && docker compose restart'
 ```
+
+Rolling back is restoring the previous `latest.json` and restarting —
+superseded cycles stay on disk, and installed clients are unaffected
+either way, since they only re-read the manifest when checking for an
+update.
 
 **3a. Cycle with non-US (France / SIA AIXM) data.** The pipeline folds in
 French airports/navaids/waypoints/runways/airways/airspace from the SIA
@@ -393,9 +410,24 @@ is opt-in — a normal cycle build (step 3) omits it. To publish an
    earlier note here said the per-cycle date was not wired through; it
    is.)
 
-6. **Publish** exactly as step 3: copy `data/cycles/<id>/` (~19 GB) +
-   `data/latest.json` to `/containers/freeflight/data/`, then
-   `docker compose restart`.
+6. **Publish** exactly as step 3 — cycle directory first, `latest.json`
+   last.
+
+**3b. Adding a country to a cycle that is already built.** Re-running the
+pipeline to fold in a national export re-fetches CIFP/NASR and re-tiles
+all 181 charts: hours of GDAL work to insert a few thousand rows. Use the
+standalone tool instead, which writes into the built bundle in place and
+also fills in `airac_cycle` if the bundle predates that being recorded:
+
+```sh
+FF_AIXM_FR_PATH=/path/to/export_xml_bd_sia_<date>.zip FF_AIXM_TARGET_BUNDLE=~/cycle-build/cycles/<id>/cycle.sqlite FF_AIXM_CYCLE_ID=<id>   cargo run --release -p ff-etl --example add_aixm_to_bundle
+```
+
+Safe to do after the bundle is built and even after `latest.json` is
+written: `ff-api` hashes `cycle.sqlite` per request (`routes/cycles.rs`),
+so the manifest's `sqlite_sha256` follows the file rather than going
+stale. The openAIP equivalent is `add_openaip_to_bundle` (needs
+`FF_OPENAIP_API_KEY`).
 
 Known limitation: navaid/waypoint `region` is stamped `LF` for the whole
 `FR_OM` export, which actually spans several ICAO regions (metropolitan,
