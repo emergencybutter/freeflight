@@ -21,9 +21,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
@@ -73,9 +75,6 @@ import ws.freeflight.map.GeoJson
 import ws.freeflight.map.LocationTrackingMode
 import ws.freeflight.map.MapController
 
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Route
-
 /**
  * The chart view: the screen this app exists for.
  *
@@ -83,7 +82,11 @@ import androidx.compose.material.icons.filled.Route
  * covering a chart the pilot is trying to read.
  */
 @Composable
-fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
+fun MapScreen(
+    viewModel: FreeflightViewModel,
+    onOpenPlan: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val controller = remember { MapController() }
     val mapState by viewModel.map.collectAsState()
@@ -95,16 +98,9 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val activePlate by viewModel.activePlate.collectAsState()
     val plateDownload by viewModel.plateDownload.collectAsState()
     val cycleStatus by viewModel.cycleStatus.collectAsState()
-    val fleet by viewModel.fleet.collectAsState()
-    val selectedAircraftId by viewModel.selectedAircraftId.collectAsState()
 
     val routeWaypoints by viewModel.routeWaypoints.collectAsState()
-    val aircraftProfile by viewModel.aircraftProfile.collectAsState()
-    val planSummary by viewModel.planSummary.collectAsState()
-    val isPlanningOpen by viewModel.isPlanningOpen.collectAsState()
-    val windsStatus by viewModel.windsStatus.collectAsState()
-    val crossedAirspace by viewModel.crossedAirspace.collectAsState()
-    val savedRoutePlans by viewModel.savedRoutePlans.collectAsState()
+    val isFlightLogOpen by viewModel.isFlightLogOpen.collectAsState()
 
     val showGairmets by viewModel.settings.showGairmets.collectAsState()
     val showSigmets by viewModel.settings.showSigmets.collectAsState()
@@ -337,6 +333,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             locationTrackingMode = locationTrackingMode,
             hasRoute = routeWaypoints.isNotEmpty(),
             isRecording = isRecording,
+            onOpenPlan = onOpenPlan,
             onRequestLocationPermission = {
                 locationPermissionLauncher.launch(
                     arrayOf(
@@ -406,33 +403,10 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
             )
         }
 
-        if (isPlanningOpen) {
-            FlightPlanningSheet(
-                waypoints = routeWaypoints,
-                profile = aircraftProfile,
-                planSummary = planSummary,
-                windsStatus = windsStatus,
-                crossedAirspace = crossedAirspace,
-                savedPlans = savedRoutePlans,
-                onDismiss = viewModel::closePlanningSheet,
-                onRemoveWaypoint = viewModel::removeWaypoint,
-                onClearRoute = viewModel::clearRoute,
-                onAddWaypointClick = {
-                    viewModel.closePlanningSheet()
-                },
-                onProfileChange = viewModel::updateProfile,
-                fleet = fleet,
-                selectedAircraftId = selectedAircraftId,
-                onSelectAircraft = viewModel::selectAircraft,
-                onSaveAircraft = viewModel::saveAircraft,
-                onDeleteAircraft = viewModel::deleteAircraft,
-                onAircraftVerifiedChange = viewModel::markAircraftVerified,
-                onPerformanceChange = viewModel::setAircraftPerformance,
-                onSaveRoute = viewModel::saveCurrentRoute,
-                onLoadRoute = viewModel::loadSavedRoute,
-                onDeleteRoute = viewModel::deleteSavedRoute,
-                onRefreshWinds = viewModel::fetchWindsAloft,
-            )
+        if (isFlightLogOpen) {
+            Surface(Modifier.fillMaxSize()) {
+                FlightLogScreen(viewModel, onClose = viewModel::closeFlightLog)
+            }
         }
 
         reviewFlight?.let { flight ->
@@ -600,6 +574,7 @@ private fun MapControls(
     locationTrackingMode: LocationTrackingMode,
     hasRoute: Boolean,
     isRecording: Boolean,
+    onOpenPlan: () -> Unit,
     onRequestLocationPermission: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -644,8 +619,12 @@ private fun MapControls(
             )
         }
 
+        FilledTonalIconButton(onClick = viewModel::openFlightLog) {
+            Icon(Icons.Default.History, contentDescription = "Flight Logs")
+        }
+
         FilledTonalIconButton(
-            onClick = viewModel::openPlanningSheet,
+            onClick = onOpenPlan,
             colors = IconButtonDefaults.filledTonalIconButtonColors(
                 containerColor = if (hasRoute) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = if (hasRoute) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
@@ -704,8 +683,8 @@ private fun MapControls(
                 // is not a menu; six kinds is. Only kinds with something
                 // installed are listed, since the rest would draw nothing:
                 // that is the one place this differs from web, which
-                // streams every chart from the server. The Data tab is
-                // where charts are downloaded.
+                // streams every chart from the server. Charts are
+                // downloaded from Settings → Data & downloads.
                 val installedKinds = ChartKinds.ordered(
                     charts.filter { it.installed }.map { it.kind }
                 )
@@ -733,7 +712,7 @@ private fun MapControls(
                 }
                 if (charts.none { it.installed }) {
                     Text(
-                        "No charts downloaded — see the Data tab",
+                        "No charts downloaded — see Settings → Data & downloads",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -841,8 +820,8 @@ private fun NoCycleCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
                 }
             }
             Text(
-                "Download a cycle from the Data tab to use charts, airports and " +
-                    "procedures offline.",
+                "Download a cycle from Settings → Data & downloads to use charts, " +
+                    "airports and procedures offline.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

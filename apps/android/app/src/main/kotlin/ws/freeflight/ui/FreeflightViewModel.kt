@@ -176,16 +176,22 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
 
     val savedRoutePlans: StateFlow<List<ws.freeflight.data.SavedRoutePlan>> = container.routePlanning.savedPlans
 
-    private val _isPlanningOpen = MutableStateFlow(false)
-    val isPlanningOpen: StateFlow<Boolean> = _isPlanningOpen.asStateFlow()
-
-    fun openPlanningSheet() {
-        _isPlanningOpen.value = true
+    /**
+     * Winds are fetched the first time planning is actually looked at, not on
+     * startup: it is a network call whose answer only matters once there is a
+     * nav log on screen.
+     */
+    fun ensureWindsLoaded() {
         if (_windsBulletin.value == null) {
             fetchWindsAloft()
         }
     }
-    fun closePlanningSheet() { _isPlanningOpen.value = false }
+
+    private val _isFlightLogOpen = MutableStateFlow(false)
+    val isFlightLogOpen: StateFlow<Boolean> = _isFlightLogOpen.asStateFlow()
+
+    fun openFlightLog() { _isFlightLogOpen.value = true }
+    fun closeFlightLog() { _isFlightLogOpen.value = false }
 
     fun addWaypoint(ident: String, name: String? = null, lat: Double, lon: Double) {
         val current = _routeWaypoints.value.toMutableList()
@@ -429,6 +435,9 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     fun showFlightOnMap(flight: ws.freeflight.data.RecordedFlight) {
         _mapTrackPoints.value = flight.points
         closeFlightReview()
+        // The log is an overlay on the map now, so drawing a track under it
+        // would put the answer behind the thing that was asked.
+        closeFlightLog()
     }
 
     fun clearMapTrack() {

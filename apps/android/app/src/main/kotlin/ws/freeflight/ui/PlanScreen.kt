@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,7 +22,6 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -31,179 +31,142 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import ws.freeflight.data.AirspaceCrossingWarning
 import ws.freeflight.data.Aircraft
-import ws.freeflight.data.PerformancePhase
-import ws.freeflight.data.PerformancePoint
-import ws.freeflight.data.AircraftProfileData
 import ws.freeflight.data.FlightPlanSummaryData
 import ws.freeflight.data.PlannedWaypoint
 import ws.freeflight.data.SavedRoutePlan
 import kotlin.math.roundToInt
 
 /**
- * Interactive Flight Planning, Nav Log, Weight & Balance, and Route Library sheet.
+ * The Plan tab: the route, its nav log, and the saved-route library.
+ *
+ * Aircraft and weight & balance live in their own tab — they are set up once
+ * for an aeroplane and then left alone, which is a different rhythm from a
+ * route that is rebuilt every flight.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FlightPlanningSheet(
-    waypoints: List<PlannedWaypoint>,
-    profile: AircraftProfileData,
-    planSummary: FlightPlanSummaryData?,
-    windsStatus: String? = null,
-    crossedAirspace: List<AirspaceCrossingWarning> = emptyList(),
-    savedPlans: List<SavedRoutePlan> = emptyList(),
-    onDismiss: () -> Unit,
-    onRemoveWaypoint: (Int) -> Unit,
-    onClearRoute: () -> Unit,
+fun PlanScreen(
+    viewModel: FreeflightViewModel,
     onAddWaypointClick: () -> Unit,
-    onProfileChange: (AircraftProfileData) -> Unit,
-    fleet: List<Aircraft> = emptyList(),
-    selectedAircraftId: Long? = null,
-    onSelectAircraft: (Long) -> Unit = {},
-    onSaveAircraft: (Aircraft) -> Unit = {},
-    onDeleteAircraft: (Long) -> Unit = {},
-    onAircraftVerifiedChange: (Long, Boolean) -> Unit = { _, _ -> },
-    onPerformanceChange: (Long, PerformancePhase, List<PerformancePoint>) -> Unit = { _, _, _ -> },
-    onSaveRoute: (String) -> Unit = {},
-    onLoadRoute: (SavedRoutePlan) -> Unit = {},
-    onDeleteRoute: (Long) -> Unit = {},
-    onRefreshWinds: () -> Unit = {},
+    modifier: Modifier = Modifier,
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val waypoints by viewModel.routeWaypoints.collectAsState()
+    val planSummary by viewModel.planSummary.collectAsState()
+    val windsStatus by viewModel.windsStatus.collectAsState()
+    val crossedAirspace by viewModel.crossedAirspace.collectAsState()
+    val savedPlans by viewModel.savedRoutePlans.collectAsState()
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    LaunchedEffect(Unit) { viewModel.ensureWindsLoaded() }
+
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp)
+            .padding(top = 16.dp, bottom = 32.dp),
     ) {
-        Column(
-            Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Flight Plan",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        if (waypoints.isNotEmpty()) {
-                            waypoints.joinToString(" → ") { it.ident }
-                        } else {
-                            "No waypoints in route"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Flight Plan",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    if (waypoints.isNotEmpty()) {
+                        waypoints.joinToString(" → ") { it.ident }
+                    } else {
+                        "No waypoints in route"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (waypoints.isNotEmpty()) {
+                TextButton(onClick = viewModel::clearRoute) {
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
                 }
-                if (waypoints.isNotEmpty()) {
-                    TextButton(onClick = onClearRoute) {
-                        Text("Clear", color = MaterialTheme.colorScheme.error)
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        PrimaryTabRow(selectedTabIndex = selectedTab) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.FlightTakeoff, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Nav Log")
                     }
-                }
-            }
+                },
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Bookmark, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Routes")
+                    }
+                },
+            )
+        }
 
-            Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
-            PrimaryTabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.FlightTakeoff, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Nav Log")
-                        }
-                    },
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Scale, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Aircraft & W&B")
-                        }
-                    },
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Bookmark, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Routes")
-                        }
-                    },
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            when (selectedTab) {
-                0 -> NavLogTab(
-                    waypoints = waypoints,
-                    summary = planSummary,
-                    windsStatus = windsStatus,
-                    crossedAirspace = crossedAirspace,
-                    onRemoveWaypoint = onRemoveWaypoint,
-                    onAddWaypointClick = onAddWaypointClick,
-                    onRefreshWinds = onRefreshWinds,
-                )
-                1 -> AircraftAndWbTab(
-                    profile = profile,
-                    onProfileChange = onProfileChange,
-                    fleet = fleet,
-                    selectedAircraftId = selectedAircraftId,
-                    onSelectAircraft = onSelectAircraft,
-                    onSaveAircraft = onSaveAircraft,
-                    onDeleteAircraft = onDeleteAircraft,
-                    onAircraftVerifiedChange = onAircraftVerifiedChange,
-                    onPerformanceChange = onPerformanceChange,
-                )
-                2 -> SavedRoutesTab(
-                    waypoints = waypoints,
-                    savedPlans = savedPlans,
-                    onSaveRoute = onSaveRoute,
-                    onLoadRoute = { plan ->
-                        onLoadRoute(plan)
-                        selectedTab = 0
-                    },
-                    onDeleteRoute = onDeleteRoute,
-                )
-            }
+        when (selectedTab) {
+            0 -> NavLogTab(
+                waypoints = waypoints,
+                summary = planSummary,
+                windsStatus = windsStatus,
+                crossedAirspace = crossedAirspace,
+                onRemoveWaypoint = viewModel::removeWaypoint,
+                onAddWaypointClick = onAddWaypointClick,
+                onRefreshWinds = viewModel::fetchWindsAloft,
+            )
+            1 -> SavedRoutesTab(
+                waypoints = waypoints,
+                savedPlans = savedPlans,
+                onSaveRoute = viewModel::saveCurrentRoute,
+                onLoadRoute = { plan ->
+                    viewModel.loadSavedRoute(plan)
+                    selectedTab = 0
+                },
+                onDeleteRoute = viewModel::deleteSavedRoute,
+            )
         }
     }
 }
@@ -444,180 +407,6 @@ private fun NavLogTab(
 }
 
 @Composable
-private fun AircraftAndWbTab(
-    profile: AircraftProfileData,
-    onProfileChange: (AircraftProfileData) -> Unit,
-    fleet: List<Aircraft>,
-    selectedAircraftId: Long?,
-    onSelectAircraft: (Long) -> Unit,
-    onSaveAircraft: (Aircraft) -> Unit,
-    onDeleteAircraft: (Long) -> Unit,
-    onAircraftVerifiedChange: (Long, Boolean) -> Unit,
-    onPerformanceChange: (Long, PerformancePhase, List<PerformancePoint>) -> Unit,
-) {
-    val selected = fleet.firstOrNull { it.id == selectedAircraftId } ?: fleet.firstOrNull()
-
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (fleet.isNotEmpty()) {
-            AircraftPicker(
-                fleet = fleet,
-                selectedId = selectedAircraftId,
-                onSelect = onSelectAircraft,
-                onAdd = { onSaveAircraft(Aircraft(registration = "New aircraft")) },
-                onDelete = onDeleteAircraft,
-                onVerifiedChange = onAircraftVerifiedChange,
-            )
-            HorizontalDivider()
-        }
-
-        Text(
-            "Aircraft Performance",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            NumberInputField(
-                label = "Cruise TAS (kt)",
-                value = profile.cruiseTasKt,
-                onValueChange = { onProfileChange(profile.copy(cruiseTasKt = it)) },
-                modifier = Modifier.weight(1f),
-            )
-            NumberInputField(
-                label = "Fuel Burn (gph)",
-                value = profile.fuelBurnGph,
-                onValueChange = { onProfileChange(profile.copy(fuelBurnGph = it)) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            NumberInputField(
-                label = "Cruise Altitude (ft)",
-                value = profile.cruiseAltitudeFt ?: 5500.0,
-                onValueChange = { onProfileChange(profile.copy(cruiseAltitudeFt = it)) },
-                modifier = Modifier.weight(1f),
-            )
-            NumberInputField(
-                label = "Reserve (min)",
-                value = (profile.reserveMinutes ?: 45).toDouble(),
-                onValueChange = { onProfileChange(profile.copy(reserveMinutes = it.toInt())) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        HorizontalDivider()
-
-        Text(
-            "Weight & Balance",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-
-        // Status Card
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = if (profile.isOverweight) {
-                    MaterialTheme.colorScheme.errorContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainerHigh
-                }
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
-            ) {
-                SummaryMetric(
-                    label = "TOTAL WT",
-                    value = "${profile.totalWeightLb.roundToInt()} LB",
-                    color = if (profile.isOverweight) MaterialTheme.colorScheme.error else Color.Unspecified,
-                )
-                SummaryMetric(
-                    label = "MAX GROSS",
-                    value = "${profile.maxGrossWeightLb.roundToInt()} LB",
-                )
-                SummaryMetric(
-                    label = "C.G.",
-                    value = "%.1f\"".format(profile.centerOfGravityIn),
-                )
-            }
-        }
-
-        if (profile.isOverweight) {
-            Text(
-                "⚠ Aircraft exceeds maximum gross weight (${(profile.totalWeightLb - profile.maxGrossWeightLb).roundToInt()} lb over)",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
-
-        selected?.let { aircraft ->
-            HorizontalDivider()
-            Text(
-                "POH tables",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                "Optional. With a table, each leg is planned at its own altitude " +
-                    "instead of one cruise number for the whole flight; without one, " +
-                    "the figures above are used.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            PerformancePhase.entries.forEach { phase ->
-                PerformanceTableEditor(
-                    phase = phase,
-                    rows = when (phase) {
-                        PerformancePhase.CLIMB -> aircraft.performance.climb
-                        PerformancePhase.CRUISE -> aircraft.performance.cruise
-                        PerformancePhase.DESCENT -> aircraft.performance.descent
-                    },
-                    onChange = { rows -> onPerformanceChange(aircraft.id, phase, rows) },
-                )
-            }
-            HorizontalDivider()
-        }
-
-        Text("Loading", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            NumberInputField(
-                label = "Pilot (lb)",
-                value = profile.weightPilotLb,
-                onValueChange = { onProfileChange(profile.copy(weightPilotLb = it)) },
-                modifier = Modifier.weight(1f),
-            )
-            NumberInputField(
-                label = "Passenger (lb)",
-                value = profile.weightPassengerLb,
-                onValueChange = { onProfileChange(profile.copy(weightPassengerLb = it)) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            NumberInputField(
-                label = "Baggage (lb)",
-                value = profile.weightBaggageLb,
-                onValueChange = { onProfileChange(profile.copy(weightBaggageLb = it)) },
-                modifier = Modifier.weight(1f),
-            )
-            NumberInputField(
-                label = "Fuel (gal)",
-                value = profile.gallonsFuel,
-                onValueChange = { onProfileChange(profile.copy(gallonsFuel = it)) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
 private fun SavedRoutesTab(
     waypoints: List<PlannedWaypoint>,
     savedPlans: List<SavedRoutePlan>,
@@ -739,7 +528,7 @@ private fun SavedRoutesTab(
 }
 
 @Composable
-private fun SummaryMetric(
+internal fun SummaryMetric(
     label: String,
     value: String,
     color: Color = Color.Unspecified,

@@ -8,9 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.AirplanemodeActive
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -27,17 +27,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ws.freeflight.ui.DataScreen
-import ws.freeflight.ui.FlightLogScreen
+import ws.freeflight.ui.AircraftScreen
 import ws.freeflight.ui.FreeflightTheme
 import ws.freeflight.ui.FreeflightViewModel
 import ws.freeflight.ui.MapScreen
+import ws.freeflight.ui.PlanScreen
 import ws.freeflight.ui.SettingsScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Map("Map", Icons.Default.Map),
-    Flights("Flights", Icons.Default.FlightTakeoff),
-    Data("Data", Icons.Default.CloudDownload),
+    Plan("Plan", Icons.Default.Route),
+    Aircraft("Aircraft", Icons.Default.AirplanemodeActive),
     Settings("Settings", Icons.Default.Settings),
 }
 
@@ -78,15 +78,21 @@ private fun FreeflightScaffold(viewModel: FreeflightViewModel) {
             // The map stays composed whichever tab is showing, with the
             // other tabs drawn over it. Letting it leave the composition
             // would tear down MapLibre's GL surface and lose the camera —
-            // so a pilot who checks the Data tab mid-flight would come back
+            // so a pilot who checks the Plan tab mid-flight would come back
             // to a map that had forgotten where they were.
-            MapScreen(viewModel)
+            MapScreen(viewModel, onOpenPlan = { tab = Tab.Plan })
 
             if (tab != Tab.Map) {
                 Surface(Modifier.fillMaxSize()) {
                     when (tab) {
-                        Tab.Flights -> FlightLogScreen(viewModel)
-                        Tab.Data -> DataScreen(viewModel)
+                        // Adding a waypoint means picking one off the map,
+                        // so that button hands the map back rather than
+                        // opening a second way to search for one.
+                        Tab.Plan -> PlanScreen(
+                            viewModel,
+                            onAddWaypointClick = { tab = Tab.Map },
+                        )
+                        Tab.Aircraft -> AircraftScreen(viewModel)
                         Tab.Settings -> SettingsScreen(viewModel)
                         Tab.Map -> Unit
                     }

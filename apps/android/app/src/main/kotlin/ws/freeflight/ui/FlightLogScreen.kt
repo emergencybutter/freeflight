@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Map
@@ -51,7 +52,7 @@ import ws.freeflight.data.RecordedFlight
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FlightLogScreen(viewModel: FreeflightViewModel) {
+fun FlightLogScreen(viewModel: FreeflightViewModel, onClose: () -> Unit) {
     val context = LocalContext.current
     val isRecording by viewModel.isRecording.collectAsState()
     val elapsedSeconds by viewModel.recordingElapsedSeconds.collectAsState()
@@ -64,6 +65,11 @@ fun FlightLogScreen(viewModel: FreeflightViewModel) {
         topBar = {
             TopAppBar(
                 title = { Text("Flight Logs & Analysis", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                },
                 actions = {
                     if (isRecording) {
                         Button(
