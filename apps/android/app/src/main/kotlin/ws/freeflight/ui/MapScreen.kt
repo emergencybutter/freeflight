@@ -65,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.ff_uniffi.BoundingBox
 import uniffi.ff_uniffi.ProcedureDetail
+import uniffi.ff_uniffi.CycleCurrency
 import ws.freeflight.data.ChartKinds
 import ws.freeflight.map.ChartLayer
 import ws.freeflight.map.ChartMap
@@ -93,6 +94,7 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val procedure by viewModel.procedure.collectAsState()
     val activePlate by viewModel.activePlate.collectAsState()
     val plateDownload by viewModel.plateDownload.collectAsState()
+    val cycleStatus by viewModel.cycleStatus.collectAsState()
 
     val routeWaypoints by viewModel.routeWaypoints.collectAsState()
     val aircraftProfile by viewModel.aircraftProfile.collectAsState()
@@ -241,6 +243,15 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                 cycleLabel = cycle?.let { info ->
                     "Cycle ${info.effectiveDate ?: info.cycleId}"
                 } ?: "No cycle downloaded",
+                // A cycle pre-loaded ahead of its date, or left past it,
+                // reads identically to the one in force unless the chip
+                // says otherwise — and this chip is what is on screen in
+                // the aircraft.
+                cycleWarning = when (cycleStatus?.currency) {
+                    CycleCurrency.NOT_YET_EFFECTIVE -> "not yet in effect"
+                    CycleCurrency.EXPIRED -> "out of date"
+                    else -> null
+                },
                 weatherLabel = mapState.weatherFetchedAtMillis?.let { "Wx ${formatAge(it)}" },
                 // Only once there is data to zoom in on — with no cycle
                 // installed the reason the map is empty is a different
@@ -530,6 +541,7 @@ private fun SearchBar(viewModel: FreeflightViewModel, controller: MapController)
 @Composable
 private fun CycleStatusLine(
     cycleLabel: String,
+    cycleWarning: String? = null,
     weatherLabel: String?,
     zoomedOutTooFar: Boolean,
 ) {
@@ -544,6 +556,13 @@ private fun CycleStatusLine(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             Text(cycleLabel, style = MaterialTheme.typography.labelMedium)
+            cycleWarning?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             weatherLabel?.let {
                 Text(
                     it,

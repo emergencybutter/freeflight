@@ -31,6 +31,8 @@ import ws.freeflight.AppContainer
 import ws.freeflight.data.ChartKinds
 import ws.freeflight.data.ChartSet
 import ws.freeflight.data.ChartSheets
+import ws.freeflight.data.CycleStatus
+import ws.freeflight.data.CycleStatusReader
 import ws.freeflight.data.Cwa
 import ws.freeflight.data.GAirmet
 import ws.freeflight.data.Metar
@@ -110,6 +112,9 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     val plateDownload = container.plates.download
 
     /** Sources older than the cycle itself, for the mixed-cycle notice. */
+    private val _cycleStatus = MutableStateFlow<CycleStatus?>(null)
+    val cycleStatus: StateFlow<CycleStatus?> = _cycleStatus.asStateFlow()
+
     private val _staleSources = MutableStateFlow<List<StaleSource>>(emptyList())
     val staleSources: StateFlow<List<StaleSource>> = _staleSources.asStateFlow()
 
@@ -435,6 +440,7 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                 // exactly the bundles most likely to be mixed.
                 val cycleDate = info?.effectiveDate ?: info?.cycleId
                 _staleSources.value = MixedCycle.staleSources(attributions(), cycleDate)
+                _cycleStatus.value = CycleStatusReader.of(cycleDate)
             }
         }
 

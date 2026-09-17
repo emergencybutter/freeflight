@@ -599,3 +599,32 @@ pub fn chart_sheet_sort_key(chart_id: String, catalogue_name: String) -> String 
         &catalogue_name,
     )
 }
+
+/// Where a cycle sits relative to today: pre-loaded, in force, or
+/// superseded. See `ff_core::cycle::cycle_currency` — the map shows a
+/// cycle's date whether that date is next month or last month, and the
+/// date alone does not tell a pilot which.
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum CycleCurrency {
+    NotYetEffective,
+    Current,
+    Expired,
+}
+
+/// Classify a cycle's effective date against `today`, both `YYYY-MM-DD`.
+/// `null` when either is unparseable — never a guess.
+#[uniffi::export]
+pub fn cycle_currency(effective_date: String, today: String) -> Option<CycleCurrency> {
+    use ff_core::cycle::CycleCurrency as Core;
+    ff_core::cycle::cycle_currency(&effective_date, &today).map(|c| match c {
+        Core::NotYetEffective => CycleCurrency::NotYetEffective,
+        Core::Current => CycleCurrency::Current,
+        Core::Expired => CycleCurrency::Expired,
+    })
+}
+
+/// Whole days until a cycle takes effect, or `null` once it has.
+#[uniffi::export]
+pub fn days_until_effective(effective_date: String, today: String) -> Option<i64> {
+    ff_core::cycle::days_until_effective(&effective_date, &today)
+}
