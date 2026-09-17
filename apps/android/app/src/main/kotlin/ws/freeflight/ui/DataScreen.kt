@@ -47,6 +47,7 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val chartSets by viewModel.chartSets.collectAsState()
     val setDownload by viewModel.setDownload.collectAsState()
     val plateBytes by viewModel.plateBytes.collectAsState()
+    val staleSources by viewModel.staleSources.collectAsState()
 
     LazyColumn(
         modifier.fillMaxSize().padding(16.dp),
@@ -76,6 +77,20 @@ fun DataScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        // The effective date above is the FAA's. A bundle
+                        // may mix AIRAC cycles, and letting that date stand
+                        // as a blanket claim over older non-US data is the
+                        // one thing §11 forbids.
+                        if (staleSources.isNotEmpty()) {
+                            Text(
+                                "Some data is from an earlier cycle — " +
+                                    staleSources.joinToString("; ") {
+                                        "${it.name} effective ${it.effectiveDate}"
+                                    },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
 
                     SyncStatus(sync)

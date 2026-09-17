@@ -54,6 +54,52 @@ pub fn validate_bundle(
         }
     }
 
+    // A bundle may mix AIRAC cycles — the FAA side is fetched
+    // automatically while a national AIS export is a manual download, so
+    // one source trailing the other by a cycle is routine and no longer
+    // blocks the build. What must never happen is a source that can't say
+    // how old it is: the clients flag a mixed cycle by comparing each
+    // source's date against the bundle's, and a NULL there would read as
+    // "same cycle" and quietly claim currency it doesn't have (§11).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM data_source WHERE effective_date IS NULL OR effective_date = ''",
+        )?;
+        let undated: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        if !undated.is_empty() {
+            return Err(ValidateError::Failed(format!(
+                "these data sources carry no effective date, so clients could not tell a pilot \
+                 how current they are: {}",
+                undated.join(", ")
+            )));
+        }
+    }
+
+    let cycle_date: Option<String> = conn
+        .query_row(
+            "SELECT effective_date FROM airac_cycle ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(cycle_date) = cycle_date.as_deref() {
+        let mut stmt = conn
+            .prepare("SELECT name, effective_date FROM data_source WHERE effective_date != ?1")?;
+        let mixed: Vec<(String, String)> = stmt
+            .query_map([cycle_date], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (name, effective) in &mixed {
+            tracing::warn!(
+                source = %name,
+                source_effective = %effective,
+                cycle = %cycle_date,
+                "mixed-cycle bundle: this source is from a different AIRAC cycle than the bundle"
+            );
+        }
+    }
+
     let Some(previous_path) = previous_bundle_path else {
         tracing::info!(
             "no previously published cycle to compare against — treating this as the baseline"
@@ -94,6 +140,25 @@ mod tests {
                 "INSERT INTO airport (icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type, fuel_types)
                  VALUES (?1, NULL, NULL, 'Test', ?2, ?3, 0, 'Airport', '')",
                 rusqlite::params![icao, lat, lon],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Records a cycle plus its data sources, the way the pipeline does.
+    fn with_sources(path: &Path, cycle: &str, sources: &[(&str, Option<&str>)]) {
+        let conn = ff_storage::open(path.to_str().unwrap()).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO airac_cycle (id, effective_date, source_version)
+             VALUES (?1, ?1, 'test')",
+            [cycle],
+        )
+        .unwrap();
+        for (name, effective) in sources {
+            conn.execute(
+                "INSERT OR REPLACE INTO data_source (name, effective_date, licence, url, attribution)
+                 VALUES (?1, ?2, 'test', 'https://example.test', ?1)",
+                rusqlite::params![name, effective],
             )
             .unwrap();
         }
@@ -156,4 +221,55 @@ mod tests {
 
         validate_bundle(&new_path, &stats_for(2), Some(&prev_path)).unwrap();
     }
+
+    #[test]
+    fn a_source_from_another_airac_cycle_is_allowed_and_only_warned_about() {
+        // The FAA side is fetched automatically, a national AIS export is
+        // downloaded by hand — one trailing the other by a cycle is normal
+        // and must not cost the whole build.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cycle.sqlite");
+        bundle_with_airports(&path, &[("LFPG", 49.0, 2.5)]);
+        with_sources(
+            &path,
+            "2026-10-01",
+            &[
+                ("FAA", Some("2026-10-01")),
+                ("France (SIA)", Some("2026-09-03")),
+            ],
+        );
+
+        validate_bundle(&path, &stats_for(1), None).unwrap();
+    }
+
+    #[test]
+    fn a_source_with_no_effective_date_is_refused() {
+        // A NULL date reads as "same cycle" to a client comparing against
+        // the bundle's, so it would claim a currency it cannot support.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cycle.sqlite");
+        bundle_with_airports(&path, &[("LFPG", 49.0, 2.5)]);
+        with_sources(
+            &path,
+            "2026-10-01",
+            &[("FAA", Some("2026-10-01")), ("France (SIA)", None)],
+        );
+
+        let err = validate_bundle(&path, &stats_for(1), None).unwrap_err();
+        assert!(
+            format!("{err}").contains("France (SIA)"),
+            "the message must name the offending source, got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_effective_date_counts_as_undated_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cycle.sqlite");
+        bundle_with_airports(&path, &[("LFPG", 49.0, 2.5)]);
+        with_sources(&path, "2026-10-01", &[("openAIP", Some(""))]);
+
+        assert!(validate_bundle(&path, &stats_for(1), None).is_err());
+    }
+
 }

@@ -29,8 +29,8 @@ pub enum EtlError {
     Aixm(#[from] crate::aixm::AixmLoadError),
     #[error(transparent)]
     OpenAip(#[from] crate::openaip::OpenAipLoadError),
-    #[error("AIXM effective date {sia} does not match the CIFP cycle {cifp}; use the matching-AIRAC SIA export, or set FF_AIXM_ALLOW_CYCLE_MISMATCH=1 to build anyway")]
-    AixmCycleMismatch { sia: String, cifp: String },
+    #[error("the AIXM export at {path} carries no effective date, so a bundle including it could not say how current that data is; use an export that declares one")]
+    AixmCycleUndated { path: String },
     #[error(transparent)]
     Dtpp(#[from] crate::dtpp::DtppError),
     #[error(transparent)]
@@ -106,21 +106,36 @@ pub fn run() -> Result<(), EtlError> {
     if let Some(aixm_path) = crate::aixm::configured_source() {
         match crate::aixm::load(&aixm_path) {
             Ok(data) => {
-                // Guardrail: the SIA export must be the same AIRAC cycle as
-                // the FAA data, or the bundle would carry stale non-US data
-                // under the FAA cycle id (a silent, easy mistake). Refuse
-                // unless explicitly overridden. A file without an effective
-                // date can't be checked, so it's allowed through.
-                if let Some(eff) = data.effective.as_deref() {
-                    if eff != cifp.cycle_date {
-                        if std::env::var("FF_AIXM_ALLOW_CYCLE_MISMATCH").is_ok() {
-                            tracing::warn!(sia_effective = %eff, cifp_cycle = %cifp.cycle_date, "AIXM effective date != CIFP cycle — proceeding because FF_AIXM_ALLOW_CYCLE_MISMATCH is set");
-                        } else {
-                            return Err(EtlError::AixmCycleMismatch {
-                                sia: eff.to_string(),
-                                cifp: cifp.cycle_date.clone(),
-                            });
-                        }
+                // A cycle may mix sources. The FAA and SIA follow the same
+                // global 28-day AIRAC calendar, so a difference here never
+                // means the two countries' data diverged — it means the SIA
+                // export on hand is a cycle behind, which is routine given
+                // it is a manual cart download while the FAA side is
+                // fetched automatically. Blocking the whole build on that
+                // bought nothing: it just meant no France data at all,
+                // which is worse than France data that says how old it is.
+                //
+                // What makes this safe is that `add_aixm` records the
+                // export's *own* effective date in `data_source` rather
+                // than the FAA cycle date, and the clients show per-source
+                // dates and flag a mixed cycle where they show the cycle
+                // (§11: freshness is explicit, never silent). A file with
+                // no effective date at all is the one case still worth
+                // refusing — it would be undatable in the bundle, so no
+                // client could warn about it.
+                match data.effective.as_deref() {
+                    Some(eff) if eff != cifp.cycle_date => {
+                        tracing::warn!(
+                            sia_effective = %eff,
+                            cifp_cycle = %cifp.cycle_date,
+                            "mixed-cycle bundle: France/SIA data is from a different AIRAC cycle than the FAA data — recorded in data_source and surfaced by the clients"
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(EtlError::AixmCycleUndated {
+                            path: aixm_path.display().to_string(),
+                        });
                     }
                 }
                 let added = add_aixm(&bundle_path, &data)?;

@@ -34,8 +34,10 @@ import ws.freeflight.data.ChartSheets
 import ws.freeflight.data.Cwa
 import ws.freeflight.data.GAirmet
 import ws.freeflight.data.Metar
+import ws.freeflight.data.MixedCycle
 import ws.freeflight.data.Pirep
 import ws.freeflight.data.Sigmet
+import ws.freeflight.data.StaleSource
 import ws.freeflight.data.Taf
 import ws.freeflight.data.WeatherHazardTap
 
@@ -106,6 +108,10 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     val plates = container.plates
 
     val plateDownload = container.plates.download
+
+    /** Sources older than the cycle itself, for the mixed-cycle notice. */
+    private val _staleSources = MutableStateFlow<List<StaleSource>>(emptyList())
+    val staleSources: StateFlow<List<StaleSource>> = _staleSources.asStateFlow()
 
     private val _plateBytes = MutableStateFlow(0L)
     val plateBytes: StateFlow<Long> = _plateBytes.asStateFlow()
@@ -415,6 +421,15 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
                 _routeWaypoints.value = active.first
                 _aircraftProfile.value = active.second
                 recalculatePlan()
+            }
+        }
+
+        // The cycle's own date is the FAA's; anything older in the
+        // bundle has to be called out rather than hidden behind it.
+        viewModelScope.launch {
+            cycle.collect { info ->
+                _staleSources.value =
+                    MixedCycle.staleSources(attributions(), info?.effectiveDate)
             }
         }
 

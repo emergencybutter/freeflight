@@ -459,6 +459,30 @@ the AIXM 4.5 `<AIXM-Snapshot>` → `ff-core` types; `ff-etl` will fetch the
 SIA export per AIRAC cycle and write it into the same bundle tables the FAA
 sources use. AIXM carries no FAA-style region code, so navaid/waypoint
 `region` is stamped from the dataset's ICAO region (`"LF"` for France).
+
+**Mixed-cycle bundles.** A bundle may carry sources from different AIRAC
+cycles. The FAA and SIA follow the same global 28-day calendar, so a
+difference never means the two countries' data diverged — it means the
+SIA export on hand is a cycle behind, which is routine given the FAA side
+is fetched unattended while the SIA export is a manual cart download.
+`ff-etl` used to refuse that outright; the cost was no France data at all,
+which is worse than France data that says how old it is. It now records
+each source's *own* effective date in `data_source` (already the case for
+the licence attribution) and proceeds. Three things keep that honest:
+`add_aixm` writes the export's date rather than the FAA cycle date;
+validation refuses to publish any source whose date is missing, since a
+NULL would read as "same cycle" to a client comparing against the
+bundle's; and the clients flag a mixed cycle wherever they show the cycle
+date, because that date is the FAA's and would otherwise stand as a
+blanket claim over older non-US data (§11). An export that declares no
+effective date at all is still refused outright — nothing downstream
+could describe it.
+
+Not yet done: provenance is per *source*, not per record. The bundle can
+say "France data is a cycle behind" but not "this airport came from that
+source", so the warning is cycle-level rather than attached to the LFPG
+page a pilot is actually reading. That needs a `source` column on the
+data tables.
 The AIXM 4.5→`ff-core` feature mapping: `AirportHeliport (Ahp)`→`Airport`,
 `Runway (Rwy)`+`RunwayDirection (Rdn)`→`Runway`, `Vor/Ndb/Dme/Tcn`→
 `Navaid`, `DesignatedPoint (Dpn)`→`Waypoint`, `Route (Rte)`+`RouteSegment

@@ -347,12 +347,14 @@ AIXM 4.5 export when `FF_AIXM_FR_PATH` points at it (DESIGN.md §3.1). This
 is opt-in — a normal cycle build (step 3) omits it. To publish an
 **up-to-date** France-inclusive cycle:
 
-1. **Match the AIRAC cycle.** The FAA and SIA both follow the global ICAO
-   AIRAC calendar (28-day, synchronized effective dates), so the France
-   data must be from the **same cycle** the FAA pipeline pulls. The
-   pipeline auto-discovers the current FAA CIFP cycle; the SIA export you
-   feed it has to have the matching effective date, or the bundle will
-   label itself with the FAA date while carrying stale France data.
+1. **Matching the AIRAC cycle is preferred, not required.** The FAA and
+   SIA both follow the global ICAO AIRAC calendar (28-day, synchronized
+   effective dates), so the matching export is the one to use when you
+   have it. You no longer have to: the pipeline records the SIA export's
+   own effective date and builds a mixed-cycle bundle, and the clients
+   flag it wherever they show the cycle date. An export that declares no
+   effective date is still refused — nothing downstream could say how old
+   it is.
 
 2. **Download the matching SIA export.** From
    <https://www.sia.aviation-civile.gouv.fr> → *Produits numériques en
@@ -376,19 +378,20 @@ is opt-in — a normal cycle build (step 3) omits it. To publish an
    Same run as step 3, plus one early log line to check:
    `added France/SIA AIXM data to bundle ... airports=… airspaces=…`.
 
-4. **Verify AIRAC alignment.** In the log, confirm `fetched CIFP
-   cycle=<date>` matches your SIA export's cycle. (Observed once: the FAA
-   rolled to `2026-08-06` while the SIA file on hand was `2026-07-09` — a
-   one-cycle mismatch. Re-download the matching SIA export rather than
-   publish that.)
+4. **Check AIRAC alignment.** In the log, compare `fetched CIFP
+   cycle=<date>` against your SIA export's cycle. A mismatch is logged as
+   `mixed-cycle bundle: ...` by both the pipeline and validation, and is
+   publishable — the clients say so on the cycle card. Re-download the
+   matching export when you can; publish the mixed bundle when you can't,
+   rather than shipping no France data.
 
-5. **Attribution prerequisite (Licence Ouverte).** Before a France-
-   inclusive cycle goes live, the web client must display
-   "Service de l'Information Aéronautique (SIA)" **and the export's
-   effective date**. The About page already credits the SIA (`apps/web`),
-   but the per-cycle date is not wired through yet — finish that first, or
-   you're shipping the data without meeting the licence's attribution
-   condition.
+5. **Attribution (Licence Ouverte) — already satisfied.** A France-
+   inclusive cycle must display "Service de l'Information Aéronautique
+   (SIA)" **and the export's effective date**. Both clients do: web's
+   About page renders `AIRAC effective <date>` from `/data/attributions`,
+   and Android's Settings lists each credit with `effective <date>`. (An
+   earlier note here said the per-cycle date was not wired through; it
+   is.)
 
 6. **Publish** exactly as step 3: copy `data/cycles/<id>/` (~19 GB) +
    `data/latest.json` to `/containers/freeflight/data/`, then
