@@ -26,7 +26,7 @@ data class SavedRoutePlan(
         get() = if (waypoints.isNotEmpty()) waypoints.joinToString(" → ") { it.ident } else "Empty"
 }
 
-class RouteDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "freeflight_routes.db", null, 1) {
+class RouteDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "freeflight_routes.db", null, DB_VERSION) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -76,10 +76,96 @@ class RouteDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "freefli
             );
             """.trimIndent()
         )
+        // A fresh install must end up with exactly what an upgraded one
+        // has, so the fleet tables are created from the same function
+        // onUpgrade uses rather than a second copy of the DDL.
+        createFleetTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Future migrations
+        // Additive only, and applied in order, so a device that skipped a
+        // version still lands in the same place. A saved route is a
+        // pilot's own work — dropping and recreating would be the easy
+        // path and the wrong one.
+        if (oldVersion < 2) createFleetTables(db)
+    }
+
+    /**
+     * The on-device fleet.
+     *
+     * Columns mirror `ff-accounts`' `aircraft` table one-to-one (see
+     * `apps/web/src/aircraft.ts`) even though nothing syncs yet: the web
+     * client keeps a fleet behind an account, this client has no auth, and
+     * a differently-shaped local table would guarantee a migration on the
+     * day those are joined up. `remote_id` is the hook for that day —
+     * null for everything created here.
+     */
+    private fun createFleetTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS aircraft (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                remote_id            INTEGER,
+                registration         TEXT NOT NULL,
+                name                 TEXT,
+                icao_type            TEXT,
+                serial_number        TEXT,
+                cruise_tas_kt        REAL,
+                cruise_fuel_gph      REAL,
+                climb_rate_fpm       REAL,
+                climb_tas_kt         REAL,
+                climb_fuel_gph       REAL,
+                descent_rate_fpm     REAL,
+                descent_tas_kt       REAL,
+                descent_fuel_gph     REAL,
+                taxi_fuel_gal        REAL,
+                fuel_capacity_gal    REAL,
+                reserve_minutes      INTEGER,
+                max_gross_weight_lb  REAL,
+                forward_cg_limit_in  REAL,
+                aft_cg_limit_in      REAL,
+                empty_weight_lb      REAL,
+                empty_cg_in          REAL,
+                cruise_altitude_ft   REAL,
+                cruise_power_setting TEXT,
+                verified_at          TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS aircraft_performance (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                aircraft_id          INTEGER NOT NULL REFERENCES aircraft(id) ON DELETE CASCADE,
+                phase                TEXT NOT NULL,
+                pressure_altitude_ft REAL NOT NULL,
+                power_setting        TEXT NOT NULL DEFAULT '',
+                vertical_speed_fpm   REAL,
+                tas_kt               REAL NOT NULL,
+                fuel_gph             REAL NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_aircraft_performance ON " +
+                "aircraft_performance(aircraft_id, phase, pressure_altitude_ft)"
+        )
+        // One aircraft is selected for planning at a time.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS selected_aircraft (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                aircraft_id INTEGER REFERENCES aircraft(id) ON DELETE SET NULL
+            )
+            """.trimIndent()
+        )
+    }
+
+    companion object {
+        /** 2 added the on-device fleet (`aircraft`, performance tables). */
+        const val DB_VERSION = 2
     }
 }
 

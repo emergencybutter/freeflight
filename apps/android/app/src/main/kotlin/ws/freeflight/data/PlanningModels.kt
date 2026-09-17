@@ -33,6 +33,22 @@ data class AircraftProfileData(
     @SerialName("empty_weight_lb") val emptyWeightLb: Double = 1680.0,
     @SerialName("empty_cg_in") val emptyCgIn: Double = 38.5,
     @SerialName("max_gross_weight_lb") val maxGrossWeightLb: Double = 2550.0,
+    @SerialName("forward_cg_limit_in") val forwardCgLimitIn: Double? = 35.0,
+    @SerialName("aft_cg_limit_in") val aftCgLimitIn: Double? = 47.3,
+
+    /**
+     * Which POH cruise table row to read, when the aircraft has one.
+     * Free text because POHs disagree about what they key cruise on.
+     */
+    @SerialName("cruise_power_setting") val cruisePowerSetting: String? = null,
+
+    /**
+     * POH tables, when the pilot has entered them. Null means "use the
+     * scalars above" — `ff_planning::flight` prefers the table and falls
+     * back to the single numbers, so a partly-filled aircraft still plans
+     * rather than failing.
+     */
+    val performance: AircraftPerformance? = null,
     @SerialName("arm_pilot_in") val armPilotIn: Double = 37.0,
     @SerialName("arm_passenger_in") val armPassengerIn: Double = 73.0,
     @SerialName("arm_baggage_in") val armBaggageIn: Double = 95.0,

@@ -157,6 +157,10 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
     private val _routeWaypoints = MutableStateFlow<List<ws.freeflight.data.PlannedWaypoint>>(emptyList())
     val routeWaypoints: StateFlow<List<ws.freeflight.data.PlannedWaypoint>> = _routeWaypoints.asStateFlow()
 
+    /** Every aircraft on this device, and which one planning uses. */
+    val fleet = container.aircraft.fleet
+    val selectedAircraftId = container.aircraft.selectedId
+
     private val _aircraftProfile = MutableStateFlow(ws.freeflight.data.AircraftProfileData())
     val aircraftProfile: StateFlow<ws.freeflight.data.AircraftProfileData> = _aircraftProfile.asStateFlow()
 
@@ -208,8 +212,71 @@ class FreeflightViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    // ---- fleet -----------------------------------------------------------
+
+    /**
+     * Point planning at a different aircraft.
+     *
+     * The loading figures — who is aboard, how much fuel — belong to the
+     * flight rather than the airframe, so they survive the switch; only
+     * the aircraft's own numbers are replaced.
+     */
+    fun selectAircraft(id: Long) {
+        container.aircraft.select(id)
+        viewModelScope.launch {
+            fleet.value.firstOrNull { it.id == id }?.let { aircraft ->
+                _aircraftProfile.value = aircraft.toProfile(_aircraftProfile.value)
+                recalculatePlan()
+            }
+        }
+    }
+
+    fun saveAircraft(aircraft: ws.freeflight.data.Aircraft) {
+        viewModelScope.launch {
+            val saved = container.aircraft.save(aircraft)
+            if (saved.id == selectedAircraftId.value) {
+                _aircraftProfile.value = saved.toProfile(_aircraftProfile.value)
+                recalculatePlan()
+            }
+        }
+    }
+
+    /**
+     * Delete an aircraft. The repository refuses to remove the last one —
+     * planning has no meaning without one — and the picker hides the
+     * control in that case, so this is fire-and-forget.
+     */
+    fun deleteAircraft(id: Long) {
+        viewModelScope.launch { container.aircraft.delete(id) }
+    }
+
+    fun setAircraftPerformance(
+        aircraftId: Long,
+        phase: ws.freeflight.data.PerformancePhase,
+        rows: List<ws.freeflight.data.PerformancePoint>,
+    ) {
+        viewModelScope.launch {
+            container.aircraft.setPerformance(aircraftId, phase, rows)
+            fleet.value.firstOrNull { it.id == aircraftId }?.let {
+                if (it.id == selectedAircraftId.value) {
+                    _aircraftProfile.value = it.toProfile(_aircraftProfile.value)
+                    recalculatePlan()
+                }
+            }
+        }
+    }
+
+    fun markAircraftVerified(id: Long, verified: Boolean) {
+        viewModelScope.launch { container.aircraft.markVerified(id, verified) }
+    }
+
     fun updateProfile(profile: ws.freeflight.data.AircraftProfileData) {
         _aircraftProfile.value = profile
+        // Persist the airframe half back to the fleet, or an edit would
+        // last exactly as long as the current selection.
+        fleet.value.firstOrNull { it.id == selectedAircraftId.value }?.let { aircraft ->
+            viewModelScope.launch { container.aircraft.save(aircraft.updatedFrom(profile)) }
+        }
         recalculatePlan()
     }
 

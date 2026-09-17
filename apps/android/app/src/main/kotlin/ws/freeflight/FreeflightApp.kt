@@ -47,6 +47,9 @@ class AppContainer(context: Context) {
 
     val routePlanning = ws.freeflight.data.RoutePlanRepository(context, appScope)
 
+    /** The pilot's fleet, on this device (see AircraftRepository). */
+    val aircraft = ws.freeflight.data.AircraftRepository(context, appScope)
+
     val tileServer = TileServer(core).also { it.start() }
 }
 

@@ -95,6 +95,8 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
     val activePlate by viewModel.activePlate.collectAsState()
     val plateDownload by viewModel.plateDownload.collectAsState()
     val cycleStatus by viewModel.cycleStatus.collectAsState()
+    val fleet by viewModel.fleet.collectAsState()
+    val selectedAircraftId by viewModel.selectedAircraftId.collectAsState()
 
     val routeWaypoints by viewModel.routeWaypoints.collectAsState()
     val aircraftProfile by viewModel.aircraftProfile.collectAsState()
@@ -419,6 +421,13 @@ fun MapScreen(viewModel: FreeflightViewModel, modifier: Modifier = Modifier) {
                     viewModel.closePlanningSheet()
                 },
                 onProfileChange = viewModel::updateProfile,
+                fleet = fleet,
+                selectedAircraftId = selectedAircraftId,
+                onSelectAircraft = viewModel::selectAircraft,
+                onSaveAircraft = viewModel::saveAircraft,
+                onDeleteAircraft = viewModel::deleteAircraft,
+                onAircraftVerifiedChange = viewModel::markAircraftVerified,
+                onPerformanceChange = viewModel::setAircraftPerformance,
                 onSaveRoute = viewModel::saveCurrentRoute,
                 onLoadRoute = viewModel::loadSavedRoute,
                 onDeleteRoute = viewModel::deleteSavedRoute,

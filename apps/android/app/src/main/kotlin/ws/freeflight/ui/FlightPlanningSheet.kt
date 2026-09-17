@@ -55,6 +55,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ws.freeflight.data.AirspaceCrossingWarning
+import ws.freeflight.data.Aircraft
+import ws.freeflight.data.PerformancePhase
+import ws.freeflight.data.PerformancePoint
 import ws.freeflight.data.AircraftProfileData
 import ws.freeflight.data.FlightPlanSummaryData
 import ws.freeflight.data.PlannedWaypoint
@@ -78,6 +81,13 @@ fun FlightPlanningSheet(
     onClearRoute: () -> Unit,
     onAddWaypointClick: () -> Unit,
     onProfileChange: (AircraftProfileData) -> Unit,
+    fleet: List<Aircraft> = emptyList(),
+    selectedAircraftId: Long? = null,
+    onSelectAircraft: (Long) -> Unit = {},
+    onSaveAircraft: (Aircraft) -> Unit = {},
+    onDeleteAircraft: (Long) -> Unit = {},
+    onAircraftVerifiedChange: (Long, Boolean) -> Unit = { _, _ -> },
+    onPerformanceChange: (Long, PerformancePhase, List<PerformancePoint>) -> Unit = { _, _, _ -> },
     onSaveRoute: (String) -> Unit = {},
     onLoadRoute: (SavedRoutePlan) -> Unit = {},
     onDeleteRoute: (Long) -> Unit = {},
@@ -175,6 +185,13 @@ fun FlightPlanningSheet(
                 1 -> AircraftAndWbTab(
                     profile = profile,
                     onProfileChange = onProfileChange,
+                    fleet = fleet,
+                    selectedAircraftId = selectedAircraftId,
+                    onSelectAircraft = onSelectAircraft,
+                    onSaveAircraft = onSaveAircraft,
+                    onDeleteAircraft = onDeleteAircraft,
+                    onAircraftVerifiedChange = onAircraftVerifiedChange,
+                    onPerformanceChange = onPerformanceChange,
                 )
                 2 -> SavedRoutesTab(
                     waypoints = waypoints,
@@ -430,8 +447,29 @@ private fun NavLogTab(
 private fun AircraftAndWbTab(
     profile: AircraftProfileData,
     onProfileChange: (AircraftProfileData) -> Unit,
+    fleet: List<Aircraft>,
+    selectedAircraftId: Long?,
+    onSelectAircraft: (Long) -> Unit,
+    onSaveAircraft: (Aircraft) -> Unit,
+    onDeleteAircraft: (Long) -> Unit,
+    onAircraftVerifiedChange: (Long, Boolean) -> Unit,
+    onPerformanceChange: (Long, PerformancePhase, List<PerformancePoint>) -> Unit,
 ) {
+    val selected = fleet.firstOrNull { it.id == selectedAircraftId } ?: fleet.firstOrNull()
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (fleet.isNotEmpty()) {
+            AircraftPicker(
+                fleet = fleet,
+                selectedId = selectedAircraftId,
+                onSelect = onSelectAircraft,
+                onAdd = { onSaveAircraft(Aircraft(registration = "New aircraft")) },
+                onDelete = onDeleteAircraft,
+                onVerifiedChange = onAircraftVerifiedChange,
+            )
+            HorizontalDivider()
+        }
+
         Text(
             "Aircraft Performance",
             style = MaterialTheme.typography.titleMedium,
@@ -515,6 +553,34 @@ private fun AircraftAndWbTab(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.labelMedium,
             )
+        }
+
+        selected?.let { aircraft ->
+            HorizontalDivider()
+            Text(
+                "POH tables",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Optional. With a table, each leg is planned at its own altitude " +
+                    "instead of one cruise number for the whole flight; without one, " +
+                    "the figures above are used.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            PerformancePhase.entries.forEach { phase ->
+                PerformanceTableEditor(
+                    phase = phase,
+                    rows = when (phase) {
+                        PerformancePhase.CLIMB -> aircraft.performance.climb
+                        PerformancePhase.CRUISE -> aircraft.performance.cruise
+                        PerformancePhase.DESCENT -> aircraft.performance.descent
+                    },
+                    onChange = { rows -> onPerformanceChange(aircraft.id, phase, rows) },
+                )
+            }
+            HorizontalDivider()
         }
 
         Text("Loading", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -705,7 +771,7 @@ private fun HeaderCell(text: String, width: Dp) {
 }
 
 @Composable
-private fun NumberInputField(
+internal fun NumberInputField(
     label: String,
     value: Double,
     onValueChange: (Double) -> Unit,
@@ -731,4 +797,26 @@ private fun formatEte(hours: Double): String {
     val h = totalMinutes / 60
     val m = totalMinutes % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+/**
+ * A POH cruise power setting — "65%", "2400 RPM".
+ *
+ * Free text rather than a picker because POHs disagree about what they
+ * key cruise tables on, and forcing one vocabulary would make some
+ * aircraft untypeable.
+ */
+@Composable
+internal fun PowerSettingField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text("") },
+        singleLine = true,
+        modifier = modifier,
+    )
 }
