@@ -64,6 +64,17 @@ pub enum ApplyError {
 /// cycle to the next; addressed by content, an unchanged chart is already
 /// installed and costs nothing. `chart_catalog.sha256` (migration 0007) is
 /// what maps a cycle's chart id onto a blob.
+///
+/// How much that saves depends on whether the two cycles share an FAA
+/// *chart* cycle, which is 56 days against AIRAC's 28. Measured between
+/// the published 2026-08-06 and 2026-10-01 bundles — two AIRAC cycles
+/// apart, so exactly one full chart cycle — only 4 of 181 archives were
+/// byte-identical: the charts had rolled from one edition to the next, and
+/// a device updating across that boundary re-downloads essentially
+/// everything it holds. Between *consecutive* AIRAC cycles, where the
+/// chart edition has not rolled, the reuse is near-total. The four matches
+/// are also the evidence that tiling is deterministic: if it were not,
+/// nothing would ever match and this scheme would save nothing at all.
 #[derive(Debug, Clone)]
 pub struct BundleLayout {
     root: PathBuf,
