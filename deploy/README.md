@@ -335,6 +335,22 @@ GDAL CLI tools, which vya2 does **not** have — build the cycle where
 GDAL is available (WSL/Debian has both; a full run is ~2h40m and ~23 GB),
 then ship it.
 
+The build's inputs live in `.env` at the repo root — gitignored, with
+`.env.example` tracked beside it as the template. Load it first:
+
+```sh
+set -a; . ./.env; set +a      # FF_OPENAIP_API_KEY, FF_AIXM_FR_PATH, FF_ETL_DATA_DIR
+```
+
+Both data variables are optional, which is the trap: unset, the pipeline
+builds a cycle *without* that country and says so only in a log line. A
+US-only cycle is ~13,300 airports where a complete one is ~18,800. Check
+the attributions of what you built before publishing it:
+
+```sh
+sqlite3 <bundle> 'SELECT name, effective_date FROM data_source'
+```
+
 **Copy the cycle directory first and `latest.json` only afterwards.**
 `latest.json` is what makes a cycle live, so copying it alongside a
 transfer still in flight points clients at a half-present cycle. Both
