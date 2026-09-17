@@ -55,7 +55,10 @@ pub fn count(conn: &Connection, table: &str) -> u32 {
 pub fn airports_in_bbox(conn: &Connection, bbox: BoundingBox, limit: u32) -> Result<Vec<Airport>> {
     let sql = format!(
         "SELECT icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type,
-                EXISTS(SELECT 1 FROM procedure WHERE procedure.airport_icao = airport.icao)
+                EXISTS(SELECT 1 FROM procedure WHERE procedure.airport_icao = airport.icao),
+                EXISTS(SELECT 1 FROM frequency
+                       WHERE frequency.airport_icao = airport.icao
+                         AND frequency.kind = 'TWR')
          FROM airport
          WHERE lat BETWEEN ?1 AND ?2 AND {}
          ORDER BY 9 DESC, (airport_type = 'Airport') DESC, icao
@@ -105,6 +108,7 @@ fn airport_from_row(row: &Row) -> rusqlite::Result<Airport> {
         elevation_ft: row.get(6)?,
         airport_type: row.get(7)?,
         has_procedures: row.get::<_, Option<bool>>(8)?.unwrap_or(false),
+        towered: row.get::<_, Option<bool>>(9)?.unwrap_or(false),
     })
 }
 
@@ -171,7 +175,10 @@ pub fn airport_detail(conn: &Connection, icao: &str) -> Result<AirportDetail> {
     let airport = conn
         .query_row(
             "SELECT icao, faa_id, iata, name, lat, lon, elevation_ft, airport_type,
-                    EXISTS(SELECT 1 FROM procedure WHERE procedure.airport_icao = airport.icao)
+                    EXISTS(SELECT 1 FROM procedure WHERE procedure.airport_icao = airport.icao),
+                    EXISTS(SELECT 1 FROM frequency
+                           WHERE frequency.airport_icao = airport.icao
+                             AND frequency.kind = 'TWR')
              FROM airport WHERE icao = ?1",
             [&icao],
             airport_from_row,

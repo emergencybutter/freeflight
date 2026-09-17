@@ -60,6 +60,12 @@ pub struct Airport {
     /// the airport sheet uses to decide whether to offer a Procedures tab
     /// at all. Only populated by the queries that need it.
     pub has_procedures: bool,
+    /// Whether the field has a control tower, taken from it having a `TWR`
+    /// frequency in the bundle. This is what the sectional's blue-versus-
+    /// magenta says, and it comes out of the cycle rather than off the
+    /// network, so it means the same thing with no signal. Only populated
+    /// by the queries that need it.
+    pub towered: bool,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]

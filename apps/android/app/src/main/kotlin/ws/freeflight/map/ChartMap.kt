@@ -632,17 +632,44 @@ class MapController {
         )
 
     /**
-     * The standard flight-category colours pilots already read on every
-     * other briefing product — and a distinct grey for "no observation",
-     * which must never be mistaken for VFR.
+     * Blue for towered, magenta for not — the sectional's own convention,
+     * so it needs no legend.
+     *
+     * Deliberately the chart's deeper shades rather than the brighter ones
+     * in the flight-category palette above: a dot is coloured by one scheme
+     * or the other, never both, and the two blues have to stay tellable
+     * apart on a map showing some fields with weather and some without.
+     */
+    private fun towerColor(): Expression = Expression.switchCase(
+        Expression.get("towered"), Expression.literal(TOWERED),
+        Expression.literal(NON_TOWERED),
+    )
+
+    /**
+     * What the weather is doing, wherever it is known, falling back to
+     * [towerColor] where it is not.
+     *
+     * The fallback used to be one grey for every unobserved field, which is
+     * most of them: small airports have no station, and with no network it
+     * is all of them. Grey at least could not be mistaken for VFR, but it
+     * said nothing. Tower status says something, it is the first thing a
+     * sectional tells you about a field, and it comes out of the bundle —
+     * so it is there in the air, which is where the weather is not.
+     *
+     * That costs the standard category palette its blue and its magenta,
+     * which now mean towered and not. What replaces them is a severity
+     * ramp — green, yellow, orange, red — because these dots are 3 to 8
+     * pixels across, and at that size two shades of red for IFR and LIFR
+     * would be one colour. The ramp also puts the worst category on the
+     * strongest colour, which the standard palette does not.
      */
     private fun flightCategoryColor(): Expression = Expression.match(
         Expression.coalesce(Expression.get("flightCategory"), Expression.literal("UNKNOWN")),
-        Expression.literal("#9E9E9E"),
-        Expression.stop("VFR", Expression.literal("#4CAF50")),
-        Expression.stop("MVFR", Expression.literal("#2196F3")),
-        Expression.stop("IFR", Expression.literal("#F44336")),
-        Expression.stop("LIFR", Expression.literal("#E040FB")),
+        towerColor(),
+        Expression.stop("VFR", Expression.literal(VFR)),
+        Expression.stop("MVFR", Expression.literal(MVFR)),
+        Expression.stop("IFR", Expression.literal(IFR)),
+        Expression.stop("LIFR", Expression.literal(LIFR)),
     )
 
     /**
@@ -853,6 +880,20 @@ class MapController {
 
         private const val AIRPORTS_SOURCE = "airports"
         const val AIRPORTS_LAYER = "airports-circle"
+
+        /** Tower status: the sectional's own blue and magenta, which is why
+         *  the flight categories below use neither. */
+        private const val TOWERED = "#2C6FBB"
+        private const val NON_TOWERED = "#C2186F"
+
+        /** Flight category, worsening. A ramp rather than the standard
+         *  green/blue/red/magenta, which blue and magenta are now spoken
+         *  for — and four hues stay apart at dot size where four shades
+         *  would not. */
+        private const val VFR = "#4CAF50"
+        private const val MVFR = "#FFD54F"
+        private const val IFR = "#FF8F00"
+        private const val LIFR = "#E53935"
 
 
         private const val BASEMAP_STYLE_ASSET = "basemap_style.json"

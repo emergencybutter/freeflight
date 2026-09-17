@@ -38,6 +38,7 @@ object GeoJson {
                         put("icao", airport.icao)
                         put("name", airport.name)
                         put("hasProcedures", airport.hasProcedures)
+                        put("towered", airport.towered)
                         put("type", airport.airportType)
                         flightCategories[airport.icao]?.let { put("flightCategory", it) }
                     },

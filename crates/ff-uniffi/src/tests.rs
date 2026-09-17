@@ -462,6 +462,29 @@ fn a_cropped_viewport_keeps_the_airports_with_procedures() {
 }
 
 #[test]
+fn a_tower_frequency_is_what_makes_a_field_towered() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+    let wide = BoundingBox {
+        min_lat: 47.0,
+        min_lon: -123.0,
+        max_lat: 48.5,
+        max_lon: -121.0,
+    };
+
+    let airports = fixture.core.airports_in_bbox(wide, 10).unwrap();
+    let towered: Vec<(&str, bool)> = airports
+        .iter()
+        .map(|a| (a.icao.as_str(), a.towered))
+        .collect();
+
+    // KSEA has a TWR frequency; Harvey Field has none. This is the
+    // blue-versus-magenta the sectional draws, and it has to come out of
+    // the bundle rather than off the network.
+    assert!(towered.contains(&("KSEA", true)));
+    assert!(towered.contains(&("S43", false)));
+}
+
+#[test]
 fn a_viewport_across_the_antimeridian_still_finds_airports() {
     let fixture = Fixture::with_cycle("2026-07-09");
     // Crosses 180°, so the western edge is numerically greater than the
@@ -514,6 +537,7 @@ fn an_airport_carries_its_runways_frequencies_and_diagram() {
 
     assert_eq!(detail.airport.name, "Seattle-Tacoma Intl");
     assert!(detail.airport.has_procedures);
+    assert!(detail.airport.towered);
     assert_eq!(detail.runways.len(), 1);
     assert_eq!(detail.runways[0].length_ft, 11901);
     assert_eq!(detail.frequencies[0].freq_mhz, 119.9);

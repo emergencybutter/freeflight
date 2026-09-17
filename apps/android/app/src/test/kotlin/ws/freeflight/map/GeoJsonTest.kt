@@ -101,6 +101,7 @@ class GeoJsonTest {
                         elevationFt = 672,
                         airportType = "Airport",
                         hasProcedures = true,
+                        towered = true,
                     )
                 ),
                 flightCategories = mapOf("KORD" to "VFR"),
@@ -127,6 +128,7 @@ class GeoJsonTest {
                         elevationFt = 433,
                         airportType = "Airport",
                         hasProcedures = true,
+                        towered = true,
                     )
                 ),
                 flightCategories = emptyMap(),
@@ -138,6 +140,36 @@ class GeoJsonTest {
         val coordinates = geometry.getValue("coordinates").jsonArray
         assertEquals(-122.31, coordinates[0].jsonPrimitive.content.toDouble(), 1e-9)
         assertEquals(47.45, coordinates[1].jsonPrimitive.content.toDouble(), 1e-9)
+    }
+
+    @Test
+    fun `tower status reaches the map layer as a property`() {
+        // The map colours an unobserved field by this, so it has to be on
+        // every airport feature rather than only the towered ones.
+        fun airport(icao: String, towered: Boolean) = Airport(
+            icao = icao,
+            faaId = null,
+            iata = null,
+            name = icao,
+            lat = 47.0,
+            lon = -122.0,
+            elevationFt = 100,
+            airportType = "Airport",
+            hasProcedures = false,
+            towered = towered,
+        )
+
+        val parsed = features(
+            GeoJson.airports(
+                listOf(airport("KSEA", towered = true), airport("S43", towered = false)),
+                flightCategories = emptyMap(),
+            )
+        )
+
+        assertEquals(
+            listOf(true, false),
+            parsed.map { it.jsonObject.getValue("properties").jsonObject.getValue("towered").jsonPrimitive.content.toBoolean() },
+        )
     }
 
     @Test
