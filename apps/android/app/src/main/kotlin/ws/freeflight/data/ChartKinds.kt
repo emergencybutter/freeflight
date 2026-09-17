@@ -1,50 +1,32 @@
 package ws.freeflight.data
 
 /**
- * Labels and ordering for `chart_catalog.kind`, matching what the web
- * client shows (`CHART_KIND_LABELS` / `CHART_KIND_ORDER` in
- * `apps/web/src/MapView.tsx`).
+ * Labels and ordering for `chart_catalog.kind`.
  *
- * Both clients read the same catalogue and both let a pilot pick a *chart
- * series* rather than an individual sheet, so the vocabulary should be the
- * same on each — someone who knows "IFR Low" on the web should not have to
- * learn "IFR Enroute Low charts" on the phone. Kept deliberately terse:
- * these appear in a map control sitting on top of a chart.
+ * The definitions live in Rust (`crates/ff-core/src/vocabulary.rs`) and
+ * this delegates to them through `ff-uniffi`. They used to be duplicated
+ * here and in `apps/web/src/MapView.tsx`, which is how the two clients
+ * came to disagree about what a chart kind is called — someone who knew
+ * "IFR Low" on the web should not meet "IfrEnrouteLow" on the phone.
  *
- * The raw kind strings come from `chart_kind_str` in
- * `services/ff-etl/src/bundle.rs`. Anything not listed falls back to the
- * raw string and sorts last, so a new kind appearing in a future cycle
- * shows up unlabelled rather than disappearing.
+ * Web reads the same definitions from a generated TypeScript module
+ * rather than through wasm; the map path loads no wasm, and a label is
+ * not worth an async init on that screen.
+ *
+ * Kept as a Kotlin object rather than calling the bindings directly at
+ * every call site, so the UI keeps a small idiomatic surface and the
+ * binding stays one hop away.
  */
 object ChartKinds {
 
-    private val LABELS = mapOf(
-        "Sectional" to "Sectional",
-        "TerminalAreaChart" to "TAC",
-        "VfrFlyway" to "Flyway",
-        "HelicopterRoute" to "Heli",
-        "IfrEnrouteLow" to "IFR Low",
-        "IfrEnrouteHigh" to "IFR High",
-    )
-
-    // VFR broad → terminal, then IFR, then the specialty heli charts.
-    private val ORDER = mapOf(
-        "Sectional" to 0,
-        "TerminalAreaChart" to 1,
-        "VfrFlyway" to 2,
-        "IfrEnrouteLow" to 3,
-        "IfrEnrouteHigh" to 4,
-        "HelicopterRoute" to 5,
-    )
-
     /** The kind a fresh install draws, when it has one. */
-    const val DEFAULT = "Sectional"
+    val DEFAULT: String get() = uniffi.ff_uniffi.defaultChartKind()
 
-    fun label(kind: String): String = LABELS[kind] ?: kind
+    fun label(kind: String): String = uniffi.ff_uniffi.chartKindLabel(kind)
 
-    fun order(kind: String): Int = ORDER[kind] ?: 99
+    fun order(kind: String): Int = uniffi.ff_uniffi.chartKindOrder(kind).toInt()
 
-    /** Kinds present in `charts`, in the order the selector should list them. */
+    /** Kinds present in `kinds`, in the order the selector should list them. */
     fun ordered(kinds: Collection<String>): List<String> =
         kinds.distinct().sortedWith(compareBy({ order(it) }, { it }))
 }

@@ -11,6 +11,7 @@ pub mod airway;
 pub mod cycle;
 pub mod navaid;
 pub mod procedure;
+pub mod vocabulary;
 
 pub use airport::{
     Airport, AirportType, Frequency, FrequencyKind, Runway, RunwayEnd, RunwaySurface,

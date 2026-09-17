@@ -532,7 +532,10 @@ pub fn analyze_track_json(track_points_json: String) -> Result<String, CoreError
 
 /// Export a track JSON array to GPX 1.1 XML string.
 #[uniffi::export]
-pub fn export_track_gpx(track_points_json: String, flight_name: String) -> Result<String, CoreError> {
+pub fn export_track_gpx(
+    track_points_json: String,
+    flight_name: String,
+) -> Result<String, CoreError> {
     let points: Vec<ff_postflight::TrackPoint> = serde_json::from_str(&track_points_json)
         .map_err(|e| CoreError::InvalidTrack(e.to_string()))?;
     Ok(ff_postflight::export_gpx(&points, &flight_name))
@@ -540,7 +543,10 @@ pub fn export_track_gpx(track_points_json: String, flight_name: String) -> Resul
 
 /// Export an AnalyzedTrack JSON to CSV logbook string.
 #[uniffi::export]
-pub fn export_flight_csv(analyzed_track_json: String, flight_name: String) -> Result<String, CoreError> {
+pub fn export_flight_csv(
+    analyzed_track_json: String,
+    flight_name: String,
+) -> Result<String, CoreError> {
     let analyzed: ff_postflight::AnalyzedTrack = serde_json::from_str(&analyzed_track_json)
         .map_err(|e| CoreError::InvalidTrack(e.to_string()))?;
     Ok(ff_postflight::export_csv(&analyzed, &flight_name))
@@ -548,3 +554,48 @@ pub fn export_flight_csv(analyzed_track_json: String, flight_name: String) -> Re
 
 #[cfg(test)]
 mod tests;
+
+// ---- shared vocabulary ---------------------------------------------------
+//
+// Thin re-exports of `ff_core::vocabulary`, which is the one copy of how
+// charts and airports are named and ordered. The web client reads the same
+// definitions through a generated TypeScript module rather than through
+// wasm (see that module's docs for why), so these two clients cannot drift
+// apart on vocabulary the way they did before it was consolidated.
+
+/// Short label for a `chart_catalog.kind` — "TAC", "IFR Low".
+#[uniffi::export]
+pub fn chart_kind_label(kind: String) -> String {
+    ff_core::vocabulary::chart_kind_label(&kind).to_string()
+}
+
+/// Where a kind sits in a chart selector; unknown kinds sort last.
+#[uniffi::export]
+pub fn chart_kind_order(kind: String) -> u32 {
+    ff_core::vocabulary::chart_kind_order(&kind)
+}
+
+/// The chart kind a fresh install draws.
+#[uniffi::export]
+pub fn default_chart_kind() -> String {
+    ff_core::vocabulary::DEFAULT_CHART_KIND.to_string()
+}
+
+/// What one sheet is called in a list a pilot chooses from. Takes the
+/// catalogue's own id and name; only the IFR enroute series is renamed.
+#[uniffi::export]
+pub fn chart_sheet_label(chart_id: String, catalogue_name: String) -> String {
+    ff_core::vocabulary::chart_sheet_label(
+        ff_core::vocabulary::chart_slug(&chart_id),
+        &catalogue_name,
+    )
+}
+
+/// Sort key for sheets within one kind.
+#[uniffi::export]
+pub fn chart_sheet_sort_key(chart_id: String, catalogue_name: String) -> String {
+    ff_core::vocabulary::chart_sheet_sort_key(
+        ff_core::vocabulary::chart_slug(&chart_id),
+        &catalogue_name,
+    )
+}

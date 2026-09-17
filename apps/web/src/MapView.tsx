@@ -6,6 +6,11 @@ import { API_BASE_URL } from "./api";
 import { loadMapView, saveMapView, loadButterlogUserId } from "./persistence";
 import type { VerticalPoint, VerticalProfile } from "./planning/wasm";
 import {
+  CHART_KIND_LABELS,
+  CHART_KIND_ORDER,
+  DEFAULT_CHART_KIND,
+} from "./chartVocabulary";
+import {
   fetchAirportDetail,
   fetchAirportsInBbox,
   fetchAirspaceInBbox,
@@ -60,30 +65,6 @@ function nearestWindsAloftLevel(altitudeFt: number): number {
     Math.abs(level - altitudeFt) < Math.abs(closest - altitudeFt) ? level : closest,
   );
 }
-
-/** Friendly labels for `chart_catalog.kind` values (see `chart_kind_str`
- * in services/ff-etl/src/bundle.rs) — falls back to the raw kind string
- * for anything not listed here. */
-const CHART_KIND_LABELS: Record<string, string> = {
-  Sectional: "Sectional",
-  TerminalAreaChart: "TAC",
-  VfrFlyway: "Flyway",
-  HelicopterRoute: "Heli",
-  IfrEnrouteLow: "IFR Low",
-  IfrEnrouteHigh: "IFR High",
-};
-
-// Dropdown order for the base-chart selector — VFR (broad → terminal),
-// then IFR, then the specialty heli charts. Kinds not listed fall to the
-// end. Independent of the catalog's own alphabetical ordering.
-const CHART_KIND_ORDER: Record<string, number> = {
-  Sectional: 0,
-  TerminalAreaChart: 1,
-  VfrFlyway: 2,
-  IfrEnrouteLow: 3,
-  IfrEnrouteHigh: 4,
-  HelicopterRoute: 5,
-};
 
 const FLIGHT_CATEGORY_COLORS: Record<string, string> = {
   VFR: "#3fa64a",
@@ -1014,7 +995,7 @@ export const MapView = forwardRef<
   // effect's comment.
   const skipNextRouteFitRef = useRef(initialView !== undefined || persistedView.center !== undefined);
   const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(() => {
-    const kind = initialView !== undefined ? initialView.chartKind : (persistedView.chartKind ?? "Sectional");
+    const kind = initialView !== undefined ? initialView.chartKind : (persistedView.chartKind ?? DEFAULT_CHART_KIND);
     return kind === null ? new Set() : new Set([kind]);
   });
   // Independent on/off toggles (unlike the chart-kind group above, these

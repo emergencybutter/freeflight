@@ -22,6 +22,7 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [dependencies]
+ff-core.workspace = true
 ff-planning.workspace = true
 ff-postflight.workspace = true
 ff-sync.workspace = true

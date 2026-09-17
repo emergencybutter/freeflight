@@ -785,7 +785,16 @@ class MapController {
         private const val TRACK_LINE_LAYER = "track-line"
         private const val PIREP_SOURCE = "pireps"
         private const val PIREP_LAYER = "pirep-circle"
-        /** Below this, no airport markers at all — the chart still reads. */
+        /**
+         * Below this, no airport markers at all — the chart still reads.
+         *
+         * Deliberately this client's own number rather than a shared one.
+         * Web starts at 7 because it streams from `ff-api` with no
+         * per-view cap, so a lower floor means a continent-sized query;
+         * this client reads a local bundle behind AIRPORT_LIMIT, so a wide
+         * view is already bounded. `ff-core`'s vocabulary module records
+         * why the two differ.
+         */
         const val AIRPORT_PROCEDURES_ZOOM = 5.0
 
         /** At and above this, every airport in the viewport, not just

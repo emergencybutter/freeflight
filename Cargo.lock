@@ -1016,6 +1016,7 @@ dependencies = [
 name = "ff-uniffi"
 version = "0.1.0"
 dependencies = [
+ "ff-core",
  "ff-planning",
  "ff-postflight",
  "ff-storage",
