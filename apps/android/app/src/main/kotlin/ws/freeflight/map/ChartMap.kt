@@ -427,14 +427,19 @@ class MapController {
         loaded.addSource(GeoJsonSource(PIREP_SOURCE, pendingPireps))
         loaded.addSource(GeoJsonSource(AIRPORTS_SOURCE, pendingAirports))
 
-        // Class B/C/D and Special Use, tinted by class. Kept translucent:
-        // the sectional underneath already draws these boundaries, and the
-        // vector copy is here to be *tapped*, not to repaint the chart.
+        // Only the controlled-airspace classes are filled. A translucent
+        // fill reads well for one or two shelves and terribly for a stack:
+        // 18 volumes overlap at LFPG — 11 of them RESTRICTED — and at 7%
+        // each that composites to roughly 58% opaque, washing the chart
+        // out over the busiest airspace on the map, which is exactly where
+        // the chart matters most. Class B/C/D rarely stack more than a few
+        // shelves deep, so they keep the tint; everything else is drawn as
+        // its boundary only, which is how a sectional draws it anyway.
         loaded.addLayer(
             FillLayer(AIRSPACE_FILL_LAYER, AIRSPACE_SOURCE).withProperties(
                 PropertyFactory.fillColor(airspaceColor()),
                 PropertyFactory.fillOpacity(0.07f),
-            )
+            ).withFilter(isControlledAirspace())
         )
         loaded.addLayer(
             LineLayer(AIRSPACE_LINE_LAYER, AIRSPACE_SOURCE).withProperties(
@@ -640,12 +645,57 @@ class MapController {
         Expression.stop("LIFR", Expression.literal("#E040FB")),
     )
 
+    /**
+     * The classes whose boundaries get a translucent tint.
+     *
+     * Deliberately just the controlled-airspace shelves a VFR pilot must
+     * not enter unannounced. Special Use volumes stack far too deep to
+     * fill (see the layer comment), and the wide-area ICAO classes are
+     * worse still — Class E covers most of the country above 1200 AGL, so
+     * filling it would tint the entire map for no information.
+     */
+    private fun isControlledAirspace(): Expression = Expression.any(
+        Expression.eq(Expression.get("class"), Expression.literal("B")),
+        Expression.eq(Expression.get("class"), Expression.literal("C")),
+        Expression.eq(Expression.get("class"), Expression.literal("D")),
+    )
+
+    /**
+     * Boundary colour by class.
+     *
+     * Only B/C/D were named before, so everything else — Special Use,
+     * Class E and G, the European RMZ/TMZ/ATZ that arrived with the
+     * France data — fell to one orange default. That made a restricted
+     * area indistinguishable from Class E at a glance, and it is the
+     * reason France rendered as an orange smear.
+     *
+     * Grouped by what a pilot does about them: blue for the controlled
+     * shelves, magenta for Class C as the chart draws it, red for the
+     * Special Use volumes you may not simply fly into, amber for the
+     * advisory ones, and grey for wide-area classes that are context
+     * rather than a boundary to avoid.
+     */
     private fun airspaceColor(): Expression = Expression.match(
         Expression.coalesce(Expression.get("class"), Expression.literal("OTHER")),
-        Expression.literal("#FF7043"),
+        Expression.literal("#8A8A8A"),
         Expression.stop("B", Expression.literal("#4FC3F7")),
         Expression.stop("C", Expression.literal("#BA68C8")),
         Expression.stop("D", Expression.literal("#4FC3F7")),
+        // Special Use you cannot enter without clearance or activity check.
+        Expression.stop("PROHIBITED", Expression.literal("#E5484D")),
+        Expression.stop("RESTRICTED", Expression.literal("#E5484D")),
+        Expression.stop("WARNING", Expression.literal("#E5484D")),
+        Expression.stop("DANGER", Expression.literal("#E5484D")),
+        // Special Use that is advisory: see and avoid, or call.
+        Expression.stop("MOA", Expression.literal("#FF7043")),
+        Expression.stop("ALERT", Expression.literal("#FF7043")),
+        Expression.stop("PARACHUTE", Expression.literal("#FF7043")),
+        Expression.stop("GLIDER", Expression.literal("#FF7043")),
+        Expression.stop("LOW FLYING", Expression.literal("#FF7043")),
+        // European radio/transponder mandatory zones, from the SIA data.
+        Expression.stop("RMZ", Expression.literal("#BA68C8")),
+        Expression.stop("TMZ", Expression.literal("#BA68C8")),
+        Expression.stop("ATZ", Expression.literal("#4FC3F7")),
     )
 
     private fun gairmetColor(): Expression = Expression.match(
