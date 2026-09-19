@@ -612,6 +612,77 @@ mod tests {
         }
     }
 
+    /// The same trap as the Bonanzas, one airframe family over. `S22T`
+    /// is the turbocharged SR22 (ICAO Doc 8643: CIRRUS SR22T, class
+    /// L1P) and ships as its own template rather than as a note on
+    /// `SR22`, because it keeps making power into the flight levels
+    /// where the IO-550-N has long since run out of air. Lookup clamps
+    /// (§9.5.6), so planning an FL230 leg against the normally-aspirated
+    /// table would quietly reuse its 12,000 ft numbers: slower than the
+    /// aeroplane flies, and — the half that matters — cheaper on fuel
+    /// than it burns.
+    #[test]
+    fn the_turbo_cirrus_plans_the_flight_levels_the_sr22_cannot() {
+        let find = |icao: &str| {
+            templates()
+                .iter()
+                .find(|t| t.icao_type == icao)
+                .unwrap_or_else(|| panic!("{icao} template"))
+        };
+        let turbo = find("S22T");
+        let normal = find("SR22");
+
+        let ceiling = |t: &AircraftTemplate| {
+            t.cruise
+                .iter()
+                .map(|r| r.pressure_altitude_ft)
+                .max()
+                .unwrap_or(0)
+        };
+        assert!(
+            ceiling(turbo) >= 20000,
+            "the SR22T's cruise table stops at {} ft — below the altitudes it is certified and bought for",
+            ceiling(turbo)
+        );
+        assert!(
+            ceiling(turbo) > ceiling(normal),
+            "the turbo table ({} ft) should reach higher than the normally-aspirated one ({} ft)",
+            ceiling(turbo),
+            ceiling(normal)
+        );
+        assert!(
+            turbo.climb.iter().map(|r| r.pressure_altitude_ft).max() >= Some(20000),
+            "a climb table that stops low clamps the whole descent-to-cruise profile with it"
+        );
+
+        // TAS rises with altitude, compared within one power setting —
+        // across settings the comparison is meaningless.
+        let settings: std::collections::BTreeSet<&str> = turbo
+            .cruise
+            .iter()
+            .map(|r| r.power_setting.as_str())
+            .collect();
+        assert!(settings.len() > 1, "expected several power settings");
+        for setting in settings {
+            let mut rows: Vec<&PerformanceRow> = turbo
+                .cruise
+                .iter()
+                .filter(|r| r.power_setting == setting)
+                .collect();
+            rows.sort_by_key(|r| r.pressure_altitude_ft);
+            for pair in rows.windows(2) {
+                assert!(
+                    pair[1].tas_kt > pair[0].tas_kt,
+                    "at {setting}, TAS fell from {} kt at {} ft to {} kt at {} ft",
+                    pair[0].tas_kt,
+                    pair[0].pressure_altitude_ft,
+                    pair[1].tas_kt,
+                    pair[1].pressure_altitude_ft
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_template_never_overrides_what_the_pilot_typed() {
         let template = templates()

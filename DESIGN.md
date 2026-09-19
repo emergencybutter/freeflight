@@ -1373,8 +1373,25 @@ so in the nav log. This is a flight-planning tool; the failure mode of
 silently-trusted wrong numbers is not an inconvenience.
 
 Seed catalog starts small and honest — C172, C182, P28A, DA40, SR20,
-SR22, BE36, BT36, B36T — rather than shipping a long list of half-guessed
-entries.
+SR22, S22T, BE36, BT36, B36T — rather than shipping a long list of
+half-guessed entries.
+
+**`S22T` (Cirrus SR22T) is a separate template from `SR22`, for the same
+reason `BT36` is separate from `BE36`:** the turbocharged TSIO-550-K holds
+power into the mid-twenties where the normally-aspirated IO-550-N does
+not, so its cruise table runs to 25,000 ft with TAS still *rising* at the
+top of it. Reusing the `SR22` template would clamp an FL230 leg to the
+naturally-aspirated aeroplane's 12,000 ft figures (§9.5.6 clamps rather
+than extrapolates) — planning it slow and, worse, cheap on fuel. `S22T`
+is the ICAO Doc 8643 designator (CIRRUS SR22T, class L1P); `SR22` is the
+non-turbo airframe.
+
+Unlike the Bonanzas below, these figures are **estimated, not
+transcribed**: published Cirrus performance points (1,200 fpm sea-level
+climb, 213 KTAS max cruise at 25,000 ft, 92 gal usable, 3,600 lb gross)
+interpolated into a self-consistent 75/65/55% table. That is exactly the
+case `verified_at` exists for — seed, fly the numbers you have, replace
+them with the ones out of your own POH.
 
 **Bonanza family — sourced, and from where.** The three Bonanza templates
 are transcribed from published tables rather than estimated, which is why

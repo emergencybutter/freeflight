@@ -510,6 +510,190 @@
     ]
   },
   {
+    "icao_type": "S22T",
+    "name": "Cirrus SR22T",
+    "cruise_tas_kt": 193.0,
+    "cruise_fuel_gph": 18.5,
+    "climb_rate_fpm": 1200.0,
+    "climb_tas_kt": 101.0,
+    "climb_fuel_gph": 30.0,
+    "descent_rate_fpm": 500.0,
+    "descent_tas_kt": 185.0,
+    "descent_fuel_gph": 12.5,
+    "taxi_fuel_gal": 2.0,
+    "fuel_capacity_gal": 92.0,
+    "reserve_minutes": 45,
+    "max_gross_weight_lb": 3600.0,
+    "climb": [
+      {
+        "pressure_altitude_ft": 0,
+        "vertical_speed_fpm": 1200.0,
+        "tas_kt": 101.0,
+        "fuel_gph": 30.0
+      },
+      {
+        "pressure_altitude_ft": 5000,
+        "vertical_speed_fpm": 1100.0,
+        "tas_kt": 105.0,
+        "fuel_gph": 29.0
+      },
+      {
+        "pressure_altitude_ft": 10000,
+        "vertical_speed_fpm": 1000.0,
+        "tas_kt": 110.0,
+        "fuel_gph": 28.0
+      },
+      {
+        "pressure_altitude_ft": 15000,
+        "vertical_speed_fpm": 850.0,
+        "tas_kt": 116.0,
+        "fuel_gph": 27.0
+      },
+      {
+        "pressure_altitude_ft": 20000,
+        "vertical_speed_fpm": 700.0,
+        "tas_kt": 122.0,
+        "fuel_gph": 26.0
+      },
+      {
+        "pressure_altitude_ft": 25000,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 128.0,
+        "fuel_gph": 25.0
+      }
+    ],
+    "cruise": [
+      {
+        "pressure_altitude_ft": 4000,
+        "power_setting": "75%",
+        "tas_kt": 175.0,
+        "fuel_gph": 18.8
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "power_setting": "75%",
+        "tas_kt": 183.0,
+        "fuel_gph": 18.7
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "power_setting": "75%",
+        "tas_kt": 193.0,
+        "fuel_gph": 18.5
+      },
+      {
+        "pressure_altitude_ft": 16000,
+        "power_setting": "75%",
+        "tas_kt": 201.0,
+        "fuel_gph": 18.4
+      },
+      {
+        "pressure_altitude_ft": 20000,
+        "power_setting": "75%",
+        "tas_kt": 208.0,
+        "fuel_gph": 18.3
+      },
+      {
+        "pressure_altitude_ft": 25000,
+        "power_setting": "75%",
+        "tas_kt": 213.0,
+        "fuel_gph": 18.0
+      },
+      {
+        "pressure_altitude_ft": 4000,
+        "power_setting": "65%",
+        "tas_kt": 164.0,
+        "fuel_gph": 16.4
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "power_setting": "65%",
+        "tas_kt": 171.0,
+        "fuel_gph": 16.3
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "power_setting": "65%",
+        "tas_kt": 180.0,
+        "fuel_gph": 16.2
+      },
+      {
+        "pressure_altitude_ft": 16000,
+        "power_setting": "65%",
+        "tas_kt": 187.0,
+        "fuel_gph": 16.0
+      },
+      {
+        "pressure_altitude_ft": 20000,
+        "power_setting": "65%",
+        "tas_kt": 193.0,
+        "fuel_gph": 15.8
+      },
+      {
+        "pressure_altitude_ft": 25000,
+        "power_setting": "65%",
+        "tas_kt": 199.0,
+        "fuel_gph": 15.5
+      },
+      {
+        "pressure_altitude_ft": 4000,
+        "power_setting": "55%",
+        "tas_kt": 150.0,
+        "fuel_gph": 14.0
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "power_setting": "55%",
+        "tas_kt": 157.0,
+        "fuel_gph": 13.9
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "power_setting": "55%",
+        "tas_kt": 165.0,
+        "fuel_gph": 13.8
+      },
+      {
+        "pressure_altitude_ft": 16000,
+        "power_setting": "55%",
+        "tas_kt": 171.0,
+        "fuel_gph": 13.6
+      },
+      {
+        "pressure_altitude_ft": 20000,
+        "power_setting": "55%",
+        "tas_kt": 177.0,
+        "fuel_gph": 13.4
+      },
+      {
+        "pressure_altitude_ft": 25000,
+        "power_setting": "55%",
+        "tas_kt": 182.0,
+        "fuel_gph": 13.2
+      }
+    ],
+    "descent": [
+      {
+        "pressure_altitude_ft": 0,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 175.0,
+        "fuel_gph": 12.0
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 190.0,
+        "fuel_gph": 12.5
+      },
+      {
+        "pressure_altitude_ft": 25000,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 205.0,
+        "fuel_gph": 13.0
+      }
+    ]
+  },
+  {
     "icao_type": "BE36",
     "name": "Beechcraft A36 Bonanza",
     "cruise_tas_kt": 165.0,
