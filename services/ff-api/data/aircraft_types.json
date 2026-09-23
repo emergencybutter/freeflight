@@ -1148,5 +1148,129 @@
         "fuel_gph": 27.0
       }
     ]
+  },
+  {
+    "icao_type": "LEG2",
+    "name": "Lancair Legacy 2000 (IO-550-N)",
+    "cruise_tas_kt": 238.0,
+    "cruise_fuel_gph": 16.5,
+    "climb_rate_fpm": 1800.0,
+    "climb_tas_kt": 120.0,
+    "climb_fuel_gph": 25.0,
+    "descent_rate_fpm": 500.0,
+    "descent_tas_kt": 215.0,
+    "descent_fuel_gph": 10.5,
+    "taxi_fuel_gal": 2.0,
+    "fuel_capacity_gal": 92.0,
+    "reserve_minutes": 45,
+    "max_gross_weight_lb": 2200.0,
+    "climb": [
+      {
+        "pressure_altitude_ft": 0,
+        "vertical_speed_fpm": 1800.0,
+        "tas_kt": 120.0,
+        "fuel_gph": 25.0
+      },
+      {
+        "pressure_altitude_ft": 4000,
+        "vertical_speed_fpm": 1500.0,
+        "tas_kt": 122.0,
+        "fuel_gph": 23.5
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "vertical_speed_fpm": 1200.0,
+        "tas_kt": 124.0,
+        "fuel_gph": 22.0
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "vertical_speed_fpm": 850.0,
+        "tas_kt": 126.0,
+        "fuel_gph": 20.0
+      },
+      {
+        "pressure_altitude_ft": 16000,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 128.0,
+        "fuel_gph": 18.0
+      }
+    ],
+    "cruise": [
+      {
+        "pressure_altitude_ft": 4000,
+        "power_setting": "75%",
+        "tas_kt": 228.0,
+        "fuel_gph": 16.8
+      },
+      {
+        "pressure_altitude_ft": 6000,
+        "power_setting": "75%",
+        "tas_kt": 233.0,
+        "fuel_gph": 16.6
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "power_setting": "75%",
+        "tas_kt": 238.0,
+        "fuel_gph": 16.5
+      },
+      {
+        "pressure_altitude_ft": 4000,
+        "power_setting": "65%",
+        "tas_kt": 215.0,
+        "fuel_gph": 14.5
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "power_setting": "65%",
+        "tas_kt": 221.0,
+        "fuel_gph": 14.3
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "power_setting": "65%",
+        "tas_kt": 228.0,
+        "fuel_gph": 14.0
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "power_setting": "55%",
+        "tas_kt": 202.0,
+        "fuel_gph": 12.2
+      },
+      {
+        "pressure_altitude_ft": 12000,
+        "power_setting": "55%",
+        "tas_kt": 208.0,
+        "fuel_gph": 12.0
+      },
+      {
+        "pressure_altitude_ft": 16000,
+        "power_setting": "55%",
+        "tas_kt": 213.0,
+        "fuel_gph": 11.8
+      }
+    ],
+    "descent": [
+      {
+        "pressure_altitude_ft": 0,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 200.0,
+        "fuel_gph": 10.0
+      },
+      {
+        "pressure_altitude_ft": 8000,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 215.0,
+        "fuel_gph": 10.5
+      },
+      {
+        "pressure_altitude_ft": 16000,
+        "vertical_speed_fpm": 500.0,
+        "tas_kt": 225.0,
+        "fuel_gph": 11.0
+      }
+    ]
   }
 ]
