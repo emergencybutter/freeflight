@@ -156,6 +156,10 @@ pub struct NotamClient {
     client_id: String,
     client_secret: String,
     token: Arc<Mutex<Option<CachedToken>>>,
+    /// Held while fetching a new token, so concurrent callers that all
+    /// find the cache empty share one token request instead of each
+    /// spending an NMS rate-limit slot on their own.
+    token_refresh: tokio::sync::Mutex<()>,
     pacer: Pacer,
     cache: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
 }
@@ -169,6 +173,7 @@ impl NotamClient {
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             token: Arc::new(Mutex::new(None)),
+            token_refresh: tokio::sync::Mutex::new(()),
             pacer: Pacer::new(MIN_REQUEST_SPACING, MAX_QUEUE_WAIT),
             cache: Mutex::new(HashMap::new()),
         }
@@ -189,19 +194,32 @@ impl NotamClient {
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             token: Arc::new(Mutex::new(None)),
+            token_refresh: tokio::sync::Mutex::new(()),
             pacer: Pacer::new(MIN_REQUEST_SPACING, MAX_QUEUE_WAIT),
             cache: Mutex::new(HashMap::new()),
         }
     }
 
+    fn cached_token(&self) -> Option<String> {
+        self.token
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|cached| cached.expires_at > Instant::now())
+            .map(|cached| cached.access_token.clone())
+    }
+
     /// Lazily fetches and caches a bearer token, refreshing ~60s before
-    /// expiry. No lock is held across an `.await` — the cache is only
-    /// consulted/updated in non-async critical sections.
+    /// expiry. The token cache itself is only touched in non-async
+    /// critical sections; only `token_refresh` is held across the fetch.
     async fn get_token(&self) -> Result<String, NotamError> {
-        if let Some(cached) = self.token.lock().unwrap().as_ref() {
-            if cached.expires_at > Instant::now() {
-                return Ok(cached.access_token.clone());
-            }
+        if let Some(token) = self.cached_token() {
+            return Ok(token);
+        }
+        let _refreshing = self.token_refresh.lock().await;
+        // Someone else may have refreshed it while we waited for the lock.
+        if let Some(token) = self.cached_token() {
+            return Ok(token);
         }
 
         self.pacer.wait_turn().await?;
