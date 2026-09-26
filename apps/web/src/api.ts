@@ -12,7 +12,11 @@ export const API_BASE_URL =
 export async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`);
   if (!res.ok) {
-    throw new Error(`${path} failed: ${res.status} ${await res.text()}`);
+    // An HTML body is a proxy's error page (e.g. Cloudflare's), not a
+    // message from ff-api; don't dump the markup into the UI.
+    const body = await res.text();
+    const detail = body.trimStart().startsWith("<") ? res.statusText : body;
+    throw new Error(`${path} failed: ${res.status} ${detail}`);
   }
   return res.json() as Promise<T>;
 }

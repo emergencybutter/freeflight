@@ -1,10 +1,34 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
 pub const DEFAULT_AUTH_URL: &str = "https://api-nms.aim.faa.gov/v1/auth/token";
 pub const DEFAULT_API_BASE_URL: &str = "https://api-nms.aim.faa.gov/nmsapi";
+
+/// NMS enforces a "spike arrest" of one request per second with no burst
+/// allowance, per client credential and across *all* callers, token
+/// requests included (confirmed live: two back-to-back calls get a 429
+/// `policies.ratelimit.SpikeArrestViolation`). Every upstream call goes
+/// through [`Pacer`] so they're spaced at least this far apart; the
+/// margin over 1s absorbs jitter on FAA's side.
+const MIN_REQUEST_SPACING: Duration = Duration::from_millis(1100);
+
+/// Longest a request will queue for an upstream slot before giving up
+/// with [`NotamError::Busy`], so a crowd of callers gets fast "try again"
+/// answers instead of requests hanging for a minute.
+const MAX_QUEUE_WAIT: Duration = Duration::from_secs(10);
+
+/// How long a location's NOTAMs are reused. NOTAMs change on the scale of
+/// minutes to hours, and at one upstream request per second a cache is
+/// what lets more than one person use the app at once.
+const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// How many times a 429 from NMS is retried. Our own pacing should make
+/// these rare; they come from something else spending the same
+/// credential's budget (another deployment, a dev machine).
+const MAX_RATE_LIMIT_RETRIES: u32 = 2;
 
 #[derive(Debug, Error)]
 pub enum NotamError {
@@ -22,6 +46,59 @@ pub enum NotamError {
         status: reqwest::StatusCode,
         body: String,
     },
+    #[error("NMS rate limit is saturated; too many NOTAM requests queued")]
+    Busy,
+}
+
+impl NotamError {
+    /// True when the failure is NMS's rate limit (or our own queue in
+    /// front of it) rather than a real fault, i.e. retrying shortly will
+    /// likely work.
+    pub fn is_rate_limited(&self) -> bool {
+        match self {
+            NotamError::Busy => true,
+            NotamError::TokenRequestFailed { status, .. }
+            | NotamError::ApiRequestFailed { status, .. } => {
+                *status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Spaces upstream requests at least `spacing` apart. Each caller
+/// reserves the next free slot under a short (non-async) lock, then
+/// sleeps until it, so waiting callers are served in arrival order
+/// without holding a lock across an `.await`.
+struct Pacer {
+    spacing: Duration,
+    max_wait: Duration,
+    next_slot: Mutex<Option<tokio::time::Instant>>,
+}
+
+impl Pacer {
+    fn new(spacing: Duration, max_wait: Duration) -> Self {
+        Self {
+            spacing,
+            max_wait,
+            next_slot: Mutex::new(None),
+        }
+    }
+
+    async fn wait_turn(&self) -> Result<(), NotamError> {
+        let now = tokio::time::Instant::now();
+        let slot = {
+            let mut next = self.next_slot.lock().unwrap();
+            let slot = next.map_or(now, |n| n.max(now));
+            if slot - now > self.max_wait {
+                return Err(NotamError::Busy);
+            }
+            *next = Some(slot + self.spacing);
+            slot
+        };
+        tokio::time::sleep_until(slot).await;
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -79,6 +156,8 @@ pub struct NotamClient {
     client_id: String,
     client_secret: String,
     token: Arc<Mutex<Option<CachedToken>>>,
+    pacer: Pacer,
+    cache: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
 }
 
 impl NotamClient {
@@ -90,6 +169,8 @@ impl NotamClient {
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             token: Arc::new(Mutex::new(None)),
+            pacer: Pacer::new(MIN_REQUEST_SPACING, MAX_QUEUE_WAIT),
+            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -108,6 +189,8 @@ impl NotamClient {
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             token: Arc::new(Mutex::new(None)),
+            pacer: Pacer::new(MIN_REQUEST_SPACING, MAX_QUEUE_WAIT),
+            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -121,6 +204,7 @@ impl NotamClient {
             }
         }
 
+        self.pacer.wait_turn().await?;
         let resp = self
             .http
             .post(&self.auth_url)
@@ -159,7 +243,39 @@ impl NotamClient {
         if icao_location.is_empty() {
             return Err(NotamError::NoLocation);
         }
+        let key = icao_location.to_ascii_uppercase();
+        if let Some((fetched_at, value)) = self.cache.lock().unwrap().get(&key) {
+            if fetched_at.elapsed() < CACHE_TTL {
+                return Ok(value.clone());
+            }
+        }
+
+        let mut retries = 0;
+        let value = loop {
+            match self.fetch_uncached(&key).await {
+                Ok(value) => break value,
+                // `Busy` means our own queue is already full; queueing
+                // again would only make that worse.
+                Err(err)
+                    if err.is_rate_limited()
+                        && !matches!(err, NotamError::Busy)
+                        && retries < MAX_RATE_LIMIT_RETRIES =>
+                {
+                    retries += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        };
+
+        let mut cache = self.cache.lock().unwrap();
+        cache.retain(|_, (fetched_at, _)| fetched_at.elapsed() < CACHE_TTL);
+        cache.insert(key, (Instant::now(), value.clone()));
+        Ok(value)
+    }
+
+    async fn fetch_uncached(&self, icao_location: &str) -> Result<serde_json::Value, NotamError> {
         let token = self.get_token().await?;
+        self.pacer.wait_turn().await?;
         let url = format!("{}/v1/notams", self.api_base_url);
         let resp = self
             .http
@@ -170,6 +286,11 @@ impl NotamClient {
             .query(&[("location", icao_location)])
             .send()
             .await?;
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // A token NMS no longer accepts shouldn't stay cached until its
+            // nominal expiry; drop it so the next call re-authenticates.
+            *self.token.lock().unwrap() = None;
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -190,6 +311,27 @@ mod tests {
             client.fetch_notams_raw("").await,
             Err(NotamError::NoLocation)
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacer_spaces_requests_and_rejects_long_queues() {
+        let pacer = Pacer::new(Duration::from_secs(1), Duration::from_secs(2));
+        let start = tokio::time::Instant::now();
+        for i in 0..3 {
+            pacer.wait_turn().await.unwrap();
+            assert_eq!(start.elapsed(), Duration::from_secs(i));
+        }
+        // Four concurrent callers: the first two get slots 1s and 2s out;
+        // the rest would wait 3s, over the 2s limit, and are turned away.
+        let (a, b, c, d) = tokio::join!(
+            pacer.wait_turn(),
+            pacer.wait_turn(),
+            pacer.wait_turn(),
+            pacer.wait_turn()
+        );
+        assert!(a.is_ok() && b.is_ok());
+        assert!(matches!(c, Err(NotamError::Busy)));
+        assert!(matches!(d, Err(NotamError::Busy)));
     }
 
     #[test]

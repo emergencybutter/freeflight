@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
@@ -29,6 +29,24 @@ pub async fn get_notams(
     };
     match notam.fetch_notams_raw(&query.location).await {
         Ok(value) => Json(value).into_response(),
-        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+        Err(err) => {
+            tracing::warn!("NOTAM fetch for {} failed: {err}", query.location);
+            // 503, not 502: Cloudflare replaces an origin's 502 body with
+            // its own HTML error page, so the client would never see why.
+            if err.is_rate_limited() {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [(header::RETRY_AFTER, "5")],
+                    "FAA NOTAM service is busy, try again in a few seconds",
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "FAA NOTAM service request failed",
+                )
+                    .into_response()
+            }
+        }
     }
 }
