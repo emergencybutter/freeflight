@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  fetchAirportDetail,
   fetchAirwayDetail,
   fetchPreferredRoutes,
   fetchProcedureDetail,
@@ -9,6 +10,7 @@ import {
 import { fetchWindsAloft } from "../weather";
 import { buildResolvedProcedure, fetchProcedureOptions, transitionOptions } from "./procedureLookup";
 import { windsForRoute } from "./windsAloft";
+import { cleanRouteTokens, isRouteString } from "./parseRoute";
 import type {
   Airport,
   AirspaceVolume,
@@ -1104,6 +1106,41 @@ async function resolveNamedProcedure(
   return chosen ? buildResolvedProcedure(airportIcao, kind, detail, chosen.id) : null;
 }
 
+/** Tries to resolve `rawIdent` as an airport, returning a `RouteWaypoint`
+ * with elevation if found, or `null` if not an airport in this cycle's data. */
+async function resolveAirport(rawIdent: string): Promise<RouteWaypoint | null> {
+  const ident = rawIdent.toUpperCase();
+  try {
+    const detail = await fetchAirportDetail(ident);
+    return {
+      ident: detail.icao,
+      name: detail.name,
+      lat: detail.lat,
+      lon: detail.lon,
+      elevation_ft: detail.elevation_ft,
+    };
+  } catch {
+    try {
+      const results = await searchAirports(ident);
+      const match = results.find(
+        (a) => a.icao.toUpperCase() === ident || a.faa_id?.toUpperCase() === ident || a.iata?.toUpperCase() === ident,
+      );
+      if (match) {
+        return {
+          ident: match.icao,
+          name: match.name,
+          lat: match.lat,
+          lon: match.lon,
+          elevation_ft: match.elevation_ft,
+        };
+      }
+    } catch {
+      // Ignored
+    }
+    return null;
+  }
+}
+
 /** The route builder: departure/arrival airports and an optional SID/
  * STAR are chosen explicitly (dedicated fields/buttons, not typed),
  * then fixes/navaids/airways in between via one unified search box —
@@ -1124,10 +1161,12 @@ function RouteBuilder({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<IdentSearchRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isApplyingRoute, setIsApplyingRoute] = useState(false);
+  const [applyRouteError, setApplyRouteError] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 2 || isRouteString(q)) {
       setResults([]);
       setError(null);
       return;
@@ -1153,6 +1192,126 @@ function RouteBuilder({
 
   const { middleTokens } = route;
   const setMiddleTokens = (tokens: RouteToken[]) => onChange({ ...route, middleTokens: tokens });
+
+  const applyPastedRoute = async (rawRouteString: string) => {
+    setIsApplyingRoute(true);
+    setApplyRouteError(null);
+    try {
+      const rawTokens = cleanRouteTokens(rawRouteString);
+      if (rawTokens.length === 0) return;
+
+      let middleRaw = [...rawTokens];
+      let newDeparture = route.departure;
+      let newArrival = route.arrival;
+
+      // When there are 2 or more tokens, check if the first token is the departure airport
+      if (middleRaw.length >= 2) {
+        const first = middleRaw[0];
+        if (newDeparture && first === newDeparture.ident.toUpperCase()) {
+          middleRaw.shift();
+        } else {
+          const apt = await resolveAirport(first);
+          if (apt) {
+            newDeparture = apt;
+            middleRaw.shift();
+          }
+        }
+      }
+
+      // Check if the last token is the arrival airport
+      if (middleRaw.length >= 1) {
+        const last = middleRaw[middleRaw.length - 1];
+        if (newArrival && last === newArrival.ident.toUpperCase()) {
+          middleRaw.pop();
+        } else if (rawTokens.length >= 2) {
+          const apt = await resolveAirport(last);
+          if (apt) {
+            newArrival = apt;
+            middleRaw.pop();
+          }
+        }
+      }
+
+      // Check for SID and STAR at the endpoints if in IFR mode
+      let resolvedSid: ResolvedProcedureRef | undefined;
+      let resolvedStar: ResolvedProcedureRef | undefined;
+
+      if (flightRules === "IFR" && newDeparture && middleRaw.length > 0) {
+        const [first, second] = middleRaw;
+        const sid = (await resolveRouteToken(first)) ? null : await resolveNamedProcedure(newDeparture.ident, "SID", first, second);
+        if (sid) {
+          resolvedSid = sid;
+          middleRaw = middleRaw.slice(sid.transitionIdent === second ? 2 : 1);
+        }
+      }
+
+      if (flightRules === "IFR" && newArrival && middleRaw.length > 0) {
+        const last = middleRaw[middleRaw.length - 1];
+        const secondLast = middleRaw[middleRaw.length - 2];
+        const star = (await resolveRouteToken(last)) ? null : await resolveNamedProcedure(newArrival.ident, "STAR", last, secondLast);
+        if (star) {
+          resolvedStar = star;
+          middleRaw = middleRaw.slice(0, star.transitionIdent === secondLast ? -2 : -1);
+        }
+      }
+
+      // Resolve all remaining middle tokens
+      const resolved = await Promise.all(middleRaw.map(resolveRouteToken));
+      const badIndex = resolved.findIndex((t) => t === null);
+      if (badIndex !== -1) {
+        throw new Error(`"${middleRaw[badIndex]}" isn't in this cycle's data — route not applied`);
+      }
+
+      onChange({
+        ...route,
+        departure: newDeparture,
+        arrival: newArrival,
+        sid: resolvedSid ?? (newDeparture?.ident !== route.departure?.ident ? null : route.sid),
+        star: resolvedStar ?? (newArrival?.ident !== route.arrival?.ident ? null : route.star),
+        middleTokens: resolved as RouteToken[],
+      });
+      setQuery("");
+      setResults([]);
+    } catch (err) {
+      setApplyRouteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsApplyingRoute(false);
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (isRouteString(text)) {
+      e.preventDefault();
+      setQuery("");
+      setResults([]);
+      void applyPastedRoute(text);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (isRouteString(query)) {
+        const q = query;
+        setQuery("");
+        setResults([]);
+        void applyPastedRoute(q);
+      } else if (results.length > 0) {
+        addResult(results[0]);
+      } else if (query.trim().length > 0) {
+        const q = query.trim();
+        setQuery("");
+        setResults([]);
+        resolveRouteToken(q)
+          .then((token) => {
+            if (token) setMiddleTokens([...middleTokens, token]);
+            else setError(`"${q}" isn't in this cycle's data`);
+          })
+          .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      }
+    }
+  };
 
   // Suggested routings (DESIGN.md §9.3) once both airports are set — FAA
   // NFDC Preferred Routes / ATCSCC Coded Departure Routes, baked into the
@@ -1207,7 +1366,7 @@ function RouteBuilder({
     if (flightRules !== "IFR") setApplyError(null);
   }, [flightRules]);
   const applySuggestion = async (routeString: string, index: number) => {
-    const rawTokens = routeString.trim().length === 0 ? [] : routeString.trim().split(/\s+/);
+    const rawTokens = cleanRouteTokens(routeString);
     setApplyingIndex(index);
     setApplyError(null);
     try {
@@ -1369,10 +1528,29 @@ function RouteBuilder({
       <input
         className="airport-search"
         type="search"
-        placeholder="Add a fix, navaid, or airway…"
+        placeholder="Add a fix, navaid, or airway, or paste a route…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onPaste={handlePaste}
+        onKeyDown={handleKeyDown}
+        disabled={isApplyingRoute}
       />
+      {isApplyingRoute && <p className="hint">Resolving route…</p>}
+      {applyRouteError && <p className="hint route-warning">⚠ {applyRouteError}</p>}
+      {isRouteString(query) && !isApplyingRoute && (
+        <button
+          type="button"
+          className="apply-route-button"
+          onClick={() => {
+            const q = query;
+            setQuery("");
+            setResults([]);
+            void applyPastedRoute(q);
+          }}
+        >
+          Apply pasted route
+        </button>
+      )}
       {error && <p className="hint">search failed: {error}</p>}
       {results.length > 0 && (
         <ul>

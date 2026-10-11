@@ -955,6 +955,15 @@ th {
   font-size: 0.8rem;
 }
 
+.apply-route-button {
+  width: 100%;
+  margin-top: 0.3rem;
+  margin-bottom: 0.6rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .weight-balance td input {
   width: 100%;
 }
