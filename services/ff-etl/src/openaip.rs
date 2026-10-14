@@ -23,7 +23,7 @@
 //!   a US-only (or US+France) cycle is unaffected.
 //! - `FF_OPENAIP_STATES` — comma-separated `CC:REGION` pairs, e.g.
 //!   `DE:ED,GB:EG,CA:CY,GL:BG,DK:EK,FO:EK,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,
-//!   NL:EH`. `CC` is openAIP's two-letter country code; `REGION` is the
+//!   NL:EH,LU:EL`. `CC` is openAIP's two-letter country code; `REGION` is the
 //!   ICAO region stamped on navaids, which is *not* the same thing
 //!   (Canada is `CA` but `CY`).
 //!   Defaults to [`DEFAULT_STATES`].
@@ -62,6 +62,12 @@ pub const DEFAULT_STATES: &[(&str, &str)] = &[
     ("ES", "LE"),
     ("BE", "EB"), // Belgium — skeyes/EAD-gated, no direct AIXM
     ("NL", "EH"), // Netherlands — LVNL/EAD-gated, no direct AIXM
+    // Luxembourg — the state does publish aeronautical geodata openly
+    // (CC0, data.public.lu), but as an INSPIRE "Air Components" dataset,
+    // not AIXM, flagged "not for operational purposes in aviation" and
+    // updated less often than the AIP. Same shape as Spain: unusable
+    // until a dedicated parser exists.
+    ("LU", "EL"),
 ];
 
 /// States served by the official-AIXM tier. A state here must never also

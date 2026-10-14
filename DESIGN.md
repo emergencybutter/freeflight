@@ -214,6 +214,7 @@ impossible, and they are not correlated:
 | **Spain — ENAIRE** | **5.1**, published directly (unlike most of this list) | direct download, `aip.enaire.es` "AIXM5.1 Data Sets" | unread — the linked "use and limitations" page 404'd when checked; moot regardless (below) | ✅ served via openAIP (§3.1.2) — checked 2026-08-01: `ff-aixm` parses 4.5 only, so Spain's official 5.1 export needs a second parser before its licence is even worth resolving |
 | **Belgium — skeyes** | none published directly | eAIP portal (`ops.skeyes.be`); structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-08-01, same finding as Iceland/Ireland: EUROCONTROL's inventory lists Belgium as "static data provider through EAD" with no direct AIXM |
 | **Netherlands — LVNL** | none published directly | eAIP portal (`eaip.lvnl.nl`); structured data is EAD-gated | not stated (no dataset to state terms for) | ✅ served via openAIP (§3.1.2) — checked 2026-08-01, same finding: "static data provider through EAD", no direct AIXM |
+| **Luxembourg — ANA / Géoportail** | none (EAD); an INSPIRE "Air Components" GML dataset instead | open download, `data.public.lu` | **CC0** — but the dataset states it "should not be used for operational purposes in aviation" and that updates "may not occur as frequently as" the AIP | ✅ served via openAIP (§3.1.2) — checked 2026-10-13: same shape as Spain, an open official source exists but in a format nothing here parses (INSPIRE, not AIXM), and its own non-operational disclaimer makes it a worse fit than openAIP anyway |
 
 ⚠️ = lead, not a conclusion. Only the France, Germany and Denmark rows
 have been read against the provider's own material; the rest come from
@@ -282,12 +283,12 @@ holding the exact wording of the terms in the repo rather than in
 memory — the licence has already been mis-recorded here once.
 
 **Status: `ff-openaip` implemented and wired into `ff-etl`**, validated
-against the live API for twelve states. Configuration:
+against the live API for thirteen states. Configuration:
 
 - `FF_OPENAIP_API_KEY` — required; unset skips the step entirely, leaving
   a US-only (or US+France) cycle unaffected.
 - `FF_OPENAIP_STATES` — `CC:REGION` pairs, default `DE:ED,GB:EG,CA:CY,
-  GL:BG,DK:EK,FO:EK,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH`. Note `CC` is
+  GL:BG,DK:EK,FO:EK,IS:BI,IE:EI,PT:LP,ES:LE,BE:EB,NL:EH,LU:EL`. Note `CC` is
   openAIP's country code and `REGION` the ICAO region, which differ (Canada is
   `CA` but `CY`).
 
@@ -324,6 +325,7 @@ several countries in one sitting, but not necessarily a long one.
 | Spain | `LE` | 500 / 500 | 129 | 547 / 777 | see note* |
 | Belgium | `EB` | 161 / 161 | 18 | 226 / 228 | 58 |
 | Netherlands | `EH` | 185 / 185 | 12 | 221 / 262 | 42 |
+| Luxembourg | `EL` | 11 / 11 | 1 | 13 / 18 | 5 |
 
 \* Portugal and Spain were applied to the live bundle in the same
 session without an intermediate checkpoint between them, so the
@@ -332,6 +334,12 @@ before/after airspace-class query only has their **combined** delta:
 production bundle, not the probe). Splitting it would need a second
 live API call per country just to remeasure — not worth the openAIP
 quota this rate limit already made expensive.
+
+Luxembourg (added 2026-10-13, probed into an empty bundle): the five
+controlled volumes are the CTR, three TMAs and CTA South 3, all of
+ELLX's terminal airspace. The five skipped volumes are `ELTSA3`–`ELTSA7`,
+openAIP type 9 (TSA) — dropped by `special_use_from_type` for every
+state, not a Luxembourg-specific gap.
 
 **`ff-core` gained Class A and Class F** to make this correct. Neither
 occurs in US airspace the FAA sources describe, so neither was modelled —
