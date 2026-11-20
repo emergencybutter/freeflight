@@ -29,5 +29,5 @@ echo "==> recreating container (compose picks up the new image id)"
 ssh "$SERVER" 'cd /containers/freeflight && docker compose up -d'
 
 echo "==> health check"
-curl -fsS https://freeflight.flyvoyager.net/health && echo
+curl -fsS https://freeflight.butr.cc/health && echo
 echo "done. (web/nginx/data changes are separate — see deploy/README.md)"

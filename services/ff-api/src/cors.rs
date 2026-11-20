@@ -76,6 +76,6 @@ mod tests {
         // from their visitors' browsers.
         assert!(!allows(&auth, "https://example.com"));
         // A lookalike that merely contains the real host must not pass.
-        assert!(!allows(&auth, "https://freeflight.flyvoyager.net.evil.test"));
+        assert!(!allows(&auth, "https://freeflight.butr.cc.evil.test"));
     }
 }

@@ -111,7 +111,7 @@ Every `LOAD` line should show an alignment of `0x4000` or more.
 ## Running
 
 The app talks to `ff-api`, and by default that is the production
-deployment at **https://freeflight.flyvoyager.net** — nginx there serves
+deployment at **https://freeflight.butr.cc** — nginx there serves
 the web client at `/` and proxies `/cycles`, `/bundles`, `/weather`,
 `/notams`, `/data` and `/health` to `ff-api`, so the app and its data
 share one hostname (see `deploy/README.md`). A sideloaded APK therefore

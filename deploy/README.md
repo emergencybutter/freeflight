@@ -1,4 +1,4 @@
-# Deployment — freeflight.flyvoyager.net
+# Deployment — freeflight.butr.cc
 
 Production deployment of freeflight, hosted on **vya2.flyvoyager.net**
 (Debian 13, Docker + Compose). Mirrors the existing sibling services on
@@ -15,15 +15,15 @@ reverse-proxies to each.
                             ▼
                    ┌─────────────────┐
                    │   Cloudflare    │  proxied DNS + edge TLS
-                   │  (orange cloud) │  freeflight.flyvoyager.net
+                   │  (orange cloud) │  freeflight.butr.cc
                    └────────┬────────┘  A → 51.159.58.182
-                            │ HTTPS (Origin CA wildcard *.flyvoyager.net)
+                            │ HTTPS (Origin CA wildcard *.butr.cc)
                             ▼
 ┌──────────────────────── vya2.flyvoyager.net ─────────────────────────┐
 │                                                                       │
 │   ┌──────────────────────────┐                                       │
 │   │  nginx  (container)       │  :80 → 301 → :443                     │
-│   │  /containers/nginx/       │  TLS: certs/flyvoyager.net.pem        │
+│   │  /containers/nginx/       │  TLS: certs/butr.cc.pem               │
 │   │  networks: web, vya2net   │                                       │
 │   │                           │                                       │
 │   │  vhost freeflight.conf:   │                                       │
@@ -51,7 +51,7 @@ reverse-proxies to each.
 
 ## Request routing
 
-The web client is built with `VITE_FF_API_BASE_URL=https://freeflight.flyvoyager.net`,
+The web client is built with `VITE_FF_API_BASE_URL=https://freeflight.butr.cc`,
 so it and its data live under **one hostname**. nginx splits by path:
 
 | Path prefix | Handled by | Notes |
@@ -66,12 +66,14 @@ so it and its data live under **one hostname**. nginx splits by path:
 
 ## TLS / DNS
 
-- The cert is a **Cloudflare Origin CA wildcard** `*.flyvoyager.net`
-  (`/containers/nginx/certs/flyvoyager.net.pem`). Browsers only trust it
+- The cert is a **Cloudflare Origin CA wildcard** `*.butr.cc`
+  (`/containers/nginx/certs/butr.cc.pem`). Browsers only trust it
   behind Cloudflare, so the DNS record **must be Proxied (orange cloud)**.
   Grey-cloud / DNS-only would fail cert validation.
 - DNS record: `freeflight` **A** → `51.159.58.182` (vya2), proxied.
   Optionally `AAAA` → `2001:bc8:1200:2:208:a2ff:fe0c:7926`.
+- **Legacy host** `freeflight.flyvoyager.net` (same IP, `*.flyvoyager.net`
+  cert) only 301s every request to `freeflight.butr.cc`.
 
 ## Files in this directory
 
@@ -87,8 +89,7 @@ so it and its data live under **one hostname**. nginx splits by path:
 
 The freeflight **nginx vhost** is *not* kept here — it lives in the
 separate `vya-ws/nginx` repo (`vya-ws/nginx/conf.d/freeflight.conf`),
-which is the source of truth for vya2's shared nginx and is deployed with
-its own `deploy.sh`. See "nginx config change" in the runbook below.
+which is the source of truth for vya2's shared nginx. See "nginx config change" in the runbook below.
 
 The nginx `docker-compose.yml` (also in `vya-ws/nginx`) carries the
 static-root volume line: `- /var/www/freeflight:/srv/freeflight:ro`.
@@ -103,7 +104,7 @@ has to tell them where the real client address comes from.
 | Variable | Set it to | Why |
 |---|---|---|
 | `FF_TRUSTED_CLIENT_IP_HEADER` | `cf-connecting-ip` | **Important.** See below. |
-| `FF_WEB_ORIGINS` | `https://freeflight.flyvoyager.net` | CORS allowlist, shared with the OAuth redirect guard. Localhost is always allowed. |
+| `FF_WEB_ORIGINS` | `https://freeflight.butr.cc` | CORS allowlist, shared with the OAuth redirect guard. Localhost is always allowed. |
 | `FF_RATE_LIMIT_RPS` | *(unset → 2)* | Sustained requests/sec per client on `/weather/*` and `/notams`. `0` disables limiting. |
 | `FF_RATE_LIMIT_BURST` | *(unset → 30)* | Back-to-back allowance from idle; covers one map pan's worth of weather calls. |
 
@@ -134,11 +135,11 @@ bucket. Verify from outside:
 ```sh
 # Well under the limit: expect 200s.
 curl -s -o /dev/null -w "%{http_code}
-" https://freeflight.flyvoyager.net/weather/flightcat
+" https://freeflight.butr.cc/weather/flightcat
 
 # A burst from one address: expect 200s then 429s with a Retry-After.
 for i in $(seq 1 40); do
-  curl -s -o /dev/null -w "%{http_code} " https://freeflight.flyvoyager.net/weather/flightcat
+  curl -s -o /dev/null -w "%{http_code} " https://freeflight.butr.cc/weather/flightcat
 done; echo
 ```
 
@@ -324,7 +325,7 @@ the local-build-and-ship path is the default now.
 
 ```sh
 cd apps/web
-VITE_FF_API_BASE_URL=https://freeflight.flyvoyager.net npm run build
+VITE_FF_API_BASE_URL=https://freeflight.butr.cc npm run build
 ```
 
 Ship `dist/` → `/var/www/freeflight` (replace contents). No restart
@@ -454,22 +455,24 @@ repo, **not** here — edit `vya-ws/nginx/conf.d/freeflight.conf` and deploy
 it from that repo (Git Bash has no rsync, so go through WSL):
 
 ```sh
-cd ../../vya-ws/nginx && wsl bash ./deploy.sh
+scp ../../vya-ws/nginx/conf.d/freeflight.conf root@vya2.flyvoyager.net:/containers/nginx/conf.d/
+ssh root@vya2.flyvoyager.net 'docker exec nginx nginx -t && docker exec nginx nginx -s reload'
 ```
 
-`deploy.sh` rsyncs `conf.d/` to `root@vya2:/containers/nginx/`, runs
-`docker exec nginx nginx -t`, and only reloads (`nginx -s reload`) if the
-config validates — so a bad config never goes live. Don't edit the file
+Copy only this one file — never rsync the whole `vya-ws/nginx` tree with
+`--delete`: the server carries vhosts that aren't in the local repo, and a
+mirror would delete them. The reload only runs if `nginx -t` passes, so a
+bad config never goes live. Don't edit the file
 on the server directly; that drifts from the source of truth.
 
 ## Health checks
 
 ```sh
-curl https://freeflight.flyvoyager.net/health              # {"status":"ok"}
-curl "https://freeflight.flyvoyager.net/data/search?q=KSFO"
-curl https://freeflight.flyvoyager.net/cycles/latest
+curl https://freeflight.butr.cc/health              # {"status":"ok"}
+curl "https://freeflight.butr.cc/data/search?q=KSFO"
+curl https://freeflight.butr.cc/cycles/latest
 curl -H 'Range: bytes=0-16' -o /dev/null -w '%{http_code}\n' \
-  https://freeflight.flyvoyager.net/bundles/2026-07-09/chart-albuquerque.pmtiles   # 206
+  https://freeflight.butr.cc/bundles/2026-07-09/chart-albuquerque.pmtiles   # 206
 ```
 
 ## Notes / limitations

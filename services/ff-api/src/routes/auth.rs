@@ -96,7 +96,7 @@ struct Pending {
 pub struct AuthState {
     providers: HashMap<&'static str, ProviderConfig>,
     /// Public base URL the provider redirects back to, e.g.
-    /// `https://freeflight.flyvoyager.net` (prod) or `http://localhost:8080`
+    /// `https://freeflight.butr.cc` (prod) or `http://localhost:8080`
     /// (dev). The per-provider redirect URI is `{base}/auth/callback/{id}`
     /// and must match what's registered in the provider's console.
     redirect_base: String,
@@ -662,7 +662,7 @@ mod tests {
         assert!(is_localhost_origin("http://localhost:5173"));
         assert!(is_localhost_origin("http://127.0.0.1:8080"));
         assert!(is_localhost_origin("https://localhost"));
-        assert!(!is_localhost_origin("https://freeflight.flyvoyager.net"));
+        assert!(!is_localhost_origin("https://freeflight.butr.cc"));
         assert!(!is_localhost_origin("http://localhost.evil.example"));
     }
 
