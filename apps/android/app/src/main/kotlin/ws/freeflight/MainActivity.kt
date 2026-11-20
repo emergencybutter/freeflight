@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AirplanemodeActive
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -33,8 +34,13 @@ import ws.freeflight.ui.FreeflightViewModel
 import ws.freeflight.ui.MapScreen
 import ws.freeflight.ui.PlanScreen
 import ws.freeflight.ui.SettingsScreen
+import ws.freeflight.web.WebUiScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
+    /** The website's UI, on-device data (ws.freeflight.web). Replacing the
+     *  native tabs below is the plan; they stay while it gets there —
+     *  downloads in particular still live under Settings → Data. */
+    Web("Web", Icons.Default.Public),
     Map("Map", Icons.Default.Map),
     Plan("Plan", Icons.Default.Route),
     Aircraft("Aircraft", Icons.Default.AirplanemodeActive),
@@ -58,7 +64,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun FreeflightScaffold(viewModel: FreeflightViewModel) {
-    var tab by rememberSaveable { mutableStateOf(Tab.Map) }
+    var tab by rememberSaveable { mutableStateOf(Tab.Web) }
 
     Scaffold(
         bottomBar = {
@@ -75,6 +81,12 @@ private fun FreeflightScaffold(viewModel: FreeflightViewModel) {
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
+            if (tab == Tab.Web) {
+                // Not layered over the native map like the other tabs: two
+                // GL map surfaces at once would just compete for the GPU.
+                WebUiScreen()
+                return@Box
+            }
             // The map stays composed whichever tab is showing, with the
             // other tabs drawn over it. Letting it leave the composition
             // would tear down MapLibre's GL surface and lose the camera —
@@ -94,7 +106,7 @@ private fun FreeflightScaffold(viewModel: FreeflightViewModel) {
                         )
                         Tab.Aircraft -> AircraftScreen(viewModel)
                         Tab.Settings -> SettingsScreen(viewModel)
-                        Tab.Map -> Unit
+                        Tab.Map, Tab.Web -> Unit
                     }
                 }
             }

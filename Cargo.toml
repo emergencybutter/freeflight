@@ -14,6 +14,7 @@ members = [
     "crates/ff-postflight",
     "crates/ff-storage",
     "crates/ff-sync",
+    "crates/ff-data-api",
     "crates/ff-wasm",
     "crates/ff-uniffi",
     "services/ff-api",
@@ -42,6 +43,7 @@ ff-planning = { path = "crates/ff-planning" }
 ff-postflight = { path = "crates/ff-postflight" }
 ff-storage = { path = "crates/ff-storage" }
 ff-sync = { path = "crates/ff-sync" }
+ff-data-api = { path = "crates/ff-data-api" }
 ff-etl = { path = "services/ff-etl" }
 
 # shared external deps, kept at one version across the workspace

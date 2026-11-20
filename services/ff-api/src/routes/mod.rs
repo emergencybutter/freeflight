@@ -2,7 +2,6 @@ pub mod aircraft;
 pub mod auth;
 pub mod butterlog;
 pub mod cycles;
-pub mod data;
 pub mod dtpp;
 pub mod health;
 pub mod notams;
@@ -33,21 +32,9 @@ pub fn router_with(state: AppState, limiter: Option<RateLimiter>) -> Router {
         .route("/data/butterlog/user/:user_id/current", get(butterlog::get_current))
         .route("/data/butterlog/by-discord/:discord_id/current", get(butterlog::get_current_by_discord))
         .route("/cycles/latest", get(cycles::latest))
-        .route("/data/airports", get(data::airports))
-        .route("/data/attributions", get(data::attributions))
-        .route("/data/search", get(data::search))
-        .route("/data/airports/:icao", get(data::airport_detail))
-        .route(
-            "/data/airports/:icao/procedures",
-            get(data::airport_procedures),
-        )
-        .route("/data/procedures/:id", get(data::procedure_detail))
-        .route("/data/airways/:ident", get(data::airway_detail))
-        .route("/data/search_idents", get(data::search_idents))
-        .route("/data/preferred_routes", get(data::preferred_routes))
-        .route("/data/charts", get(data::charts))
-        .route("/data/airspace", get(data::airspace))
-        .route("/data/nearest_fix", get(data::nearest_fix))
+        // Cycle queries — shared with the Android app, which runs the same
+        // router in-process against its local bundle (see ff-data-api).
+        .merge(ff_data_api::router(data_state(&state)))
         .route("/dtpp/plate", get(dtpp::plate))
         // OAuth sign-in (Google/Discord). `login`/`callback` are top-level
         // browser redirects; `me`/`logout` are bearer-token XHR from the SPA.
@@ -78,6 +65,15 @@ pub fn router_with(state: AppState, limiter: Option<RateLimiter>) -> Router {
         .layer(axum::middleware::from_fn(crate::version::negotiate_version))
         .layer(crate::cors::layer_for(state.auth.clone()))
         .with_state(state)
+}
+
+/// `/data/*` answers from whatever `latest.json` points at, re-resolved per
+/// request so a cycle published while the server runs is picked up live.
+fn data_state(state: &AppState) -> ff_data_api::DataState {
+    let data_dir = state.data_dir.clone();
+    ff_data_api::DataState::new(move || {
+        ff_etl::publish::latest_bundle_path(&data_dir).map_err(|e| e.to_string())
+    })
 }
 
 /// The routes that spend an upstream budget rather than serving our own

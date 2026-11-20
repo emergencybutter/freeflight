@@ -8,6 +8,7 @@ description = "Weather/NOTAM proxy and cycle-bundle hosting server (DESIGN.md §
 
 [dependencies]
 ff-accounts.workspace = true
+ff-data-api.workspace = true
 ff-weather.workspace = true
 ff-notam.workspace = true
 ff-sync.workspace = true

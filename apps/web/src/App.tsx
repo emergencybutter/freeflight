@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE_URL } from "./api";
+import { API_BASE_URL, DATA_ON_DEVICE } from "./api";
 import { beginLogin, captureAuthFromHash, fetchMe, fetchProviders, logout, type AuthProvider, type AuthUser } from "./auth";
 import { fetchAirportDetail, fetchAirportProcedures, fetchAirspaceInBbox, fetchCycleManifest, fetchProcedureDetail, searchAirports } from "./data";
 import { fetchAircraft, fetchFleet, type Aircraft, type AircraftDetail } from "./aircraft";
@@ -402,6 +402,16 @@ export default function App() {
     }
   };
 
+  if (loadError && DATA_ON_DEVICE) {
+    return (
+      <div className="error">
+        No data cycle on this device yet. Download one from the app's Data screen, then come back.
+        <br />
+        <span className="hint">{loadError}</span>
+      </div>
+    );
+  }
+
   if (loadError) {
     return (
       <div className="error">
@@ -604,7 +614,7 @@ export default function App() {
         </div>
       </div>
       <div className="status-footer">
-        Cycle {cycleId} · live from ff-api at {API_BASE_URL}
+        Cycle {cycleId} · {DATA_ON_DEVICE ? "on this device" : `live from ff-api at ${API_BASE_URL}`}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchJson } from "./api";
+import { fetchDataJson } from "./api";
 import "./AboutPage.css";
 
 /** One row of `/data/attributions` — a data source shipped in the current
@@ -20,7 +20,7 @@ interface DataSource {
 export function AboutPage() {
   const [sources, setSources] = useState<DataSource[]>([]);
   useEffect(() => {
-    fetchJson<DataSource[]>("/data/attributions")
+    fetchDataJson<DataSource[]>("/data/attributions")
       .then(setSources)
       .catch(() => setSources([]));
   }, []);

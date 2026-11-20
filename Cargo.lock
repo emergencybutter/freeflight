@@ -872,6 +872,7 @@ dependencies = [
  "axum",
  "chrono",
  "ff-accounts",
+ "ff-data-api",
  "ff-etl",
  "ff-notam",
  "ff-sync",
@@ -913,6 +914,18 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ff-data-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ff-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1016,7 +1029,9 @@ dependencies = [
 name = "ff-uniffi"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "ff-core",
+ "ff-data-api",
  "ff-planning",
  "ff-postflight",
  "ff-storage",
@@ -1026,6 +1041,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "tower",
  "uniffi",
 ]
 

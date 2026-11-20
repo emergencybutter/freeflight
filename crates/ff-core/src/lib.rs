@@ -9,6 +9,7 @@ pub mod airport;
 pub mod airspace;
 pub mod airway;
 pub mod cycle;
+pub mod dtpp;
 pub mod navaid;
 pub mod procedure;
 pub mod vocabulary;

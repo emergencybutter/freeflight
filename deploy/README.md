@@ -104,7 +104,7 @@ has to tell them where the real client address comes from.
 | Variable | Set it to | Why |
 |---|---|---|
 | `FF_TRUSTED_CLIENT_IP_HEADER` | `cf-connecting-ip` | **Important.** See below. |
-| `FF_WEB_ORIGINS` | `https://freeflight.butr.cc` | CORS allowlist, shared with the OAuth redirect guard. Localhost is always allowed. |
+| `FF_WEB_ORIGINS` | `https://freeflight.butr.cc,https://app.freeflight.butr.cc` | CORS allowlist, shared with the OAuth redirect guard. Localhost is always allowed. The second entry is the Android app's WebView origin (answered on-device, never resolved). |
 | `FF_RATE_LIMIT_RPS` | *(unset → 2)* | Sustained requests/sec per client on `/weather/*` and `/notams`. `0` disables limiting. |
 | `FF_RATE_LIMIT_BURST` | *(unset → 30)* | Back-to-back allowance from idle; covers one map pan's worth of weather calls. |
 

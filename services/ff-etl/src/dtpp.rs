@@ -142,7 +142,7 @@ const WANTED_CHART_CODES: [&str; 5] = ["DP", "ODP", "STR", "IAP", "APD"];
 /// `APD` record's `chart_name` is the literal string `"AIRPORT DIAGRAM"`
 /// with no runway/variant, so unlike `IAP`/`DP`/`STR` there's nothing to
 /// disambiguate — one row per airport is all this ever needs to express.
-pub const AIRPORT_DIAGRAM_IDENT: &str = "AIRPORT_DIAGRAM";
+pub use ff_core::dtpp::AIRPORT_DIAGRAM_IDENT;
 
 /// Streams the metafile rather than building a full DOM — it's ~16MB and
 /// this only needs a handful of fields off each `<record>`, tagged with

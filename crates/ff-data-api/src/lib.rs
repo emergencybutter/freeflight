@@ -1,7 +1,16 @@
-//! The `/data/*` JSON query endpoints the web thin client is built on
-//! (DESIGN.md §4.1, §8): `ff-api` opens the latest published cycle
-//! bundle server-side and answers per-view queries, instead of shipping
-//! the whole SQLite file to the browser.
+//! The `/data/*` JSON query endpoints the web client is built on
+//! (DESIGN.md §4.1, §8), as a router that is not tied to any one server.
+//!
+//! Two hosts mount it:
+//! - `ff-api` serves it over HTTP from the latest published cycle bundle;
+//! - `ff-uniffi` drives it in-process for the Android app's WebView (which
+//!   runs the same React UI as the web), answering from the cycle bundle
+//!   installed on the device — so the app works offline, and both clients
+//!   get byte-identical JSON from the same code.
+//!
+//! The host supplies a [`DataState`]: where the bundle is, and optionally
+//! how to rewrite chart tile URLs (Android points installed charts at the
+//! local copy and the rest at the server).
 //!
 //! Field names mirror the `ff-storage` schema columns one-to-one — the
 //! web client's TypeScript row types were written against those column
@@ -13,8 +22,9 @@
 //! next request just picks it up — no restart, no cache invalidation to
 //! get wrong. Opening a SQLite file is cheap at this scale; revisit with
 //! a connection pool keyed on cycle id if profiling ever says otherwise.
-use crate::state::AppState;
 use axum::extract::{Path as UrlPath, Query, State};
+use axum::routing::get;
+use axum::Router;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -22,6 +32,61 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Resolves the cycle bundle to query: `Ok(None)` when none is installed
+/// or published yet (answered as 501, same as before this was shared).
+pub type BundleResolver = dyn Fn() -> Result<Option<PathBuf>, String> + Send + Sync;
+
+/// Rewrites one `chart_catalog` row's `tile_url` before it is returned.
+/// Gets the open bundle too, for hosts that need more of the row (e.g. its
+/// content hash) to decide.
+pub type TileUrlRewriter = dyn Fn(&Connection, &ChartCatalogRow) -> String + Send + Sync;
+
+/// What a host gives the router.
+#[derive(Clone)]
+pub struct DataState {
+    pub bundle: Arc<BundleResolver>,
+    /// `None` returns `tile_url` exactly as the bundle stores it
+    /// (`/bundles/<cycle>/<file>.pmtiles`, relative to the server).
+    pub tile_url: Option<Arc<TileUrlRewriter>>,
+}
+
+impl DataState {
+    pub fn new(bundle: impl Fn() -> Result<Option<PathBuf>, String> + Send + Sync + 'static) -> Self {
+        Self {
+            bundle: Arc::new(bundle),
+            tile_url: None,
+        }
+    }
+
+    pub fn with_tile_url(
+        mut self,
+        rewrite: impl Fn(&Connection, &ChartCatalogRow) -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.tile_url = Some(Arc::new(rewrite));
+        self
+    }
+}
+
+/// Every `/data/*` route, with its state already applied — merge it into
+/// any router (`Router<S>` for whatever `S` the host uses).
+pub fn router<S: Clone + Send + Sync + 'static>(state: DataState) -> Router<S> {
+    Router::new()
+        .route("/data/airports", get(airports))
+        .route("/data/attributions", get(attributions))
+        .route("/data/search", get(search))
+        .route("/data/airports/:icao", get(airport_detail))
+        .route("/data/airports/:icao/procedures", get(airport_procedures))
+        .route("/data/procedures/:id", get(procedure_detail))
+        .route("/data/airways/:ident", get(airway_detail))
+        .route("/data/search_idents", get(search_idents))
+        .route("/data/preferred_routes", get(preferred_routes))
+        .route("/data/charts", get(charts))
+        .route("/data/airspace", get(airspace))
+        .route("/data/nearest_fix", get(nearest_fix))
+        .with_state(state)
+}
 
 #[derive(Debug, Serialize)]
 pub struct AirportRow {
@@ -206,13 +271,13 @@ impl From<rusqlite::Error> for DataError {
 
 /// Resolves the latest published bundle and runs `query` against it on
 /// the blocking thread pool (rusqlite is synchronous).
-async fn with_bundle<T, F>(state: &AppState, query: F) -> Result<T, DataError>
+async fn with_bundle<T, F>(state: &DataState, query: F) -> Result<T, DataError>
 where
     T: Send + 'static,
     F: FnOnce(&Connection) -> Result<T, DataError> + Send + 'static,
 {
-    let bundle_path: PathBuf = ff_etl::publish::latest_bundle_path(&state.data_dir)
-        .map_err(|e| DataError::Internal(e.to_string()))?
+    let bundle_path: PathBuf = (state.bundle)()
+        .map_err(DataError::Internal)?
         .ok_or(DataError::NoCycle)?;
     tokio::task::spawn_blocking(move || {
         let conn = Connection::open(bundle_path).map_err(DataError::from)?;
@@ -222,7 +287,7 @@ where
     .map_err(|e| DataError::Internal(e.to_string()))?
 }
 
-pub async fn airports(State(state): State<AppState>, Query(query): Query<BboxQuery>) -> Response {
+pub async fn airports(State(state): State<DataState>, Query(query): Query<BboxQuery>) -> Response {
     let bbox = query.bbox.as_deref().and_then(parse_bbox);
     let result = with_bundle(&state, move |conn| {
         let mut rows = Vec::new();
@@ -272,7 +337,7 @@ pub struct DataSourceRow {
 /// French SIA credit + AIRAC effective date, required by the Licence
 /// Ouverte. Returns `[]` for older bundles that predate the `data_source`
 /// table (opened raw here, without migrations), rather than erroring.
-pub async fn attributions(State(state): State<AppState>) -> Response {
+pub async fn attributions(State(state): State<DataState>) -> Response {
     let result = with_bundle(&state, move |conn| {
         let has_table: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='data_source')",
@@ -314,7 +379,7 @@ pub struct SearchQuery {
 /// prefix match on ICAO/FAA/IATA idents, substring match on the name,
 /// case-insensitive, capped at 20 rows. (Pulled forward from its planned
 /// Phase 2 slot — the search box is the consumer that justifies it.)
-pub async fn search(State(state): State<AppState>, Query(query): Query<SearchQuery>) -> Response {
+pub async fn search(State(state): State<DataState>, Query(query): Query<SearchQuery>) -> Response {
     let q = query.q.trim().to_uppercase();
     if q.is_empty() {
         return Json(Vec::<AirportRow>::new()).into_response();
@@ -354,7 +419,7 @@ pub async fn search(State(state): State<AppState>, Query(query): Query<SearchQue
 }
 
 pub async fn airport_detail(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     UrlPath(icao): UrlPath<String>,
 ) -> Response {
     let result = with_bundle(&state, move |conn| {
@@ -431,7 +496,7 @@ pub async fn airport_detail(
                 "SELECT pdf_url FROM dtpp_chart
                  WHERE airport_icao = ?1 AND procedure_ident = ?2
                  ORDER BY id LIMIT 1",
-                rusqlite::params![icao, ff_etl::dtpp::AIRPORT_DIAGRAM_IDENT],
+                rusqlite::params![icao, ff_core::dtpp::AIRPORT_DIAGRAM_IDENT],
                 |row| row.get::<_, String>(0),
             )
             .ok();
@@ -451,7 +516,7 @@ pub async fn airport_detail(
 }
 
 pub async fn airport_procedures(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     UrlPath(icao): UrlPath<String>,
 ) -> Response {
     let result = with_bundle(&state, move |conn| {
@@ -482,7 +547,7 @@ pub async fn airport_procedures(
 }
 
 pub async fn procedure_detail(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     UrlPath(id): UrlPath<String>,
 ) -> Response {
     let result = with_bundle(&state, move |conn| {
@@ -656,7 +721,7 @@ pub struct AirwayDetail {
 }
 
 pub async fn airway_detail(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     UrlPath(ident): UrlPath<String>,
 ) -> Response {
     let result = with_bundle(&state, move |conn| {
@@ -790,7 +855,7 @@ pub struct PreferredRouteQuery {
 /// PFR rows sort first: they're what a pilot would normally file,
 /// whereas CDR is oriented at ATC-initiated reroutes.
 pub async fn preferred_routes(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     Query(query): Query<PreferredRouteQuery>,
 ) -> Response {
     let from = query.from.trim().to_uppercase();
@@ -846,7 +911,7 @@ pub async fn preferred_routes(
 /// prefix matches, airports before fixes; capped at ~20 rows total. The
 /// airport-only `/data/search` keeps serving the map view unchanged.
 pub async fn search_idents(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     Query(query): Query<SearchQuery>,
 ) -> Response {
     let q = query.q.trim().to_uppercase();
@@ -942,8 +1007,9 @@ pub async fn search_idents(
     }
 }
 
-pub async fn charts(State(state): State<AppState>, Query(query): Query<BboxQuery>) -> Response {
+pub async fn charts(State(state): State<DataState>, Query(query): Query<BboxQuery>) -> Response {
     let bbox = query.bbox.as_deref().and_then(parse_bbox);
+    let rewrite = state.tile_url.clone();
     let result = with_bundle(&state, move |conn| {
         let mut rows = Vec::new();
         let mut stmt = conn.prepare(
@@ -975,6 +1041,11 @@ pub async fn charts(State(state): State<AppState>, Query(query): Query<BboxQuery
             }
             rows.push(chart);
         }
+        if let Some(rewrite) = &rewrite {
+            for chart in &mut rows {
+                chart.tile_url = rewrite(conn, chart);
+            }
+        }
         Ok(rows)
     })
     .await;
@@ -988,7 +1059,7 @@ pub async fn charts(State(state): State<AppState>, Query(query): Query<BboxQuery
 /// bbox-overlap-filter shape as `charts` above — a nationwide cycle has
 /// ~2800 rows across both real FAA sources (one per shelf/sector, not
 /// one per named airspace), too many to always send whole.
-pub async fn airspace(State(state): State<AppState>, Query(query): Query<BboxQuery>) -> Response {
+pub async fn airspace(State(state): State<DataState>, Query(query): Query<BboxQuery>) -> Response {
     let bbox = query.bbox.as_deref().and_then(parse_bbox);
     let result = with_bundle(&state, move |conn| {
         let mut rows = Vec::new();
@@ -1057,7 +1128,7 @@ pub struct PointQuery {
 /// at this row count a single scan is low-single-digit milliseconds, so
 /// a spatial index isn't worth the complexity yet.
 pub async fn nearest_fix(
-    State(state): State<AppState>,
+    State(state): State<DataState>,
     Query(query): Query<PointQuery>,
 ) -> Response {
     let (lat, lon) = (query.lat, query.lon);

@@ -17,12 +17,9 @@ use crate::types::{
 };
 use rusqlite::{params, Connection, Row};
 
-/// FAA d-TPP marks an airport diagram with this procedure ident (the same
-/// constant `ff-etl::dtpp` writes and `ff-api` looks up — duplicated
-/// rather than depended on, because `ff-etl` is a server-side batch job
-/// with a heavy dependency tree that has no business inside an Android
-/// `.so`).
-const AIRPORT_DIAGRAM_IDENT: &str = "AIRPORT DIAGRAM";
+/// FAA d-TPP marks an airport diagram with this procedure ident — shared
+/// with `ff-etl` through `ff-core` so the two cannot drift again.
+use ff_core::dtpp::AIRPORT_DIAGRAM_IDENT;
 
 type Result<T> = std::result::Result<T, CoreError>;
 

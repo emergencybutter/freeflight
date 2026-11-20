@@ -210,7 +210,7 @@ fn seed(conn: &Connection, cycle_id: &str, chart_sha256: &str) {
     .unwrap();
     conn.execute(
         "INSERT INTO dtpp_chart (airport_icao, procedure_ident, chart_name, pdf_url, cycle)
-         VALUES ('KSEA', 'AIRPORT DIAGRAM', 'AIRPORT DIAGRAM',
+         VALUES ('KSEA', 'AIRPORT_DIAGRAM', 'AIRPORT DIAGRAM',
                  'https://example.test/apd.pdf', '2601')",
         [],
     )
@@ -978,7 +978,7 @@ fn an_airports_plates_are_listed_once_each_with_the_diagram_first() {
     // Three dtpp rows, two distinct PDFs — the approach chart serves both
     // 16L and 16R but is a single download.
     assert_eq!(plates.len(), 2);
-    assert_eq!(plates[0].procedure_ident, "AIRPORT DIAGRAM");
+    assert_eq!(plates[0].procedure_ident, "AIRPORT_DIAGRAM");
     assert_eq!(plates[1].chart_name, "ILS OR LOC RWY 16L");
     assert!(plates.iter().all(|p| !p.installed));
 }
@@ -1051,4 +1051,59 @@ fn plates_from_different_cycles_of_the_same_approach_do_not_collide() {
 
     assert!(fixture.core.plate_path(old).is_some());
     assert_eq!(fixture.core.plate_path(new), None);
+}
+
+// ---- in-process web requests (Android WebView) ---------------------------
+
+fn web_json(fixture: &Fixture, path: &str) -> (u16, serde_json::Value) {
+    let response = fixture
+        .core
+        .handle_web_request(path.to_string(), "https://ff.example/".to_string());
+    let body = serde_json::from_slice(&response.body).unwrap_or(serde_json::Value::Null);
+    (response.status, body)
+}
+
+#[test]
+fn web_requests_before_any_cycle_answer_like_the_server_does() {
+    let fixture = Fixture::empty();
+    assert_eq!(fixture.core.handle_web_request("/data/search?q=KSEA".into(), String::new()).status, 501);
+    assert_eq!(fixture.core.handle_web_request("/cycles/latest".into(), String::new()).status, 501);
+}
+
+#[test]
+fn web_requests_are_answered_from_the_installed_bundle() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+
+    let (status, manifest) = web_json(&fixture, "/cycles/latest");
+    assert_eq!(status, 200);
+    assert_eq!(manifest["cycle_id"], "2026-07-09");
+
+    let (status, hits) = web_json(&fixture, "/data/search?q=KSEA");
+    assert_eq!(status, 200);
+    assert_eq!(hits[0]["icao"], "KSEA");
+
+    let (status, _) = web_json(&fixture, "/data/airports/NOPE");
+    assert_eq!(status, 404);
+    // Same extractor rejection the server gives for a missing parameter.
+    let (status, _) = web_json(&fixture, "/data/search");
+    assert_eq!(status, 400);
+}
+
+#[test]
+fn web_chart_urls_point_at_the_local_archive_once_installed() {
+    let fixture = Fixture::with_cycle("2026-07-09");
+
+    let (_, charts) = web_json(&fixture, "/data/charts");
+    assert_eq!(
+        charts[0]["tile_url"],
+        "https://ff.example/bundles/2026-07-09/chart-seattle.pmtiles"
+    );
+    assert_eq!(fixture.core.chart_file("2026-07-09-seattle".into()), None);
+
+    fixture.install_chart("2026-07-09-seattle", CHART_TILE);
+
+    let (_, charts) = web_json(&fixture, "/data/charts");
+    assert_eq!(charts[0]["tile_url"], "/local-charts/2026-07-09-seattle.pmtiles");
+    let file = fixture.core.chart_file("2026-07-09-seattle".into()).unwrap();
+    assert!(Path::new(&file).is_file());
 }

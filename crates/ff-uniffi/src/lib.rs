@@ -9,7 +9,7 @@
 //! `/data/*` routes answer for web, from a file on the device instead of a
 //! file on a server, which is the whole difference between the two clients.
 //!
-//! What is *not* here: HTTP. Every byte this binding consumes was fetched
+//! What is *not* here: network HTTP. Every byte this binding consumes was fetched
 //! by Kotlin (`ff-sync`'s `apply` module explains why) and handed over as a
 //! path. That keeps a second TLS stack and its root-certificate problem out
 //! of the `.so`, and leaves downloads where Android's foreground-service and
@@ -23,10 +23,12 @@ mod charts;
 mod error;
 mod query;
 mod types;
+mod web;
 
 use charts::ChartCache;
 pub use error::CoreError;
 pub use types::*;
+pub use web::WebResponse;
 
 use ff_planning::{
     distance_nm as core_distance_nm, initial_bearing_deg as core_initial_bearing_deg, plan_route,
@@ -52,6 +54,9 @@ uniffi::setup_scaffolding!();
 pub struct Freeflight {
     layout: BundleLayout,
     state: Mutex<State>,
+    /// Started on the first in-process web request (see `web`), never for
+    /// apps that don't use the WebView.
+    web_runtime: std::sync::OnceLock<tokio::runtime::Runtime>,
 }
 
 #[derive(Default)]
@@ -72,6 +77,7 @@ impl Freeflight {
         Arc::new(Self {
             layout: BundleLayout::new(PathBuf::from(data_dir)),
             state: Mutex::new(State::default()),
+            web_runtime: std::sync::OnceLock::new(),
         })
     }
 

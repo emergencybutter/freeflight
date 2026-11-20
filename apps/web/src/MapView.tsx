@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import maplibregl, { type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol as PmtilesProtocol } from "pmtiles";
-import { API_BASE_URL } from "./api";
+import { API_BASE_URL, chartTileUrl } from "./api";
 import { loadMapView, saveMapView, loadButterlogUserId } from "./persistence";
 import type { VerticalPoint, VerticalProfile } from "./planning/wasm";
 import {
@@ -1046,7 +1046,7 @@ export const MapView = forwardRef<
       const sourceId = `chart-${chart.id}`;
       map.addSource(sourceId, {
         type: "raster",
-        url: `pmtiles://${API_BASE_URL}${chart.tile_url}`,
+        url: `pmtiles://${chartTileUrl(chart.tile_url)}`,
         tileSize: 256,
       });
       // Anchored below the radar overlay, which itself sits just below the

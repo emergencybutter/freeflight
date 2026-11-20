@@ -1,0 +1,18 @@
+[package]
+name = "ff-data-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The /data/* cycle-query HTTP routes, shared by ff-api (server) and ff-uniffi (in-app, for the Android WebView)."
+
+[dependencies]
+ff-core.workspace = true
+# No default features: no hyper server, no tokio net. Callers either mount
+# the router in their own server (ff-api) or drive it in-process with
+# `tower::ServiceExt::oneshot` (ff-uniffi).
+axum = { version = "0.7", default-features = false, features = ["json", "query", "matched-path", "original-uri"] }
+tokio.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
