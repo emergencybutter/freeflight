@@ -53,7 +53,7 @@ thiserror = "1"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 # Account/aircraft storage only (ff-accounts, DESIGN.md §9.5) — the cycle
 # bundle stays SQLite/rusqlite. rustls rather than native-tls to match
 # reqwest above, so the image needs no OpenSSL.
