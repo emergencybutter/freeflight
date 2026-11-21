@@ -14,6 +14,8 @@
 // second, parallel serialization of ResolvedProcedureRef to keep in sync.
 import { fetchAirwayDetail, fetchProcedureDetail } from "./data";
 import { buildResolvedProcedure, fetchProcedureOptions } from "./planning/procedureLookup";
+import type { Aircraft } from "./aircraft";
+import type { AircraftProfile } from "./planning/wasm";
 import type { RouteState, RouteToken, RouteWaypoint } from "./types";
 
 const QUERY_PARAM = "p";
@@ -38,16 +40,45 @@ interface SharedRoute {
 }
 
 export interface SharedMapView {
-  /** Null means "no chart" was explicitly selected — distinct from the
-   * param being absent entirely, which leaves MapView's own default. */
-  chartKind: string | null;
+  /** Null means "no chart" was explicitly selected. Absent (links built
+   * outside the app, e.g. by the Brief dispatcher, which can't know
+   * which chart the pilot prefers) keeps the pilot's own persisted/
+   * default chart kind and only moves the camera. */
+  chartKind?: string | null;
   center: { lat: number; lon: number };
   zoom: number;
+}
+
+/** The aircraft a link was planned for. Only external planners (the Brief
+ * dispatcher) send this; the app's own Share button doesn't, since its
+ * profile/fleet selection is the recipient's business. On open, `profile`
+ * replaces the session planning profile, and once the signed-in pilot's
+ * fleet loads, an aircraft matching `registration` (else `icao_type`) is
+ * selected so its own performance tables win over these book figures. */
+export interface SharedAircraft {
+  icao_type: string | null;
+  registration?: string | null;
+  profile: Partial<AircraftProfile> & { name: string; cruise_tas_kt: number; fuel_burn_gph: number };
 }
 
 export interface SharedPlan {
   route: SharedRoute;
   map: SharedMapView;
+  aircraft?: SharedAircraft;
+}
+
+/** The fleet aircraft a shared link's aircraft corresponds to, if any:
+ * an exact registration match first, else the first of the same ICAO type. */
+export function matchSharedAircraft(shared: SharedAircraft, fleet: Aircraft[]): Aircraft | null {
+  const norm = (s: string | null | undefined) => (s ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  const reg = norm(shared.registration);
+  if (reg) {
+    const byReg = fleet.find((a) => norm(a.registration) === reg);
+    if (byReg) return byReg;
+  }
+  const type = norm(shared.icao_type);
+  if (!type) return null;
+  return fleet.find((a) => norm(a.icao_type) === type || norm(a.template_icao) === type) ?? null;
 }
 
 function toBase64Url(json: string): string {
@@ -109,7 +140,17 @@ export function readSharedPlanFromUrl(): SharedPlan | null {
   try {
     const parsed: unknown = JSON.parse(fromBase64Url(raw));
     if (parsed && typeof parsed === "object" && "route" in parsed && "map" in parsed) {
-      return parsed as SharedPlan;
+      const plan = parsed as SharedPlan;
+      // An aircraft block that wouldn't make a usable profile is dropped
+      // rather than failing the route along with it.
+      const p = plan.aircraft?.profile;
+      if (
+        plan.aircraft &&
+        !(p && typeof p.name === "string" && Number(p.cruise_tas_kt) > 0 && Number(p.fuel_burn_gph) > 0)
+      ) {
+        delete plan.aircraft;
+      }
+      return plan;
     }
     return null;
   } catch {
@@ -148,7 +189,9 @@ export async function hydrateSharedRoute(shared: SharedRoute): Promise<RouteStat
     }
   };
   const resolveToken = async (token: SharedRouteToken): Promise<RouteToken | null> => {
-    if (token.kind === "point") return { kind: "point", point: token.point };
+    // External links omit `name` when there isn't one, to keep long routes
+    // under URL limits; normalize to the null RouteWaypoint expects.
+    if (token.kind === "point") return { kind: "point", point: { ...token.point, name: token.point.name ?? null } };
     try {
       const detail = await fetchAirwayDetail(token.ident);
       return { kind: "airway", ident: token.ident, detail };

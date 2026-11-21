@@ -917,7 +917,7 @@ export const MapView = forwardRef<
      * usual default-to-Sectional). `undefined` — no shared link — keeps
      * every existing default; `chartKind: null` means "no chart" was
      * itself the shared selection, distinct from "unspecified". */
-    initialView?: { chartKind: string | null; center: { lat: number; lon: number }; zoom: number };
+    initialView?: { chartKind?: string | null; center: { lat: number; lon: number }; zoom: number };
     /** The signed-in user's Discord id, when they authenticated with
      * Discord. Butterlog keys pilots by Discord id, so this auto-links
      * their live flight with no manual "Butterlog User ID" entry; when
@@ -995,7 +995,12 @@ export const MapView = forwardRef<
   // effect's comment.
   const skipNextRouteFitRef = useRef(initialView !== undefined || persistedView.center !== undefined);
   const [visibleChartKinds, setVisibleChartKinds] = useState<Set<string>>(() => {
-    const kind = initialView !== undefined ? initialView.chartKind : (persistedView.chartKind ?? DEFAULT_CHART_KIND);
+    // An initialView without chartKind (a link from an external planner)
+    // moves the camera but keeps the pilot's own chart choice.
+    const kind =
+      initialView !== undefined && initialView.chartKind !== undefined
+        ? initialView.chartKind
+        : (persistedView.chartKind ?? DEFAULT_CHART_KIND);
     return kind === null ? new Set() : new Set([kind]);
   });
   // Independent on/off toggles (unlike the chart-kind group above, these

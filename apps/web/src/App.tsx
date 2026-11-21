@@ -13,7 +13,13 @@ import { DEFAULT_PROFILE, FlightPlanning } from "./planning/FlightPlanning";
 import { buildResolvedProcedure, transitionOptions } from "./planning/procedureLookup";
 import type { AircraftProfile, VerticalProfile } from "./planning/wasm";
 import { PlateViewer } from "./PlateViewer";
-import { buildShareUrl, clearSharedPlanFromUrl, hydrateSharedRoute, readSharedPlanFromUrl } from "./share";
+import {
+  buildShareUrl,
+  clearSharedPlanFromUrl,
+  hydrateSharedRoute,
+  matchSharedAircraft,
+  readSharedPlanFromUrl,
+} from "./share";
 import { airspaceInfoHtml, cwaInfoHtml, gairmetInfoHtml, pirepInfoHtml, sigmetInfoHtml } from "./tapInfo";
 import type {
   Airport,
@@ -201,7 +207,14 @@ export default function App() {
   // Lifted out of FlightPlanning the same way route was — MapView reads
   // profile.cruise_altitude_ft to default its own winds-aloft altitude
   // selector to whatever the flight plan is actually using.
-  const [profile, setProfile] = useState<AircraftProfile>(persisted.profile ?? DEFAULT_PROFILE);
+  // A link from an external planner (the Brief dispatcher) can carry the
+  // aircraft it planned for — its book figures replace the session profile,
+  // on top of the defaults so every field the planner needs is present.
+  const [profile, setProfile] = useState<AircraftProfile>(() =>
+    sharedPlan?.aircraft
+      ? { ...DEFAULT_PROFILE, performance: null, ...sharedPlan.aircraft.profile }
+      : (persisted.profile ?? DEFAULT_PROFILE),
+  );
   // Top of climb/descent, computed by FlightPlanning (it owns the winds
   // the vertical profile shares with the nav log) and reported back up
   // here so MapView can mark both points on the drawn route. Not
@@ -239,6 +252,18 @@ export default function App() {
     };
   }, [user, fleetVersion]);
 
+  // A shared link's aircraft, matched against the pilot's fleet the first
+  // time a non-empty fleet arrives (sign-in and the fleet fetch both land
+  // after mount): their own airframe's tables beat the link's book numbers.
+  // One-shot, so a later manual pick isn't overridden.
+  const pendingSharedAircraftRef = useRef(sharedPlan?.aircraft ?? null);
+  useEffect(() => {
+    const shared = pendingSharedAircraftRef.current;
+    if (!shared || fleet.length === 0) return;
+    pendingSharedAircraftRef.current = null;
+    const match = matchSharedAircraft(shared, fleet);
+    if (match) setSelectedAircraftId(match.id);
+  }, [fleet]);
   // Re-fetched on every fleet change too, so edits made in the Aircraft
   // view flow straight into the plan without re-selecting.
   useEffect(() => {
