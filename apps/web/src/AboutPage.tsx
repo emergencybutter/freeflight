@@ -54,8 +54,13 @@ export function AboutPage() {
             <a href="https://www.faa.gov/">Federal Aviation Administration</a> (public domain).
           </li>
           <li>
-            Weather (METAR/TAF, AIRMET/SIGMET, winds aloft) —{" "}
+            Weather (METAR/TAF, AIRMET/SIGMET, CWA, PIREPs) —{" "}
             <a href="https://aviationweather.gov/">NOAA Aviation Weather Center</a>.
+          </li>
+          <li>
+            Winds and temperatures aloft — NOAA GFS model via{" "}
+            <a href="https://open-meteo.com/">Open-Meteo</a> (
+            <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).
           </li>
           <li>
             Non-US aeronautical data, where included, comes from each country's official AIS. French

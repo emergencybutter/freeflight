@@ -1,6 +1,6 @@
 use crate::hazards::{Cwa, GAirmet, IntlSigmet, Pirep, Sigmet};
 use crate::records::{Datis, Metar, Taf};
-use crate::winds_aloft::{parse_windtemp_bulletin, WindsAloftBulletin, WindsAloftError};
+use crate::winds_aloft::{gfs_hourly_variables, profile_from_open_meteo, OpenMeteoLocation, StationProfile};
 use thiserror::Error;
 
 pub const DEFAULT_BASE_URL: &str = "https://aviationweather.gov/api/data";
@@ -10,14 +10,18 @@ pub const DEFAULT_BASE_URL: &str = "https://aviationweather.gov/api/data";
 /// here), so it has its own base URL rather than sharing `base_url`.
 pub const DATIS_BASE_URL: &str = "https://atis.info/api";
 
+/// Open-Meteo's GFS endpoint — source of winds/temps aloft since NWS
+/// retired the FD product (see `winds_aloft` module docs).
+pub const OPEN_METEO_GFS_URL: &str = "https://api.open-meteo.com/v1/gfs";
+
 #[derive(Debug, Error)]
 pub enum WeatherError {
     #[error("request failed: {0}")]
     Request(#[from] reqwest::Error),
     #[error("no station ids provided")]
     NoStations,
-    #[error("failed to parse winds-aloft bulletin: {0}")]
-    WindsAloft(#[from] WindsAloftError),
+    #[error("unexpected winds-aloft model response: {0}")]
+    WindsAloft(String),
     #[error("failed to read metar cache: {0}")]
     Cache(String),
 }
@@ -132,9 +136,10 @@ impl WeatherClient {
         self.fetch_hazard("gairmet").await
     }
 
-    /// Current US domestic/convective SIGMETs.
+    /// Current US domestic/convective SIGMETs. Upstream `/sigmet` now
+    /// returns international SIGMETs; the domestic feed is `/airsigmet`.
     pub async fn fetch_sigmets(&self) -> Result<Vec<Sigmet>, WeatherError> {
-        self.fetch_hazard("sigmet").await
+        self.fetch_hazard("airsigmet").await
     }
 
     /// Current international/oceanic SIGMETs (DESIGN.md scopes this
@@ -212,32 +217,54 @@ impl WeatherClient {
         Ok(resp.json::<Vec<T>>().await?)
     }
 
-    /// Fetches the current winds/temps aloft forecast ("FD" bulletin) —
-    /// the one product in this crate with no JSON API, served as raw
-    /// fixed-width text (see `winds_aloft` module docs for the format).
+    /// Hourly GFS vertical profiles (see `winds_aloft`) for `stations`
+    /// (`(ident, lat, lon)`), `forecast_hours` hours from the current
+    /// hour, in one multi-location Open-Meteo request. Returns the time
+    /// axis and one profile per station, in input order.
     ///
-    /// `level` is `"low"` (3,000–39,000 ft) or `"high"` (45,000/53,000
-    /// ft); `fcst_hour` is `"06"`, `"12"`, or `"24"`; `region` is
-    /// `"all"` or a regional code (see aviationweather.gov's own docs
-    /// for the full list — not duplicated here since this client
-    /// doesn't validate it, the upstream API does).
-    pub async fn fetch_winds_aloft(
+    /// Open-Meteo's free tier weighs a call by locations × (variables /
+    /// 10) — ~5.2 per station here — against 600/min and 10,000/day, so
+    /// callers should chunk large station lists and cache the result.
+    pub async fn fetch_gfs_profiles(
         &self,
-        level: &str,
-        fcst_hour: &str,
-        region: &str,
-    ) -> Result<WindsAloftBulletin, WeatherError> {
-        let url = format!("{}/windtemp", self.base_url);
-        let text = self
+        stations: &[(&str, f64, f64)],
+        forecast_hours: u32,
+    ) -> Result<(Vec<i64>, Vec<StationProfile>), WeatherError> {
+        let join = |f: fn(&(&str, f64, f64)) -> f64| {
+            stations.iter().map(|s| format!("{:.4}", f(s))).collect::<Vec<_>>().join(",")
+        };
+        let locations: Vec<OpenMeteoLocation> = self
             .http
-            .get(&url)
-            .query(&[("level", level), ("fcst", fcst_hour), ("region", region)])
+            .get(OPEN_METEO_GFS_URL)
+            .query(&[
+                ("latitude", join(|s| s.1)),
+                ("longitude", join(|s| s.2)),
+                ("hourly", gfs_hourly_variables()),
+                ("wind_speed_unit", "kn".to_string()),
+                ("timeformat", "unixtime".to_string()),
+                ("forecast_hours", forecast_hours.to_string()),
+            ])
             .send()
             .await?
             .error_for_status()?
-            .text()
+            .json()
             .await?;
-        Ok(parse_windtemp_bulletin(&text)?)
+        if locations.len() != stations.len() {
+            return Err(WeatherError::WindsAloft(format!(
+                "asked for {} locations, got {}",
+                stations.len(),
+                locations.len()
+            )));
+        }
+        let mut times = Vec::new();
+        let mut profiles = Vec::with_capacity(stations.len());
+        for (station, loc) in stations.iter().zip(&locations) {
+            let (t, profile) = profile_from_open_meteo(*station, loc)
+                .ok_or_else(|| WeatherError::WindsAloft(format!("{}: no time axis", station.0)))?;
+            times = t;
+            profiles.push(profile);
+        }
+        Ok((times, profiles))
     }
 }
 

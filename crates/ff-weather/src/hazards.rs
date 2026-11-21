@@ -1,5 +1,5 @@
 //! Response shapes for aviationweather.gov's graphical AIRMET (`/gairmet`),
-//! domestic SIGMET (`/sigmet`), and international SIGMET (`/isigmet`)
+//! domestic SIGMET (`/airsigmet`), and international SIGMET (`/isigmet`)
 //! endpoints. All three were captured live and diverge from each other
 //! more than METAR/TAF do (see each type's doc comment for specifics
 //! confirmed on real data), so don't assume field shapes generalize
@@ -75,7 +75,8 @@ pub struct SigmetCoord {
     pub lon: f64,
 }
 
-/// A US domestic SIGMET record (`/sigmet`) — includes convective SIGMETs
+/// A US domestic SIGMET record (`/airsigmet` — upstream repointed
+/// `/sigmet` to international SIGMETs in Nov 2026) — includes convective SIGMETs
 /// (`hazard: "CONVECTIVE"`). No `geom` field and no nested-polygon case
 /// here (unlike `IntlSigmet`); `coords` is always a flat point list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,7 +139,9 @@ pub struct Cwa {
     pub qualifier: Option<String>,
     pub base: Option<i32>,
     pub top: Option<i32>,
-    pub geom: String,
+    /// Was always a string (e.g. `"AREA"`); aviationweather.gov began
+    /// sending `null` here in Nov 2026, so treat it as optional.
+    pub geom: Option<String>,
     pub coords: Vec<GAirmetCoord>,
     #[serde(rename = "rawText")]
     pub raw_text: String,

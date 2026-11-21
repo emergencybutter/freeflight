@@ -443,7 +443,7 @@ export interface Cwa {
   qualifier: string | null;
   base: number | null;
   top: number | null;
-  geom: string;
+  geom: string | null;
   // Same string-lat/lon shape as GAirmetCoord (confirmed live) — see
   // hazards.rs.
   coords: GAirmetCoord[];

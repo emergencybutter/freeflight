@@ -13,6 +13,22 @@ use std::time::{Duration, SystemTime};
 /// `FF_WEATHER_METAR_CACHE_REFRESH_SECS`.
 const DEFAULT_METAR_CACHE_REFRESH_SECS: u64 = 300;
 
+/// How often the background task re-pulls GFS winds aloft. GFS runs
+/// every 6 h; 3 h keeps us at ~8 full refreshes (~6,800 weighted
+/// Open-Meteo calls) a day, under the free tier's 10,000. Overridable
+/// via `FF_WINDS_ALOFT_REFRESH_SECS`.
+const DEFAULT_WINDS_ALOFT_REFRESH_SECS: u64 = 3 * 60 * 60;
+/// Retry delay after a failed winds-aloft refresh.
+const WINDS_ALOFT_RETRY: Duration = Duration::from_secs(10 * 60);
+/// Stations per Open-Meteo request, and the pause between requests:
+/// 41 stations is ~213 weighted calls, so one chunk per 30 s stays well
+/// under the free tier's 600/minute.
+const WINDS_ALOFT_CHUNK: usize = 41;
+const WINDS_ALOFT_CHUNK_PAUSE: Duration = Duration::from_secs(30);
+/// Hours of forecast kept per refresh: covers the furthest offset served
+/// (FD "24" -> now + 18 h) plus the refresh interval.
+const WINDS_ALOFT_FORECAST_HOURS: u32 = 24;
+
 /// How often expired sessions are cleared out (see `spawn_session_sweep`).
 const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -31,6 +47,7 @@ async fn main() {
     // unreachable — see AppState::connect_accounts.
     state.connect_accounts().await;
     spawn_flight_category_refresh(state.clone());
+    spawn_winds_aloft_refresh(state.clone());
     spawn_session_sweep(state.clone());
     let app = routes::router(state);
 
@@ -79,6 +96,67 @@ fn spawn_flight_category_refresh(state: AppState) {
                 }
             }
             tokio::time::sleep(refresh).await;
+        }
+    });
+}
+
+/// Periodically pulls GFS winds/temps aloft for every FD station into
+/// `state.winds_aloft` (see `routes::weather::get_winds_aloft`). Fetched
+/// in spaced chunks to respect Open-Meteo's per-minute limit; a refresh
+/// only replaces the snapshot if every chunk succeeded, so the map never
+/// shows a partial station set. A failure keeps the last good snapshot
+/// and retries sooner.
+fn spawn_winds_aloft_refresh(state: AppState) {
+    let refresh = Duration::from_secs(
+        std::env::var("FF_WINDS_ALOFT_REFRESH_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_WINDS_ALOFT_REFRESH_SECS),
+    );
+    tokio::spawn(async move {
+        loop {
+            let fetched_at = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64);
+            let mut times = Vec::new();
+            let mut stations = Vec::with_capacity(ff_weather::FD_STATIONS.len());
+            let mut failure = None;
+            for (i, chunk) in ff_weather::FD_STATIONS.chunks(WINDS_ALOFT_CHUNK).enumerate() {
+                if i > 0 {
+                    tokio::time::sleep(WINDS_ALOFT_CHUNK_PAUSE).await;
+                }
+                match state
+                    .weather
+                    .fetch_gfs_profiles(chunk, WINDS_ALOFT_FORECAST_HOURS)
+                    .await
+                {
+                    Ok((t, profiles)) => {
+                        times = t;
+                        stations.extend(profiles);
+                    }
+                    Err(err) => {
+                        failure = Some(err);
+                        break;
+                    }
+                }
+            }
+            let wait = match failure {
+                None => {
+                    let count = stations.len();
+                    *state.winds_aloft.write().await = Some(ff_weather::GfsWindsForecast {
+                        fetched_at,
+                        times,
+                        stations,
+                    });
+                    tracing::info!("loaded GFS winds aloft for {count} stations");
+                    refresh
+                }
+                Some(err) => {
+                    tracing::warn!("failed to refresh GFS winds aloft: {err}");
+                    WINDS_ALOFT_RETRY
+                }
+            };
+            tokio::time::sleep(wait).await;
         }
     });
 }

@@ -1,7 +1,7 @@
 use crate::routes::auth::AuthState;
 use ff_accounts::Accounts;
 use ff_notam::{NotamClient, DEFAULT_API_BASE_URL, DEFAULT_AUTH_URL};
-use ff_weather::WeatherClient;
+use ff_weather::{GfsWindsForecast, WeatherClient};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,6 +28,10 @@ pub struct AppState {
     /// Shared, periodically-refreshed METAR flight categories used to
     /// color airport markers without a per-view upstream query.
     pub flight_categories: Arc<RwLock<FlightCategoryCache>>,
+    /// GFS winds/temps-aloft snapshot for `/weather/windtemp`, kept
+    /// current by `main::spawn_winds_aloft_refresh`. `None` until the
+    /// first successful load; a failed refresh keeps the previous one.
+    pub winds_aloft: Arc<RwLock<Option<GfsWindsForecast>>>,
     /// `None` unless `FF_NOTAM_CLIENT_ID`/`FF_NOTAM_CLIENT_SECRET` are set
     /// — see `routes::notams` (DESIGN.md §9.2, §12; `ff-notam`'s crate
     /// docs cover why credentials aren't self-service anymore).
@@ -81,6 +85,7 @@ impl Default for AppState {
         Self {
             weather: Arc::new(WeatherClient::new()),
             flight_categories: Arc::new(RwLock::new(FlightCategoryCache::default())),
+            winds_aloft: Arc::new(RwLock::new(None)),
             notam,
             data_dir,
             http: reqwest::Client::new(),

@@ -3,7 +3,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ff_weather::{StationWindsAloft, WindsAloftBulletin};
+use ff_weather::StationWindsAloft;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -171,13 +171,10 @@ fn default_region() -> String {
 struct EnrichedStation {
     #[serde(flatten)]
     station: StationWindsAloft,
-    /// Resolved against the current cycle bundle so clients can do a
-    /// nearest-station lookup for a route leg (DESIGN.md §9.3's wind
-    /// correction) — the raw NWS product only carries station idents,
-    /// not coordinates. Best-effort: `None` if no cycle is published
-    /// yet, or this particular ident doesn't resolve to anything —
-    /// winds-aloft stations are usually airport or navaid idents, so
-    /// those two tables cover the vast majority.
+    /// Station location, so clients can do a nearest-station lookup for
+    /// a route leg (DESIGN.md §9.3's wind correction). Always set now
+    /// (from `ff_weather::FD_STATIONS`); kept optional for wire
+    /// compatibility with clients written against the old FD proxy.
     lat: Option<f64>,
     lon: Option<f64>,
 }
@@ -190,102 +187,63 @@ struct EnrichedBulletin {
     stations: Vec<EnrichedStation>,
 }
 
-/// Best-effort station-ident → coordinate resolution against the
-/// current cycle bundle. Tries airport (by ICAO with a "K" prefix
-/// reconstructed, FAA id, or IATA), then navaid, then waypoint — the
-/// same fallback shape `procedure_detail`'s fix resolution already
-/// uses elsewhere in this server, minus the runway-end step (a winds
-/// station is never a runway pseudo-fix). Silently resolves nothing
-/// (not an error) if no cycle is published yet: a missing bundle
-/// degrades winds-aloft to "no coordinates," not a failed response.
-fn resolve_station_coords(
-    data_dir: &std::path::Path,
-    station_ids: &[&str],
-) -> std::collections::HashMap<String, (f64, f64)> {
-    let mut coords = std::collections::HashMap::new();
-    let Ok(Some(bundle_path)) = ff_etl::publish::latest_bundle_path(data_dir) else {
-        return coords;
-    };
-    let Ok(conn) = rusqlite::Connection::open(bundle_path) else {
-        return coords;
-    };
-    for &id in station_ids {
-        let icao_guess = format!("K{id}");
-        let coord = conn
-            .query_row(
-                "SELECT lat, lon FROM airport WHERE icao = ?1 OR faa_id = ?2 OR iata = ?2",
-                rusqlite::params![icao_guess, id],
-                |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
-            )
-            .or_else(|_| {
-                conn.query_row(
-                    "SELECT lat, lon FROM navaid WHERE ident = ?1",
-                    [id],
-                    |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
-                )
-            })
-            .or_else(|_| {
-                conn.query_row(
-                    "SELECT lat, lon FROM waypoint WHERE ident = ?1",
-                    [id],
-                    |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
-                )
-            });
-        if let Ok(coord) = coord {
-            coords.insert(id.to_string(), coord);
-        }
-    }
-    coords
-}
-
-fn enrich(bulletin: WindsAloftBulletin, data_dir: &std::path::Path) -> EnrichedBulletin {
-    let ids: Vec<&str> = bulletin
-        .stations
-        .iter()
-        .map(|s| s.station_id.as_str())
-        .collect();
-    let coords = resolve_station_coords(data_dir, &ids);
-    EnrichedBulletin {
-        data_based_on: bulletin.data_based_on,
-        valid_time: bulletin.valid_time,
-        for_use: bulletin.for_use,
-        stations: bulletin
-            .stations
-            .into_iter()
-            .map(|station| {
-                let coord = coords.get(&station.station_id).copied();
-                EnrichedStation {
-                    station,
-                    lat: coord.map(|(lat, _)| lat),
-                    lon: coord.map(|(_, lon)| lon),
-                }
-            })
-            .collect(),
+/// Maps the old FD forecast product (`06`/`12`/`24`) onto an offset from
+/// now. FD's 06 product was the "use now" forecast and 12/24 were for
+/// roughly 6 and 18 hours later, so those are the offsets used.
+fn fcst_offset_hours(fcst: &str) -> Option<i64> {
+    match fcst {
+        "06" | "6" => Some(0),
+        "12" => Some(6),
+        "24" => Some(18),
+        _ => None,
     }
 }
 
-/// Proxies aviationweather.gov's winds/temps aloft forecast — the one
-/// product `ff-weather` gets as fixed-width text rather than JSON (see
-/// `ff_weather::winds_aloft`), reserialized here as JSON like everything
-/// else this server proxies. Each station gets a best-effort resolved
-/// coordinate (see `resolve_station_coords`) so the web client can pick
-/// the nearest station to a route leg for wind correction.
+/// Winds/temps aloft at the old FD station set, served from the GFS
+/// snapshot the background task keeps in `state.winds_aloft` (see
+/// `main::spawn_winds_aloft_refresh` and `ff_weather::winds_aloft`).
+/// Same JSON shape as when this proxied NWS's retired FD bulletin.
+/// Only the "low" product over all of CONUS exists now, which is the
+/// only thing either client ever requested.
 pub async fn get_winds_aloft(
     State(state): State<AppState>,
     Query(query): Query<WindsAloftQuery>,
 ) -> Response {
-    match state
-        .weather
-        .fetch_winds_aloft(&query.level, &query.fcst, &query.region)
-        .await
-    {
-        Ok(bulletin) => {
-            let data_dir = state.data_dir.clone();
-            let enriched = tokio::task::spawn_blocking(move || enrich(bulletin, &data_dir))
-                .await
-                .expect("blocking task panicked");
-            Json(enriched).into_response()
-        }
-        Err(err) => (StatusCode::BAD_GATEWAY, err.to_string()).into_response(),
+    if query.level != "low" || query.region != "all" {
+        return (
+            StatusCode::BAD_REQUEST,
+            "only level=low&region=all is available (NWS retired the FD product; winds aloft now come from GFS)",
+        )
+            .into_response();
     }
+    let Some(offset) = fcst_offset_hours(&query.fcst) else {
+        return (StatusCode::BAD_REQUEST, "fcst must be 06, 12 or 24").into_response();
+    };
+    let cache = state.winds_aloft.read().await;
+    let Some(forecast) = cache.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "winds aloft not loaded yet").into_response();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let Some(bulletin) = ff_weather::bulletin_at(forecast, now + offset * 3600) else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "winds aloft forecast is empty").into_response();
+    };
+    let stations = bulletin
+        .stations
+        .into_iter()
+        .zip(&forecast.stations)
+        .map(|(station, profile)| EnrichedStation {
+            station,
+            lat: Some(profile.lat),
+            lon: Some(profile.lon),
+        })
+        .collect();
+    Json(EnrichedBulletin {
+        data_based_on: bulletin.data_based_on,
+        valid_time: bulletin.valid_time,
+        for_use: bulletin.for_use,
+        stations,
+    })
+    .into_response()
 }

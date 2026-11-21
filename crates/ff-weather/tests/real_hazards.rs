@@ -84,4 +84,9 @@ async fn fetches_live_hazards() {
         .fetch_intl_sigmets()
         .await
         .expect("live international SIGMET fetch");
+    client.fetch_cwas().await.expect("live CWA fetch");
+    client
+        .fetch_pireps("30,-100,40,-90")
+        .await
+        .expect("live PIREP fetch");
 }
